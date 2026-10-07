@@ -19,6 +19,7 @@ const input = ref("");
 let nextId = 0;
 const scrollerRef = ref();
 const isThinking = ref(false);
+const pendingToolCalls: { id: number; text: string; cls: string }[] = [];
 const inputRef = ref<HTMLElement>();
 
 function focusInput() {
@@ -54,24 +55,9 @@ onMounted(() => {
     const argStr = Object.entries(args)
       .map(([k, v]) => `${k}=${v}`)
       .join(" ");
-    addMsg(`🔧 ${name} ${argStr}`, "tool");
+    // Accumulate tool calls; they'll be inserted before the final response.
+    pendingToolCalls.push({ id: nextId++, text: `🔧 ${name} ${argStr}`, cls: "tool" });
   });
-  setTimeout(() => {
-    const chat = document.querySelector(".chat");
-    const scroller = document.querySelector(".scroller");
-    const inputRow = document.querySelector(".input-row");
-    const cs = scroller ? getComputedStyle(scroller) : null;
-    console.log("layout debug", {
-      chatH: chat?.clientHeight,
-      scrollerH: scroller?.clientHeight,
-      scrollerScrollH: scroller?.scrollHeight,
-      scrollerTop: scroller?.offsetTop,
-      scrollerOverflow: cs?.overflowY,
-      scrollerPos: cs?.position,
-      inputTop: inputRow?.offsetTop,
-      inputH: inputRow?.clientHeight,
-    });
-  }, 500);
 });
 
 
@@ -168,6 +154,7 @@ async function submit() {
   }
 
   isThinking.value = true;
+  pendingToolCalls.length = 0;
   addMsg("First Mate ⠋", "dim");
   const thinkingId = nextId - 1;
   startSpinner(thinkingId);
@@ -181,11 +168,16 @@ async function submit() {
       message: text,
       systemPrompt: SYSTEM_PROMPT,
     });
-    // Replace the "…" placeholder with the actual response.
+    // Insert any tool calls, then the final response (in order).
     const idx = messages.value.findIndex((m) => m.id === thinkingId);
     if (idx >= 0) {
-      messages.value[idx] = { id: thinkingId, text: reply, cls: "assistant" };
+      const newMsgs = [
+        ...pendingToolCalls,
+        { id: thinkingId, text: reply, cls: "assistant" },
+      ];
+      messages.value.splice(idx, 1, ...newMsgs);
     } else {
+      pendingToolCalls.forEach((tc) => messages.value.push(tc));
       addMsg(reply, "assistant");
     }
   } catch (e) {
