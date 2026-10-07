@@ -17,6 +17,218 @@ fn get_hotkey() -> &'static str {
     HOTKEY
 }
 
+/// LLM configuration, persisted as part of the app settings.
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+#[serde(default)]
+struct LlmSettings {
+    provider: String,
+    model: String,
+    api_key: String,
+    base_url: String,
+}
+
+impl Default for LlmSettings {
+    fn default() -> Self {
+        Self {
+            provider: String::new(),
+            model: String::new(),
+            api_key: String::new(),
+            base_url: String::new(),
+        }
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+#[serde(default)]
+struct Settings {
+    llm: LlmSettings,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self { llm: LlmSettings::default() }
+    }
+}
+
+fn settings_file(app: &tauri::AppHandle) -> tauri::Result<std::path::PathBuf> {
+    let dir = app.path().app_config_dir()?;
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir.join("settings.json"))
+}
+
+#[tauri::command]
+fn get_settings(app: tauri::AppHandle) -> tauri::Result<Settings> {
+    let path = settings_file(&app)?;
+    if path.exists() {
+        let contents = std::fs::read_to_string(&path)?;
+        Ok(serde_json::from_str(&contents)?)
+    } else {
+        Ok(Settings::default())
+    }
+}
+
+#[tauri::command]
+fn save_settings(app: tauri::AppHandle, settings: Settings) -> tauri::Result<()> {
+    let path = settings_file(&app)?;
+    let contents = serde_json::to_string_pretty(&settings)?;
+    std::fs::write(&path, contents)?;
+    Ok(())
+}
+
+/// Discover the models a provider exposes, using its model-listing endpoint.
+/// Ollama: GET {base}/api/tags; OpenAI-compatible: GET {base}/v1/models.
+#[tauri::command]
+async fn list_models(provider: String, base_url: String, api_key: String) -> Result<Vec<String>, String> {
+    let base = base_url.trim_end_matches('/');
+    if base.is_empty() {
+        return Ok(Vec::new());
+    }
+    let client = reqwest::Client::new();
+    let models: Vec<String> = match provider.as_str() {
+        "ollama" => {
+            let resp = client
+                .get(format!("{base}/api/tags"))
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
+            let body: serde_json::Value = resp
+                .json()
+                .await
+                .map_err(|e| e.to_string())?;
+            body.get("models")
+                .and_then(|m| m.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|m| m.get("name").and_then(|n| n.as_str()).map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default()
+        }
+        "openai" | "custom" => {
+            let mut req = client.get(format!("{base}/v1/models"));
+            if !api_key.is_empty() {
+                req = req.bearer_auth(api_key);
+            }
+            let resp = req
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
+            let body: serde_json::Value = resp
+                .json()
+                .await
+                .map_err(|e| e.to_string())?;
+            body.get("data")
+                .and_then(|m| m.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|m| m.get("id").and_then(|n| n.as_str()).map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default()
+        }
+        // Anthropic and others: no public model-listing endpoint.
+        _ => Vec::new(),
+    };
+    Ok(models)
+}
+
+/// Make a minimal chat completion to verify the LLM config actually works.
+#[tauri::command]
+async fn test_llm(provider: String, base_url: String, api_key: String, model: String) -> Result<String, String> {
+    let base = base_url.trim_end_matches('/');
+    if base.is_empty() {
+        return Err("base URL is empty".into());
+    }
+    if model.is_empty() {
+        return Err("no model selected".into());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| e.to_string())?;
+    match provider.as_str() {
+        "ollama" => {
+            let body = serde_json::json!({
+                "model": model,
+                "messages": [{"role": "user", "content": "ping"}],
+                "stream": false,
+            });
+            let resp = client
+                .post(format!("{base}/api/chat"))
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
+            let status = resp.status();
+            let text = resp.text().await.map_err(|e| e.to_string())?;
+            if !status.is_success() {
+                return Err(format!("HTTP {status}: {text}"));
+            }
+            let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+            let reply = v
+                .get("message")
+                .and_then(|m| m.get("content"))
+                .and_then(|c| c.as_str())
+                .unwrap_or("");
+            Ok(format!("OK — {model} replied: {reply}"))
+        }
+        "openai" | "custom" => {
+            let body = serde_json::json!({
+                "model": model,
+                "messages": [{"role": "user", "content": "ping"}],
+            });
+            let mut req = client.post(format!("{base}/v1/chat/completions")).json(&body);
+            if !api_key.is_empty() {
+                req = req.bearer_auth(api_key);
+            }
+            let resp = req.send().await.map_err(|e| e.to_string())?;
+            let status = resp.status();
+            let text = resp.text().await.map_err(|e| e.to_string())?;
+            if !status.is_success() {
+                return Err(format!("HTTP {status}: {text}"));
+            }
+            let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+            let reply = v
+                .get("choices")
+                .and_then(|c| c.get(0))
+                .and_then(|c| c.get("message"))
+                .and_then(|m| m.get("content"))
+                .and_then(|c| c.as_str())
+                .unwrap_or("");
+            Ok(format!("OK — {model} replied: {reply}"))
+        }
+        "anthropic" => {
+            let body = serde_json::json!({
+                "model": model,
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "ping"}],
+            });
+            let resp = client
+                .post(format!("{base}/v1/messages"))
+                .header("x-api-key", api_key)
+                .header("anthropic-version", "2023-06-01")
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
+            let status = resp.status();
+            let text = resp.text().await.map_err(|e| e.to_string())?;
+            if !status.is_success() {
+                return Err(format!("HTTP {status}: {text}"));
+            }
+            let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+            let reply = v
+                .get("content")
+                .and_then(|c| c.get(0))
+                .and_then(|c| c.get("text"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("");
+            Ok(format!("OK — {model} replied: {reply}"))
+        }
+        _ => Err("no test endpoint for this provider".into()),
+    }
+}
+
 fn toggle_window(app: &tauri::AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
@@ -38,18 +250,45 @@ fn toggle_window(app: &tauri::AppHandle) {
     }
 }
 
+/// Open (or focus) the settings window. Created on first use.
+fn open_settings(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("settings") {
+        let _ = window.show();
+        let _ = window.set_focus();
+        return;
+    }
+    match tauri::WebviewWindow::builder(
+        app,
+        "settings",
+        tauri::WebviewUrl::App("settings.html".into()),
+    )
+    .title("First Mate — Settings")
+    .inner_size(480.0, 600.0)
+    .decorations(false)
+    .shadow(true)
+    .build()
+    {
+        Ok(window) => {
+            let _ = window.set_focus();
+        }
+        Err(e) => eprintln!("failed to open settings window: {e}"),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![get_hotkey])
+        .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, list_models, test_llm])
         .setup(|app| {
             // Tray: left-click toggles the console; menu for explicit actions.
             let toggle_item =
                 MenuItem::with_id(app, "toggle", "Show / Hide", true, None::<&str>)?;
+            let settings_item =
+                MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
             let quit_item =
                 MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&toggle_item, &quit_item])?;
+            let menu = Menu::with_items(app, &[&toggle_item, &settings_item, &quit_item])?;
 
             TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
@@ -58,6 +297,7 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "toggle" => toggle_window(app),
+                    "settings" => open_settings(app),
                     "quit" => app.exit(0),
                     _ => {}
                 })
