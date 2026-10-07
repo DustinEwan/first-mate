@@ -1,0 +1,87 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  background: #1a1b26;
+  color: #c0caf5;
+  font-family: "Cascadia Code", Consolas, monospace;
+  overflow: hidden;
+  user-select: none;
+}
+
+#panel {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+#titlebar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: #16161e;
+  border-bottom: 1px solid #2a2a3a;
+  -webkit-app-region: drag;
+}
+
+#titlebar .title {
+  font-weight: 600;
+}
+
+#titlebar button {
+  -webkit-app-region: no-drag;
+  background: none;
+  border: none;
+  color: #c0caf5;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+#titlebar button:hover {
+  color: #f7768e;
+}
+
+#messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.msg {
+  margin-bottom: 8px;
+  white-space: pre-wrap;
+  user-select: text;
+}
+
+.msg.user {
+  color: #7aa2f7;
+}
+
+.msg.dim {
+  color: #565f89;
+}
+
+#input-form {
+  display: flex;
+  border-top: 1px solid #2a2a3a;
+}
+
+#input {
+  flex: 1;
+  background: none;
+  border: none;
+  color: #c0caf5;
+  padding: 10px 12px;
+  font: inherit;
+  outline: none;
+}
+
+#input::placeholder {
+  color: #565f89;
+}
