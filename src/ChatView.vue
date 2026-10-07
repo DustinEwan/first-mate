@@ -17,6 +17,15 @@ const messages = ref<Msg[]>([]);
 const input = ref("");
 let nextId = 0;
 const messagesWrap = ref<HTMLElement>();
+const isThinking = ref(false);
+
+interface LlmSettings {
+  provider: string;
+  model: string;
+  api_key: string;
+  base_url: string;
+}
+let llmSettings: LlmSettings | null = null;
 
 function addMsg(text: string, cls = "") {
   messages.value.push({ id: nextId++, text, cls });
@@ -26,16 +35,53 @@ onMounted(() => {
   invoke<string>("get_hotkey").then((hotkey) => {
     addMsg(`First Mate is online. Summon with ${hotkey}.`, "dim");
   });
+  invoke<{ llm: LlmSettings }>("get_settings").then((s) => {
+    llmSettings = s.llm;
+  });
 });
 
-function submit() {
+async function submit() {
   const text = input.value.trim();
   if (!text) return;
   addMsg(text, "user");
   input.value = "";
-  // LLM integration lands in the next phase; echo for now.
-  addMsg(`(no provider wired yet) you said: "${text}"`, "dim");
+
+  if (!llmSettings || !llmSettings.provider || !llmSettings.model) {
+    addMsg("(no provider configured — open Settings to configure an LLM)", "dim");
+    return;
+  }
+
+  isThinking.value = true;
+  addMsg("…", "dim");
+  const thinkingId = nextId - 1;
+
+  try {
+    const reply = await invoke<string>("chat_with_llm", {
+      provider: llmSettings.provider,
+      baseUrl: llmSettings.base_url,
+      apiKey: llmSettings.api_key,
+      model: llmSettings.model,
+      message: text,
+    });
+    // Replace the "…" placeholder with the actual response.
+    const idx = messages.value.findIndex((m) => m.id === thinkingId);
+    if (idx >= 0) {
+      messages.value[idx] = { id: thinkingId, text: reply, cls: "assistant" };
+    } else {
+      addMsg(reply, "assistant");
+    }
+  } catch (e) {
+    const idx = messages.value.findIndex((m) => m.id === thinkingId);
+    if (idx >= 0) {
+      messages.value[idx] = { id: thinkingId, text: `Error: ${e}`, cls: "error" };
+    } else {
+      addMsg(`Error: ${e}`, "error");
+    }
+  } finally {
+    isThinking.value = false;
+  }
 }
+
 
 function hide() {
   console.log("hide() called");

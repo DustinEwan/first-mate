@@ -92,6 +92,14 @@ body {
   color: #8a8f98;
 }
 
+.msg.assistant {
+  color: #ffffff;
+}
+
+.msg.error {
+  color: #d03050;
+}
+
 .input-row {
   padding: 8px 12px;
   border-top: 1px solid #2c2c31;

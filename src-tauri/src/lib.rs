@@ -239,6 +239,116 @@ async fn test_llm(provider: String, base_url: String, api_key: String, model: St
     }
 }
 
+/// Send a message to the LLM and return the response.
+#[tauri::command]
+async fn chat_with_llm(
+    provider: String,
+    base_url: String,
+    api_key: String,
+    model: String,
+    message: String,
+) -> Result<String, String> {
+    let base = base_url.trim_end_matches('/');
+    if base.is_empty() {
+        return Err("base URL is empty".into());
+    }
+    if model.is_empty() {
+        return Err("no model selected".into());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| e.to_string())?;
+    match provider.as_str() {
+        "ollama" => {
+            let body = serde_json::json!({
+                "model": model,
+                "messages": [{"role": "user", "content": message}],
+                "stream": false,
+            });
+            let resp = client
+                .post(format!("{base}/api/chat"))
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
+            let status = resp.status();
+            let text = resp.text().await.map_err(|e| e.to_string())?;
+            if !status.is_success() {
+                return Err(format!("HTTP {status}: {text}"));
+            }
+            let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+            let reply = v
+                .get("message")
+                .and_then(|m| m.get("content"))
+                .and_then(|c| c.as_str())
+                .unwrap_or("")
+                .to_string();
+            Ok(reply)
+        }
+        "openai" | "custom" => {
+            let body = serde_json::json!({
+                "model": model,
+                "messages": [{"role": "user", "content": message}],
+            });
+            let completions = if base.ends_with("/v1") {
+                format!("{base}/chat/completions")
+            } else {
+                format!("{base}/v1/chat/completions")
+            };
+            let mut req = client.post(&completions).json(&body);
+            if !api_key.is_empty() {
+                req = req.bearer_auth(api_key);
+            }
+            let resp = req.send().await.map_err(|e| e.to_string())?;
+            let status = resp.status();
+            let text = resp.text().await.map_err(|e| e.to_string())?;
+            if !status.is_success() {
+                return Err(format!("HTTP {status}: {text}"));
+            }
+            let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+            let reply = v
+                .get("choices")
+                .and_then(|c| c.get(0))
+                .and_then(|c| c.get("message"))
+                .and_then(|m| m.get("content"))
+                .and_then(|c| c.as_str())
+                .unwrap_or("")
+                .to_string();
+            Ok(reply)
+        }
+        "anthropic" => {
+            let body = serde_json::json!({
+                "model": model,
+                "max_tokens": 1024,
+                "messages": [{"role": "user", "content": message}],
+            });
+            let mut req = client
+                .post(format!("{base}/v1/messages"))
+                .header("x-api-key", api_key)
+                .header("anthropic-version", "2023-06-01")
+                .json(&body);
+            let _ = &mut req;
+            let resp = req.send().await.map_err(|e| e.to_string())?;
+            let status = resp.status();
+            let text = resp.text().await.map_err(|e| e.to_string())?;
+            if !status.is_success() {
+                return Err(format!("HTTP {status}: {text}"));
+            }
+            let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+            let reply = v
+                .get("content")
+                .and_then(|c| c.get(0))
+                .and_then(|c| c.get("text"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("")
+                .to_string();
+            Ok(reply)
+        }
+        _ => Err("no chat endpoint for this provider".into()),
+    }
+}
+
 fn toggle_window(app: &tauri::AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
@@ -289,7 +399,7 @@ fn open_settings(app: &tauri::AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, list_models, test_llm])
+        .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, list_models, test_llm, chat_with_llm])
         .setup(|app| {
             // Tray: left-click toggles the console; menu for explicit actions.
             let toggle_item =
