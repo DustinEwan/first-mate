@@ -239,6 +239,114 @@ async fn test_llm(provider: String, base_url: String, api_key: String, model: St
     }
 }
 
+
+/// The tools the agent can call, in OpenAI function-calling format.
+fn agent_tools() -> serde_json::Value {
+    serde_json::json!([
+        {
+            "type": "function",
+            "function": {
+                "name": "run_command",
+                "description": "Execute a command on the Windows system and return the output. Use this to run winapp commands and other shell commands.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {"type": "string", "description": "The command to execute (e.g. 'winapp ui inspect -a notepad')"}
+                    },
+                    "required": ["command"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "description": "Read a file from the Windows filesystem and return its contents.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "The file path to read"}
+                    },
+                    "required": ["path"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "write_file",
+                "description": "Write content to a file on the Windows filesystem.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "The file path to write"},
+                        "content": {"type": "string", "description": "The content to write"}
+                    },
+                    "required": ["path", "content"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "list_dir",
+                "description": "List the contents of a directory. Directory entries end with '/'.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "The directory path to list"}
+                    },
+                    "required": ["path"]
+                }
+            }
+        }
+    ])
+}
+
+/// Execute a tool by name with JSON arguments. Returns the result as a string.
+async fn execute_tool(name: &str, args: &serde_json::Value) -> Result<String, String> {
+    match name {
+        "run_command" => {
+            let command = args.get("command").and_then(|c| c.as_str()).unwrap_or("");
+            let output = tokio::process::Command::new("cmd.exe")
+                .arg("/C")
+                .arg(command)
+                .output()
+                .await
+                .map_err(|e| e.to_string())?;
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            if !output.status.success() {
+                Err(format!("exit {:?}: {}\n{}", output.status, stdout, stderr))
+            } else {
+                Ok(stdout)
+            }
+        }
+        "read_file" => {
+            let path = args.get("path").and_then(|c| c.as_str()).unwrap_or("");
+            tokio::fs::read_to_string(path).await.map_err(|e| e.to_string())
+        }
+        "write_file" => {
+            let path = args.get("path").and_then(|c| c.as_str()).unwrap_or("");
+            let content = args.get("content").and_then(|c| c.as_str()).unwrap_or("");
+            tokio::fs::write(path, content).await.map_err(|e| e.to_string())?;
+            Ok("OK".to_string())
+        }
+        "list_dir" => {
+            let path = args.get("path").and_then(|c| c.as_str()).unwrap_or("");
+            let mut entries = Vec::new();
+            let mut dir = tokio::fs::read_dir(path).await.map_err(|e| e.to_string())?;
+            while let Some(entry) = dir.next_entry().await.map_err(|e| e.to_string())? {
+                let name = entry.file_name().to_string_lossy().to_string();
+                let p = entry.path();
+                let is_dir = tokio::fs::metadata(&p).await.map(|m| m.is_dir()).unwrap_or(false);
+                entries.push(if is_dir { format!("{name}/") } else { name });
+            }
+            Ok(entries.join("\n"))
+        }
+        _ => Err(format!("unknown tool: {name}")),
+    }
+}
 /// Send a message to the LLM and return the response.
 #[tauri::command]
 async fn chat_with_llm(
@@ -291,38 +399,79 @@ async fn chat_with_llm(
             Ok(reply)
         }
         "openai" | "custom" => {
-            let body = serde_json::json!({
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": message}
-                ],
-            });
             let completions = if base.ends_with("/v1") {
                 format!("{base}/chat/completions")
             } else {
                 format!("{base}/v1/chat/completions")
             };
-            let mut req = client.post(&completions).json(&body);
-            if !api_key.is_empty() {
-                req = req.bearer_auth(api_key);
+            // Build the conversation history.
+            let mut messages: Vec<serde_json::Value> = vec![
+                serde_json::json!({"role": "system", "content": system_prompt}),
+                serde_json::json!({"role": "user", "content": message}),
+            ];
+            let tools = agent_tools();
+            // Tool-calling loop: send to LLM, execute any tool calls, feed results back.
+            for _ in 0..10 {
+                let body = serde_json::json!({
+                    "model": model,
+                    "messages": messages,
+                    "tools": tools,
+                });
+                let mut req = client.post(&completions).json(&body);
+                if !api_key.is_empty() {
+                    req = req.bearer_auth(api_key.clone());
+                }
+                let resp = req.send().await.map_err(|e| e.to_string())?;
+                let status = resp.status();
+                let text = resp.text().await.map_err(|e| e.to_string())?;
+                if !status.is_success() {
+                    return Err(format!("HTTP {status}: {text}"));
+                }
+                let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+                let choice = v.get("choices").and_then(|c| c.get(0));
+                let choice = match choice {
+                    Some(c) => c,
+                    None => return Err("no choices in response".into()),
+                };
+                // Check for tool calls.
+                let tool_calls = choice
+                    .get("message")
+                    .and_then(|m| m.get("tool_calls"))
+                    .and_then(|t| t.as_array());
+                if let Some(calls) = tool_calls {
+                    // Add the assistant's tool-call message to history.
+                    messages.push(serde_json::json!({
+                        "role": "assistant",
+                        "content": choice.get("message").and_then(|m| m.get("content")).and_then(|c| c.as_str()).unwrap_or(""),
+                        "tool_calls": calls,
+                    }));
+                    // Execute each tool call and add the results.
+                    for call in calls {
+                        let id = call.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
+                        let func = call.get("function").unwrap_or(&serde_json::Value::Null);
+                        let name = func.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                        let args_str = func.get("arguments").and_then(|a| a.as_str()).unwrap_or("{}");
+                        let args: serde_json::Value = serde_json::from_str(args_str).unwrap_or(serde_json::json!({}));
+                        let result = execute_tool(name, &args).await.unwrap_or_else(|e| format!("Error: {e}"));
+                        messages.push(serde_json::json!({
+                            "role": "tool",
+                            "tool_call_id": id,
+                            "content": result,
+                        }));
+                    }
+                    // Loop back to send the updated history to the LLM.
+                    continue;
+                }
+                // No tool calls — return the text response.
+                let reply = choice
+                    .get("message")
+                    .and_then(|m| m.get("content"))
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                return Ok(reply);
             }
-            let resp = req.send().await.map_err(|e| e.to_string())?;
-            let status = resp.status();
-            let text = resp.text().await.map_err(|e| e.to_string())?;
-            if !status.is_success() {
-                return Err(format!("HTTP {status}: {text}"));
-            }
-            let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-            let reply = v
-                .get("choices")
-                .and_then(|c| c.get(0))
-                .and_then(|c| c.get("message"))
-                .and_then(|m| m.get("content"))
-                .and_then(|c| c.as_str())
-                .unwrap_or("")
-                .to_string();
-            Ok(reply)
+            Err("max tool iterations reached".into())
         }
         "anthropic" => {
             let body = serde_json::json!({
