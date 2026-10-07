@@ -6,6 +6,7 @@ use tauri::{
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::collections::HashMap;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 /// Summon hotkey. Change here; it's registered once in `run`.
@@ -411,8 +412,42 @@ fn needs_shell(cmd: &str) -> bool {
     )
 }
 
+/// Keep tool output from exploding the context. Identical repeat results
+/// collapse to a pointer; oversized output is truncated with a hint to
+/// narrow the command. `seen` maps tool call -> full result, per chat run.
+fn budget_output(seen: &mut HashMap<String, String>, key: String, result: String) -> String {
+    const MAX: usize = 8000;
+    if let Some(prev) = seen.get(&key) {
+        if *prev == result {
+            let msg = format!(
+                "[identical to your earlier call: {} bytes, unchanged — the state has not changed]",
+                result.len()
+            );
+            log(&format!("BUDGET: deduped identical result ({} bytes)", result.len()));
+            return msg;
+        }
+    }
+    let out = if result.chars().count() > MAX {
+        let head: String = result.chars().take(MAX).collect();
+        let rest = result.chars().count() - MAX;
+        log(&format!("BUDGET: truncated {} chars", rest));
+        format!(
+            "{}\n...[truncated {} chars — narrow the command: --depth N, a selector, or pipe to findstr]",
+            head, rest
+        )
+    } else {
+        result.clone()
+    };
+    seen.insert(key, result);
+    out
+}
+
 /// Execute a tool by name with JSON arguments. Returns the result as a string.
-async fn execute_tool(name: &str, args: &serde_json::Value) -> Result<String, String> {
+async fn execute_tool(
+    name: &str,
+    args: &serde_json::Value,
+    seen: &mut HashMap<String, String>,
+) -> Result<String, String> {
     log(&format!("TOOL CALL: {} args={}", name, args));
     let result = execute_tool_inner(name, args).await;
     let summary = match &result {
@@ -420,7 +455,7 @@ async fn execute_tool(name: &str, args: &serde_json::Value) -> Result<String, St
         Err(e) => format!("ERR {}", e.chars().take(200).collect::<String>()),
     };
     log(&format!("TOOL RESULT: {} -> {}", name, summary));
-    result
+    result.map(|r| budget_output(seen, format!("{}{}", name, args), r))
 }
 
 async fn execute_tool_inner(name: &str, args: &serde_json::Value) -> Result<String, String> {
@@ -575,6 +610,9 @@ async fn chat_with_llm(
     }
     history.push(ChatMessage::user(message));
 
+
+    // Per-run memory of tool results for output budgeting (dedupe/truncate).
+    let mut seen: HashMap<String, String> = HashMap::new();
     let mut turn = 0;
     loop {
         log(&format!("TURN {}: history_msgs={} tools={}", turn, history.len(), tools.len()));
@@ -644,7 +682,7 @@ async fn chat_with_llm(
                     serde_json::from_str(&call.function.arguments)
                         .unwrap_or(serde_json::json!({}));
                 let _ = app.emit("tool_call", serde_json::json!({ "name": &name, "args": &args }));
-                let result = execute_tool(&name, &args)
+                let result = execute_tool(&name, &args, &mut seen)
                     .await
                     .unwrap_or_else(|e| format!("Error: {e}"));
                 history.push(ChatMessage::tool(call.id.clone(), result));
@@ -835,7 +873,8 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{needs_shell, parse_command};
+    use super::{budget_output, needs_shell, parse_command};
+    use std::collections::HashMap;
 
     #[test]
     fn parse_keeps_quoted_phrase_together() {
@@ -889,5 +928,29 @@ mod tests {
             !text.contains("was not matched"),
             "quotes were mangled by cmd: {text}"
         );
+    }
+
+    #[test]
+    fn identical_repeat_collapses_to_pointer() {
+        let mut seen = HashMap::new();
+        let out = "x".repeat(100);
+        let first = budget_output(&mut seen, "cmd".into(), out.clone());
+        assert_eq!(first, out);
+        let second = budget_output(&mut seen, "cmd".into(), out.clone());
+        assert!(second.contains("identical to your earlier call"));
+        // Changed output after an action still comes through fully.
+        let changed = "y".repeat(50);
+        let third = budget_output(&mut seen, "cmd".into(), changed.clone());
+        assert_eq!(third, changed);
+    }
+
+    #[test]
+    fn oversized_output_is_truncated_with_hint() {
+        let mut seen = HashMap::new();
+        let huge = "z".repeat(9000);
+        let out = budget_output(&mut seen, "c".into(), huge);
+        assert!(out.contains("truncated 1000 chars"));
+        assert!(out.contains("narrow the command"));
+        assert!(out.chars().count() < 8200);
     }
 }
