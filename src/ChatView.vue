@@ -146,6 +146,9 @@ does not expose.
   \`winapp ui <command> --help\` once, then use the exact syntax. Never re-guess.
 - Element selectors go stale after the UI changes — re-inspect before clicking
   by slug, and never click a selector from an older inspect result twice.
+- 'ui search' walks the whole UIA tree: 6-14 s on browsers/large apps, even
+  with --root. Use it once for discovery only; afterwards navigate with
+  'inspect <selector> --depth N' (~2 s) or just screenshot (~1 s, visible).
 
 ### Workflow
 1. Use inspect (with --depth) to find element selectors
