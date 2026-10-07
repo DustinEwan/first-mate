@@ -47,6 +47,15 @@ onMounted(() => {
   invoke<{ llm: LlmSettings }>("get_settings").then((s) => {
     llmSettings = s.llm;
   });
+  invoke<SkillInfo[]>("list_skills").then((skills) => {
+    if (skills.length === 0) return;
+    const list = skills.map((s) => `- ${s.name}: ${s.description}`).join("\n");
+    skillsAds.value =
+      `\n\n## Skills (loaded on demand)\nAvailable skills:\n${list}\n` +
+      `When a task matches a skill's domain, call load_skill("<name>") to get its ` +
+      `full instructions before acting; read reference files with ` +
+      `read_skill_resource("<skill>/<relative/path>").`;
+  });
   // Focus the input when the window is shown/focused.
   nextTick(() => focusInput());
   listen("tauri://focus", () => focusInput());
@@ -161,6 +170,14 @@ When the user asks you to interact with a Windows application, use the run_comma
 - If a command fails, do NOT retry it more than once. Report the error to the user and suggest an alternative.
 - Keep tool calls minimal: aim for 1-3 tool calls per task. Do not loop.
 - When you have enough information to answer, stop calling tools and give your final text response.`;
+
+interface SkillInfo {
+  name: string;
+  description: string;
+}
+// Stage 1 of progressive disclosure (docs/SKILLS.md): advertise skills by
+// name + description; the agent loads bodies on demand via load_skill.
+const skillsAds = ref("");
 // Braille spinner for the standalone thinking indicator (a div, not a message).
 const BRAILLE = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 let spinnerInterval: number | null = null;
@@ -207,7 +224,7 @@ async function submit() {
       model: llmSettings.model,
       message: text,
       priorHistory,
-      systemPrompt: SYSTEM_PROMPT,
+      systemPrompt: SYSTEM_PROMPT + skillsAds.value,
     });
     // If no text ever streamed in (e.g. the model returned nothing), show the
     // final reply as a fallback.

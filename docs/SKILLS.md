@@ -143,51 +143,44 @@ These are simple, frequently used, and don't need progressive disclosure.
 
 ## Implementation
 
+Implemented in `src-tauri/src/lib.rs` + `src/ChatView.vue`:
+
 ### 1. Skill Discovery (Rust)
 
-```rust
-// Scan skills/ directory for SKILL.md files
-// Parse YAML frontmatter (name, description)
-// Return list of available skills
-#[tauri::command]
-fn list_skills() -> Vec<SkillInfo> { ... }
-```
+`skill_roots()` scans, in order: `skills/` (cwd and `../skills`, plus the exe
+directory and its parent for the dev layout), then `~/.firstmate/skills`
+(user-added skills — implemented). `discover_skills()` parses each
+`<skill>/SKILL.md` frontmatter (`name`, `description`); first root wins on
+name clashes.
 
-### 2. Load Skill (Rust)
+### 2. Advertise (frontend, stage 1)
 
-```rust
-// Read the full SKILL.md body
-#[tauri::command]
-fn load_skill(name: String) -> Result<String, String> { ... }
-```
+`#[tauri::command] list_skills()` returns `Vec<SkillInfo>`. On mount,
+ChatView.vue appends the name/description list plus load instructions to the
+system prompt.
 
-### 3. Read Skill Resource (Rust)
+### 3. Load / Read resources (agent tools, stages 2-3)
 
-```rust
-// Read a resource file from a skill directory
-#[tauri::command]
-fn read_skill_resource(path: String) -> Result<String, String> { ... }
-```
+`load_skill(name)` and `read_skill_resource("<skill>/<rel/path>")` are tools
+in the model's tool list (not tauri commands — the model calls them mid-run).
+`resolve_skill_resource` refuses traversal and any path escaping the skill
+directory (canonicalize + prefix check).
 
-### 4. System Prompt Injection (Frontend)
+### 4. Execute (stage 4)
 
-On startup, call `list_skills()`. Inject skill descriptions into the system prompt:
+The agent uses the `run_command` tool as instructed by the skill body.
 
-```
-You have access to the following skills:
-- winapp: Inspect and interact with running Windows applications...
-- ...
+### Direct tools
 
-When a task matches a skill's domain, call load_skill("<name>") to get detailed instructions.
-```
+`run_command`, `read_file`, `write_file`, `list_dir`, `search_files`
+(capped recursive name search), `list_processes` — all in `agent_tools()`.
+A `MAX_TURNS` cap stops non-converging tool loops.
 
-### 5. Shell Tool (Rust)
+### Example
 
-A generic `run_command` tool that executes commands on the Windows system. The agent uses this to run `winapp` commands (as instructed by the skill).
+`skills/git-repo/` — SKILL.md + `references/recipes.md`, loaded on demand.
 
 ## Future Work
 
-- **User-added skills**: Allow users to add their own skills to `~/.firstmate/skills/`
-- **UI tree efficiency**: Truncate/summarize large `winapp ui inspect` output before sending to the LLM
 - **Multi-step workflow coordination**: Manage `WINAPP_UI_WORKFLOW_ID` for coordinated UI interactions
 - **Skill approval**: Require user approval for certain skill actions (e.g., clicking, typing)

@@ -3,6 +3,8 @@ use tauri::{
     tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, PhysicalPosition,
 };
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -11,6 +13,10 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 /// Summon hotkey. Change here; it's registered once in `run`.
 const HOTKEY: &str = "Super+Alt+Space";
+
+/// Hard stop for the tool loop: a model that keeps calling tools forever is
+/// a broken run, not a working one.
+const MAX_TURNS: u32 = 8;
 
 /// Expose the summon hotkey to the frontend so the UI always shows the real binding.
 #[tauri::command]
@@ -300,8 +306,66 @@ fn agent_tools() -> serde_json::Value {
                     "required": ["path"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "search_files",
+                "description": "Recursively find files/directories whose name contains a case-insensitive substring. Returns up to 200 paths. Pick a narrow root; a walk of C:\\ is slow.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "pattern": {"type": "string", "description": "Case-insensitive substring of the file name"},
+                        "root": {"type": "string", "description": "Directory to search under (default 'C:\\')"}
+                    },
+                    "required": ["pattern"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "list_processes",
+                "description": "List running processes as CSV: name, PID, session, memory. To filter, use run_command with 'tasklist | findstr /i <name>' instead.",
+                "parameters": {"type": "object", "properties": {}}
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "load_skill",
+                "description": "Load the full instructions of one of the advertised skills. Call this first whenever a task matches a skill's domain.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "Skill name, exactly as advertised in the system prompt"}
+                    },
+                    "required": ["name"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "read_skill_resource",
+                "description": "Read a reference file that belongs to a skill, e.g. 'my-skill/references/api.md'.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "'<skill>/<relative/path>' inside the skill directory"}
+                    },
+                    "required": ["path"]
+                }
+            }
         }
     ])
+}
+
+/// Skills advertised to the frontend for system-prompt injection (stage 1
+/// of progressive disclosure, docs/SKILLS.md).
+#[tauri::command]
+fn list_skills() -> Vec<SkillInfo> {
+    discover_skills()
 }
 
 /// Append a timestamped line to the local log file.
@@ -509,6 +573,143 @@ fn budget_output(seen: &mut HashMap<String, String>, key: String, result: String
     truncate_if_over(result, MAX)
 }
 
+/// A skill advertised to the model: name + description from SKILL.md
+/// frontmatter (Agent Skills spec, see docs/SKILLS.md).
+#[derive(serde::Serialize)]
+struct SkillInfo {
+    name: String,
+    description: String,
+}
+
+fn home_dir() -> std::path::PathBuf {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(std::path::PathBuf::from)
+        .unwrap_or_default()
+}
+
+/// Directories scanned for `<skill>/SKILL.md`: repo `skills/` (cwd, exe dir,
+/// and the parent of the exe dir for the src-tauri dev layout) plus the
+/// user directory `~/.firstmate/skills`.
+fn skill_roots() -> Vec<std::path::PathBuf> {
+    let mut candidates =
+        vec![std::path::PathBuf::from("skills"), std::path::PathBuf::from("../skills")];
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("skills"));
+            if let Some(parent) = dir.parent() {
+                candidates.push(parent.join("skills"));
+            }
+        }
+    }
+    candidates.push(home_dir().join(".firstmate").join("skills"));
+    let mut roots = Vec::new();
+    for c in candidates {
+        let c = c.canonicalize().unwrap_or(c);
+        if c.is_dir() && !roots.contains(&c) {
+            roots.push(c);
+        }
+    }
+    roots
+}
+
+/// Parse `---` frontmatter. Returns (name, description, body-without-frontmatter).
+fn parse_frontmatter(md: &str) -> (Option<String>, Option<String>, String) {
+    let Some(rest) = md
+        .strip_prefix("---")
+        .and_then(|r| r.strip_prefix('\n'))
+        .or_else(|| md.strip_prefix("---\r\n"))
+    else {
+        return (None, None, md.to_string());
+    };
+    let Some(end) = rest.find("\n---") else {
+        return (None, None, md.to_string());
+    };
+    let mut name = None;
+    let mut description = None;
+    for line in rest[..end].lines() {
+        if let Some(v) = line.strip_prefix("name:") {
+            name = Some(v.trim().to_string());
+        } else if let Some(v) = line.strip_prefix("description:") {
+            description = Some(v.trim().to_string());
+        }
+    }
+    let body = rest[end + 4..].trim_start_matches(['\r', '\n']).to_string();
+    (name, description, body)
+}
+
+/// All skills found under the roots, first root winning on name clashes.
+fn discover_skills() -> Vec<SkillInfo> {
+    let mut skills: Vec<SkillInfo> = Vec::new();
+    for root in skill_roots() {
+        let Ok(dir) = std::fs::read_dir(&root) else {
+            continue;
+        };
+        for entry in dir.flatten() {
+            let Ok(md) = std::fs::read_to_string(entry.path().join("SKILL.md")) else {
+                continue;
+            };
+            let dir_name = entry.file_name().to_string_lossy().to_string();
+            let (name, description, _) = parse_frontmatter(&md);
+            let name = name.unwrap_or(dir_name);
+            if !skills.iter().any(|s| s.name == name) {
+                skills.push(SkillInfo {
+                    name,
+                    description: description.unwrap_or_default(),
+                });
+            }
+        }
+    }
+    skills
+}
+
+/// Directory of the named skill (frontmatter name, falling back to dir name).
+fn skill_dir(name: &str) -> Option<std::path::PathBuf> {
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
+        return None;
+    }
+    for root in skill_roots() {
+        let Ok(dir) = std::fs::read_dir(&root) else {
+            continue;
+        };
+        for entry in dir.flatten() {
+            let path = entry.path();
+            let Ok(md) = std::fs::read_to_string(path.join("SKILL.md")) else {
+                continue;
+            };
+            let dir_name = entry.file_name().to_string_lossy().to_string();
+            let (fm_name, _, _) = parse_frontmatter(&md);
+            if fm_name.as_deref() == Some(name) || dir_name == name {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+/// Resolve `"<skill>/<relative/path>"` to a real file, refusing anything
+/// that escapes the skill directory (traversal or symlink tricks).
+fn resolve_skill_resource(path: &str) -> Result<std::path::PathBuf, String> {
+    if path.contains("..") {
+        return Err("path traversal not allowed".into());
+    }
+    let name = path
+        .split(['/', '\\'])
+        .next()
+        .filter(|s| !s.is_empty() && path.len() > s.len() + 1)
+        .ok_or("expected '<skill>/<relative/path>'")?;
+    let dir = skill_dir(name).ok_or_else(|| format!("no such skill: {name}"))?;
+    let full = dir
+        .join(&path[name.len() + 1..])
+        .canonicalize()
+        .map_err(|_| format!("not found: {path}"))?;
+    let root = dir.canonicalize().map_err(|e| e.to_string())?;
+    if !full.starts_with(&root) {
+        return Err("path escapes the skill directory".into());
+    }
+    Ok(full)
+}
+
 /// Execute a tool by name with JSON arguments. Returns the result as a string.
 async fn execute_tool(
     name: &str,
@@ -587,8 +788,91 @@ async fn execute_tool_inner(name: &str, args: &serde_json::Value) -> Result<Stri
             }
             Ok(entries.join("\n"))
         }
+        "search_files" => {
+            let pattern = args
+                .get("pattern")
+                .and_then(|c| c.as_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if pattern.is_empty() {
+                return Err("pattern is required".into());
+            }
+            let root = args.get("root").and_then(|c| c.as_str()).unwrap_or("C:\\");
+            let mut out = Vec::new();
+            search_files_walk(std::path::Path::new(root), &pattern, 8, &mut out).await;
+            if out.is_empty() {
+                Ok(format!("no files or directories matching '{pattern}' under {root}"))
+            } else {
+                Ok(out.join("\n"))
+            }
+        }
+        "list_processes" => {
+            let output = tokio::process::Command::new("tasklist")
+                .args(["/FO", "CSV", "/NH"])
+                .output()
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        }
+        "load_skill" => {
+            let name = args.get("name").and_then(|c| c.as_str()).unwrap_or("");
+            let dir = skill_dir(name).ok_or_else(|| {
+                let avail: Vec<String> = discover_skills().into_iter().map(|s| s.name).collect();
+                format!("no such skill: {name} (available: {})", avail.join(", "))
+            })?;
+            let md = tokio::fs::read_to_string(dir.join("SKILL.md"))
+                .await
+                .map_err(|e| e.to_string())?;
+            let (_, _, body) = parse_frontmatter(&md);
+            Ok(body)
+        }
+        "read_skill_resource" => {
+            let path = args.get("path").and_then(|c| c.as_str()).unwrap_or("");
+            let file = resolve_skill_resource(path)?;
+            tokio::fs::read_to_string(&file)
+                .await
+                .map_err(|e| e.to_string())
+        }
         _ => Err(format!("unknown tool: {name}")),
     }
+}
+
+/// Recursive name search: case-insensitive substring, depth- and
+/// result-capped, hidden entries skipped.
+fn search_files_walk<'a>(
+    root: &'a std::path::Path,
+    pattern: &'a str,
+    depth: u32,
+    out: &'a mut Vec<String>,
+) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+    Box::pin(async move {
+        const CAP: usize = 200;
+        if depth == 0 || out.len() >= CAP {
+            return;
+        }
+        let Ok(mut dir) = tokio::fs::read_dir(root).await else {
+            return;
+        };
+        while let Ok(Some(entry)) = dir.next_entry().await {
+            if out.len() >= CAP {
+                return;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') {
+                continue;
+            }
+            let Ok(ft) = entry.file_type().await else {
+                continue;
+            };
+            if name.to_lowercase().contains(pattern) {
+                let p = entry.path().to_string_lossy().to_string();
+                out.push(if ft.is_dir() { format!("{p}/") } else { p });
+            }
+            if ft.is_dir() {
+                search_files_walk(&entry.path(), pattern, depth - 1, out).await;
+            }
+        }
+    })
 }
 
 /// A prior conversation turn sent by the frontend so the agent has memory
@@ -780,6 +1064,13 @@ async fn chat_via_lmkit(
                 turn, calls.len(), history.len()
             ));
             turn += 1;
+            if turn >= MAX_TURNS {
+                log(&format!("TURN CAP: stopping at {MAX_TURNS} turns — model not converging"));
+                let _ = app.emit("stream_done", serde_json::json!({}));
+                return Ok(format!(
+                    "{text}\n(stopped after {MAX_TURNS} tool turns without converging — try rephrasing the task)"
+                ));
+            }
             continue;
         }
 
@@ -1039,6 +1330,13 @@ async fn chat_via_openai(
                 msgs.len()
             ));
             turn += 1;
+            if turn >= MAX_TURNS {
+                log(&format!("TURN CAP: stopping at {MAX_TURNS} turns — model not converging"));
+                let _ = app.emit("stream_done", serde_json::json!({}));
+                return Ok(format!(
+                    "{text}\n(stopped after {MAX_TURNS} tool turns without converging — try rephrasing the task)"
+                ));
+            }
             continue;
         }
 
@@ -1097,7 +1395,7 @@ fn open_settings(app: &tauri::AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, list_models, test_llm, chat_with_llm])
+        .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, list_models, test_llm, chat_with_llm, list_skills])
         .setup(|app| {
             // Tray: left-click toggles the console; menu for explicit actions.
             let toggle_item =
@@ -1168,8 +1466,9 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        budget_output, extract_screenshot_path, merge_tool_call_delta, needs_shell,
-        parse_command, CallAcc,
+        budget_output, discover_skills, extract_screenshot_path, merge_tool_call_delta,
+        needs_shell, parse_command, parse_frontmatter, resolve_skill_resource, skill_dir,
+        CallAcc,
     };
     use std::collections::HashMap;
 
@@ -1328,5 +1627,43 @@ mod tests {
             extract_screenshot_path("[identical to your earlier call: 152 bytes, unchanged]").as_deref(),
             None
         );
+    }
+
+    #[test]
+    fn frontmatter_splits_metadata_from_body() {
+        let md = "---\nname: demo\ndescription: A demo skill.\n---\n\n# Body\nDo things.\n";
+        let (name, desc, body) = parse_frontmatter(md);
+        assert_eq!(name.as_deref(), Some("demo"));
+        assert_eq!(desc.as_deref(), Some("A demo skill."));
+        assert_eq!(body, "# Body\nDo things.\n");
+        // No frontmatter: body passes through untouched.
+        let (n2, d2, b2) = parse_frontmatter("plain text");
+        assert!(n2.is_none() && d2.is_none());
+        assert_eq!(b2, "plain text");
+    }
+
+    #[test]
+    fn repo_skill_is_discoverable_and_loadable() {
+        // cargo test runs with cwd = src-tauri, so ../skills is the repo root.
+        let skills = discover_skills();
+        let git = skills.iter().find(|s| s.name == "git-repo").expect("git-repo skill");
+        assert!(git.description.contains("git repositories"));
+        let dir = skill_dir("git-repo").expect("skill dir");
+        let md = std::fs::read_to_string(dir.join("SKILL.md")).unwrap();
+        let (_, _, body) = parse_frontmatter(&md);
+        assert!(body.starts_with("# Git Repos"));
+        assert!(!body.contains("description:"));
+    }
+
+    #[test]
+    fn skill_resource_resolution_is_locked_down() {
+        // Traversal and malformed shapes fail before any filesystem access.
+        assert!(resolve_skill_resource("git-repo/../secrets.txt").is_err());
+        assert!(resolve_skill_resource("git-repo").is_err());
+        assert!(resolve_skill_resource("no-such-skill/references/x.md").is_err());
+        // A real reference file resolves inside the skill dir.
+        let f = resolve_skill_resource("git-repo/references/recipes.md").unwrap();
+        assert!(f.is_file());
+        assert!(f.starts_with(skill_dir("git-repo").unwrap().canonicalize().unwrap()));
     }
 }
