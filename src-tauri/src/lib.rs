@@ -395,6 +395,22 @@ fn parse_command(cmd: &str) -> Vec<String> {
     args
 }
 
+/// True when the command uses shell features (pipes, `&&`, redirection,
+/// cmd built-ins) that require running through `cmd.exe` instead of
+/// launching the program directly.
+fn needs_shell(cmd: &str) -> bool {
+    if cmd.contains(['|', '&', '>', '<', '^', '%', '(', ')']) {
+        return true;
+    }
+    matches!(
+        cmd.split_whitespace().next().unwrap_or("").to_ascii_lowercase().as_str(),
+        "if" | "for" | "echo" | "set" | "dir" | "copy" | "move" | "del" | "erase"
+            | "type" | "cd" | "chdir" | "mkdir" | "md" | "rmdir" | "rd" | "ren"
+            | "rename" | "start" | "call" | "pause" | "timeout" | "exit" | "shift"
+            | "setlocal" | "endlocal" | "pushd" | "popd" | "path" | "rem" | "goto"
+    )
+}
+
 /// Execute a tool by name with JSON arguments. Returns the result as a string.
 async fn execute_tool(name: &str, args: &serde_json::Value) -> Result<String, String> {
     log(&format!("TOOL CALL: {} args={}", name, args));
@@ -411,16 +427,34 @@ async fn execute_tool_inner(name: &str, args: &serde_json::Value) -> Result<Stri
     match name {
         "run_command" => {
             let command = args.get("command").and_then(|c| c.as_str()).unwrap_or("");
-            let argv = parse_command(command);
-            let (program, rest) = match argv.split_first() {
-                Some((p, r)) => (p, r),
-                None => return Err("empty command".into()),
+            let output = if needs_shell(command) {
+                // Pipes, &&, redirection, cmd built-ins: run via cmd.exe.
+                // /S /C "..." strips only the outermost quotes, so inner
+                // quotes survive (plain /C mangles them). raw_arg avoids
+                // Rust re-escaping the string.
+                log(&format!("RUN via cmd shell: {}", command));
+                tokio::process::Command::new("cmd.exe")
+                    .raw_arg("/S")
+                    .raw_arg("/C")
+                    .raw_arg(format!("\"{}\"", command))
+                    .output()
+                    .await
+                    .map_err(|e| e.to_string())?
+            } else {
+                // Direct launch: quotes are parsed by us, so multi-word
+                // quoted arguments reach the program intact.
+                let argv = parse_command(command);
+                let (program, rest) = match argv.split_first() {
+                    Some((p, r)) => (p, r),
+                    None => return Err("empty command".into()),
+                };
+                log(&format!("RUN direct: {} {:?}", program, rest));
+                tokio::process::Command::new(program)
+                    .args(rest)
+                    .output()
+                    .await
+                    .map_err(|e| e.to_string())?
             };
-            let output = tokio::process::Command::new(program)
-                .args(rest)
-                .output()
-                .await
-                .map_err(|e| e.to_string())?;
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
             if !output.status.success() {
@@ -797,4 +831,63 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running First Mate");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{needs_shell, parse_command};
+
+    #[test]
+    fn parse_keeps_quoted_phrase_together() {
+        assert_eq!(
+            parse_command(r#"winapp ui search "Qwen 3.8 Flash Next" -a zen"#),
+            vec!["winapp", "ui", "search", "Qwen 3.8 Flash Next", "-a", "zen"]
+        );
+    }
+
+    #[test]
+    fn parse_plain_command() {
+        assert_eq!(
+            parse_command("winapp ui inspect -a zen"),
+            vec!["winapp", "ui", "inspect", "-a", "zen"]
+        );
+    }
+
+    #[test]
+    fn shell_features_route_to_cmd() {
+        assert!(needs_shell(r#"tasklist | findstr /i "zen""#));
+        assert!(needs_shell("winapp ui click a && winapp ui send-keys ctrl+t"));
+        assert!(needs_shell("winapp ui inspect -a zen 2>&1"));
+        assert!(needs_shell(r#"if exist "C:\x" (dir /b "C:\x")"#));
+        assert!(needs_shell("dir /b C:\\"));
+    }
+
+    #[test]
+    fn plain_commands_run_direct() {
+        assert!(!needs_shell("winapp ui inspect -a zen"));
+        assert!(!needs_shell(r#"winapp ui search "Qwen 3.8 Flash Next" -a zen"#));
+        assert!(!needs_shell("tasklist /FI \"IMAGENAME eq zen.exe\""));
+    }
+
+    #[test]
+    fn cmd_shell_path_preserves_quoted_argument() {
+        use std::os::windows::process::CommandExt;
+        // Same construction as the run_command shell path.
+        let cmd = r#"winapp ui search "Qwen 3.8 Flash Next" -a nosuchapp"#;
+        let out = std::process::Command::new("cmd.exe")
+            .raw_arg("/S")
+            .raw_arg("/C")
+            .raw_arg(format!("\"{}\"", cmd))
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout).to_string()
+            + &String::from_utf8_lossy(&out.stderr);
+        // If quotes survive, clap parses one selector and winapp fails on the
+        // unknown app name; if cmd mangles them, clap rejects the split
+        // tokens ("'3.8' was not matched") before the app lookup happens.
+        assert!(
+            !text.contains("was not matched"),
+            "quotes were mangled by cmd: {text}"
+        );
+    }
 }
