@@ -96,6 +96,11 @@ body {
 .msg.error {
   color: #d03050;
 }
+.msg.tool {
+  color: #b0a040;
+  font-size: 13px;
+  font-family: monospace;
+}
 
 .input-row {
   padding: 8px 12px;

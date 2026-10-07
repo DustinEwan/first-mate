@@ -48,6 +48,14 @@ onMounted(() => {
   // Focus the input when the window is shown/focused.
   nextTick(() => focusInput());
   listen("tauri://focus", () => focusInput());
+  // Show tool calls made by the agent.
+  listen<{ name: string; args: Record<string, string> }>("tool_call", (event) => {
+    const { name, args } = event.payload;
+    const argStr = Object.entries(args)
+      .map(([k, v]) => `${k}=${v}`)
+      .join(" ");
+    addMsg(`🔧 ${name} ${argStr}`, "tool");
+  });
   setTimeout(() => {
     const chat = document.querySelector(".chat");
     const scroller = document.querySelector(".scroller");
@@ -119,7 +127,35 @@ winapp ui set-value <selector> <value> -a <app-name>
 3. Use invoke/click/set-value to interact
 4. Use screenshot again to verify the result
 
-When the user asks you to interact with a Windows application, use the run_command tool to execute winapp commands.`;
+When the user asks you to interact with a Windows application, use the run_command tool to execute winapp commands.
+
+## Important: Convergence
+- If a command fails, do NOT retry it more than once. Report the error to the user and suggest an alternative.
+- Keep tool calls minimal: aim for 1-3 tool calls per task. Do not loop.
+- When you have enough information to answer, stop calling tools and give your final text response.`;
+// Braille spinner for the thinking indicator.
+const BRAILLE = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+let spinnerInterval: number | null = null;
+let spinnerId = -1;
+
+function startSpinner(id: number) {
+  spinnerId = id;
+  let i = 0;
+  spinnerInterval = window.setInterval(() => {
+    const idx = messages.value.findIndex((m) => m.id === spinnerId);
+    if (idx >= 0) {
+      messages.value[idx] = { id: spinnerId, text: `First Mate ${BRAILLE[i % BRAILLE.length]}`, cls: "dim" };
+    }
+    i++;
+  }, 100);
+}
+
+function stopSpinner() {
+  if (spinnerInterval !== null) {
+    clearInterval(spinnerInterval);
+    spinnerInterval = null;
+  }
+}
 async function submit() {
   const text = input.value.trim();
   if (!text) return;
@@ -132,8 +168,9 @@ async function submit() {
   }
 
   isThinking.value = true;
-  addMsg("…", "dim");
+  addMsg("First Mate ⠋", "dim");
   const thinkingId = nextId - 1;
+  startSpinner(thinkingId);
 
   try {
     const reply = await invoke<string>("chat_with_llm", {
@@ -160,6 +197,7 @@ async function submit() {
     }
   } finally {
     isThinking.value = false;
+    stopSpinner();
   }
 }
 

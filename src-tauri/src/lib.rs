@@ -1,7 +1,7 @@
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
-    Manager, PhysicalPosition,
+    Emitter, Manager, PhysicalPosition,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -350,6 +350,7 @@ async fn execute_tool(name: &str, args: &serde_json::Value) -> Result<String, St
 /// Send a message to the LLM and return the response.
 #[tauri::command]
 async fn chat_with_llm(
+    app: tauri::AppHandle,
     provider: String,
     base_url: String,
     api_key: String,
@@ -411,7 +412,7 @@ async fn chat_with_llm(
             ];
             let tools = agent_tools();
             // Tool-calling loop: send to LLM, execute any tool calls, feed results back.
-            for _ in 0..10 {
+            for _ in 0..20 {
                 let body = serde_json::json!({
                     "model": model,
                     "messages": messages,
@@ -452,6 +453,14 @@ async fn chat_with_llm(
                         let name = func.get("name").and_then(|n| n.as_str()).unwrap_or("");
                         let args_str = func.get("arguments").and_then(|a| a.as_str()).unwrap_or("{}");
                         let args: serde_json::Value = serde_json::from_str(args_str).unwrap_or(serde_json::json!({}));
+                        // Emit a tool_call event so the frontend can show what the agent is doing.
+                        let _ = app.emit(
+                            "tool_call",
+                            serde_json::json!({
+                                "name": name,
+                                "args": args,
+                            }),
+                        );
                         let result = execute_tool(name, &args).await.unwrap_or_else(|e| format!("Error: {e}"));
                         messages.push(serde_json::json!({
                             "role": "tool",
