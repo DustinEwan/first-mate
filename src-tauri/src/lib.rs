@@ -533,8 +533,29 @@ struct HistoryItem {
 }
 
 /// Send a message to the LLM and return the response.
+/// OpenAI-compatible endpoints (custom/openai/ollama) use the native client,
+/// which supports image parts so screenshots are actually visible to the
+/// model. lmkit handles Anthropic only (text-only chat).
 #[tauri::command]
 async fn chat_with_llm(
+    app: tauri::AppHandle,
+    provider: String,
+    base_url: String,
+    api_key: String,
+    model: String,
+    message: String,
+    prior_history: Vec<HistoryItem>,
+    system_prompt: String,
+) -> Result<String, String> {
+    if provider == "anthropic" {
+        chat_via_lmkit(app, provider, base_url, api_key, model, message, prior_history, system_prompt).await
+    } else {
+        chat_via_openai(app, provider, base_url, api_key, model, message, prior_history, system_prompt).await
+    }
+}
+
+/// lmkit-backed chat (text-only; used for Anthropic).
+async fn chat_via_lmkit(
     app: tauri::AppHandle,
     provider: String,
     base_url: String,
@@ -701,56 +722,261 @@ async fn chat_with_llm(
     }
 }
 
-/// Execute a command on the Windows system and return the output.
-#[tauri::command]
-async fn run_command(command: String) -> Result<String, String> {
-    let output = tokio::process::Command::new("cmd.exe")
-        .arg("/C")
-        .arg(&command)
-        .output()
-        .await
-        .map_err(|e| e.to_string())?;
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    if !output.status.success() {
-        return Err(format!("exit {:?}: {}\n{}", output.status, stdout, stderr));
+/// Accumulated streaming tool call (OpenAI wire shape).
+#[derive(Default)]
+struct CallAcc {
+    id: String,
+    name: String,
+    args: String,
+}
+
+/// Merge one streamed `tool_calls[]` delta into the accumulator list.
+fn merge_tool_call_delta(calls: &mut Vec<CallAcc>, tc: &serde_json::Value) {
+    let idx = tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+    while calls.len() <= idx {
+        calls.push(CallAcc::default());
     }
-    Ok(stdout)
-}
-
-/// Read a file from the Windows filesystem.
-#[tauri::command]
-async fn read_file(path: String) -> Result<String, String> {
-    tokio::fs::read_to_string(&path)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-/// Write a file to the Windows filesystem.
-#[tauri::command]
-async fn write_file(path: String, content: String) -> Result<(), String> {
-    tokio::fs::write(&path, content)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-/// List directory contents.
-#[tauri::command]
-async fn list_dir(path: String) -> Result<Vec<String>, String> {
-    let mut entries = Vec::new();
-    let mut dir = tokio::fs::read_dir(&path)
-        .await
-        .map_err(|e| e.to_string())?;
-    while let Some(entry) = dir.next_entry().await.map_err(|e| e.to_string())? {
-        let name = entry.file_name().to_string_lossy().to_string();
-        let path = entry.path();
-        let is_dir = tokio::fs::metadata(&path)
-            .await
-            .map(|m| m.is_dir())
-            .unwrap_or(false);
-        entries.push(if is_dir { format!("{name}/") } else { name });
+    if let Some(id) = tc.get("id").and_then(|x| x.as_str()) {
+        if !id.is_empty() {
+            calls[idx].id = id.to_string();
+        }
     }
-    Ok(entries)
+    if let Some(f) = tc.get("function") {
+        if let Some(n) = f.get("name").and_then(|n| n.as_str()) {
+            if !n.is_empty() {
+                calls[idx].name.push_str(n);
+            }
+        }
+        if let Some(a) = f.get("arguments").and_then(|a| a.as_str()) {
+            calls[idx].args.push_str(a);
+        }
+    }
+}
+
+/// If a tool result reports a saved screenshot, return its path.
+fn extract_screenshot_path(result: &str) -> Option<String> {
+    for line in result.lines() {
+        let l = line.trim();
+        let rest = match l
+            .split_once("Saved composite:")
+            .or_else(|| l.split_once("Saved:"))
+        {
+            Some((_, rest)) => rest.trim(),
+            None => continue,
+        };
+        if rest.to_lowercase().ends_with(".png") {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+/// Native OpenAI-compatible chat: streaming, tool calls, and image parts so
+/// screenshots the agent captures are attached and actually seen.
+async fn chat_via_openai(
+    app: tauri::AppHandle,
+    provider: String,
+    base_url: String,
+    api_key: String,
+    model: String,
+    message: String,
+    prior_history: Vec<HistoryItem>,
+    system_prompt: String,
+) -> Result<String, String> {
+    use base64::Engine;
+    use futures_util::StreamExt;
+
+    let base = base_url.trim_end_matches('/');
+    let base = base.strip_suffix("/v1").unwrap_or(base);
+    if base.is_empty() {
+        return Err("base URL is empty".into());
+    }
+    if model.is_empty() {
+        return Err("no model selected".into());
+    }
+    let url = format!("{base}/v1/chat/completions");
+    log(&format!(
+        "CHAT START: provider={} base={} model={} msg_len={} sys_len={} prior={}",
+        provider, base, model, message.len(), system_prompt.len(), prior_history.len()
+    ));
+
+    let mut msgs: Vec<serde_json::Value> =
+        vec![serde_json::json!({ "role": "system", "content": system_prompt })];
+    for h in &prior_history {
+        match h.role.as_str() {
+            "user" | "assistant" => {
+                msgs.push(serde_json::json!({ "role": h.role, "content": h.content }))
+            }
+            _ => {}
+        }
+    }
+    msgs.push(serde_json::json!({ "role": "user", "content": message }));
+
+    let tools = agent_tools();
+    let mut seen: HashMap<String, String> = HashMap::new();
+    let client = reqwest::Client::new();
+    let mut turn = 0;
+    loop {
+        let body = serde_json::json!({
+            "model": model,
+            "messages": msgs,
+            "tools": tools,
+            "stream": true,
+        });
+        let body_json = serde_json::to_string(&body).map_err(|e| e.to_string())?;
+        log(&format!(
+            "TURN {} REQUEST: len={} head={:?}",
+            turn,
+            body_json.len(),
+            body_json.chars().take(300).collect::<String>()
+        ));
+        let mut req = client.post(&url).header("Content-Type", "application/json");
+        if !api_key.is_empty() {
+            req = req.bearer_auth(&api_key);
+        }
+        let resp = match req.body(body_json.clone()).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                log(&format!("TURN {} ERROR: request failed: {}", turn, e));
+                let dump = std::env::temp_dir().join(format!("firstmate_req_t{}.json", turn));
+                let _ = std::fs::write(&dump, &body_json);
+                log(&format!("TURN {} REQUEST DUMPED to {}", turn, dump.display()));
+                return Err(format!("request failed: {e}"));
+            }
+        };
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            log(&format!(
+                "TURN {} ERROR: API {status}: {}",
+                turn,
+                text.chars().take(400).collect::<String>()
+            ));
+            let dump = std::env::temp_dir().join(format!("firstmate_req_t{}.json", turn));
+            let _ = std::fs::write(&dump, &body_json);
+            log(&format!("TURN {} REQUEST DUMPED to {}", turn, dump.display()));
+            return Err(format!(
+                "API error ({status}): {}",
+                text.chars().take(600).collect::<String>()
+            ));
+        }
+
+        // Parse the SSE stream: text deltas and tool-call deltas.
+        let mut stream = resp.bytes_stream();
+        let mut buf = String::new();
+        let mut text = String::new();
+        let mut calls: Vec<CallAcc> = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| e.to_string())?;
+            buf.push_str(&String::from_utf8_lossy(&chunk));
+            while let Some(pos) = buf.find('\n') {
+                let line: String = buf.drain(..=pos).collect();
+                let line = line.trim();
+                let Some(data) = line.strip_prefix("data:") else { continue };
+                let data = data.trim();
+                if data == "[DONE]" {
+                    continue;
+                }
+                let Ok(v) = serde_json::from_str::<serde_json::Value>(data) else {
+                    log(&format!(
+                        "TURN {} SSE parse error: {:?}",
+                        turn,
+                        data.chars().take(120).collect::<String>()
+                    ));
+                    continue;
+                };
+                let Some(choice) = v.get("choices").and_then(|c| c.get(0)) else { continue };
+                let delta = choice.get("delta");
+                if let Some(t) = delta.and_then(|d| d.get("content")).and_then(|c| c.as_str()) {
+                    if !t.is_empty() {
+                        text.push_str(t);
+                        let _ = app.emit("stream_chunk", serde_json::json!({ "text": t }));
+                    }
+                }
+                if let Some(tcs) = delta.and_then(|d| d.get("tool_calls")).and_then(|t| t.as_array()) {
+                    for tc in tcs {
+                        merge_tool_call_delta(&mut calls, tc);
+                    }
+                }
+            }
+        }
+        log(&format!(
+            "TURN {} STREAM DONE: text_len={} tool_calls={} history_msgs={}",
+            turn,
+            text.len(),
+            calls.len(),
+            msgs.len()
+        ));
+
+        if !calls.is_empty() {
+            let _ = app.emit("stream_reset", serde_json::json!({}));
+            let tcs: Vec<serde_json::Value> = calls
+                .iter()
+                .map(|c| {
+                    serde_json::json!({
+                        "id": c.id,
+                        "type": "function",
+                        "function": { "name": c.name, "arguments": c.args },
+                    })
+                })
+                .collect();
+            msgs.push(serde_json::json!({
+                "role": "assistant",
+                "content": if text.is_empty() {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::Value::String(text.clone())
+                },
+                "tool_calls": tcs,
+            }));
+            for call in &calls {
+                let name = call.name.clone();
+                let args: serde_json::Value =
+                    serde_json::from_str(&call.args).unwrap_or(serde_json::json!({}));
+                let _ = app.emit("tool_call", serde_json::json!({ "name": &name, "args": &args }));
+                let result = execute_tool(&name, &args, &mut seen)
+                    .await
+                    .unwrap_or_else(|e| format!("Error: {e}"));
+                msgs.push(serde_json::json!({
+                    "role": "tool", "tool_call_id": call.id, "content": result
+                }));
+                // Vision loop: if the command saved a screenshot, attach the
+                // image so the model actually sees it on the next turn.
+                if let Some(path) = extract_screenshot_path(&result) {
+                    match tokio::fs::read(&path).await {
+                        Ok(bytes) => {
+                            let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                            msgs.push(serde_json::json!({
+                                "role": "user",
+                                "content": [
+                                    { "type": "text", "text": format!(
+                                        "Screenshot captured by the previous command ({}). Look at it before deciding your next action.",
+                                        path
+                                    ) },
+                                    { "type": "image_url", "image_url": {
+                                        "url": format!("data:image/png;base64,{}", b64)
+                                    } }
+                                ]
+                            }));
+                            log(&format!("VISION: attached {} bytes from {}", bytes.len(), path));
+                        }
+                        Err(e) => log(&format!("VISION: cannot read {path}: {e}")),
+                    }
+                }
+            }
+            log(&format!(
+                "TURN {} TOOL TURN: {} calls, history_msgs={}",
+                turn,
+                calls.len(),
+                msgs.len()
+            ));
+            turn += 1;
+            continue;
+        }
+
+        let _ = app.emit("stream_done", serde_json::json!({}));
+        return Ok(text);
+    }
 }
 
 fn toggle_window(app: &tauri::AppHandle) {
@@ -803,7 +1029,7 @@ fn open_settings(app: &tauri::AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, list_models, test_llm, chat_with_llm, run_command, read_file, write_file, list_dir])
+        .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, list_models, test_llm, chat_with_llm])
         .setup(|app| {
             // Tray: left-click toggles the console; menu for explicit actions.
             let toggle_item =
@@ -873,7 +1099,10 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{budget_output, needs_shell, parse_command};
+    use super::{
+        budget_output, extract_screenshot_path, merge_tool_call_delta, needs_shell,
+        parse_command, CallAcc,
+    };
     use std::collections::HashMap;
 
     #[test]
@@ -952,5 +1181,55 @@ mod tests {
         assert!(out.contains("truncated 1000 chars"));
         assert!(out.contains("narrow the command"));
         assert!(out.chars().count() < 8200);
+    }
+
+    #[test]
+    fn merge_streamed_tool_call_across_deltas() {
+        let mut calls: Vec<CallAcc> = Vec::new();
+        merge_tool_call_delta(
+            &mut calls,
+            &serde_json::json!({"index":0,"id":"call_1","type":"function",
+                "function":{"name":"run_command","arguments":""}}),
+        );
+        merge_tool_call_delta(
+            &mut calls,
+            &serde_json::json!({"index":0,"function":{"arguments":"{\"com"}}),
+        );
+        merge_tool_call_delta(
+            &mut calls,
+            &serde_json::json!({"index":0,"function":{"arguments":"mand\":\"dir\"}"}}),
+        );
+        // Second call at a higher index.
+        merge_tool_call_delta(
+            &mut calls,
+            &serde_json::json!({"index":1,"id":"call_2","type":"function",
+                "function":{"name":"read_file","arguments":"{}"}}),
+        );
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].id, "call_1");
+        assert_eq!(calls[0].name, "run_command");
+        assert_eq!(calls[0].args, r#"{"command":"dir"}"#);
+        assert_eq!(calls[1].id, "call_2");
+        assert_eq!(calls[1].name, "read_file");
+    }
+
+    #[test]
+    fn extract_screenshot_path_from_winapp_output() {
+        let composite = "⚠  2 windows detected. Compositing into single image.\n  ✓ Saved composite: C:\\shots\\win.png";
+        assert_eq!(
+            extract_screenshot_path(composite).as_deref(),
+            Some("C:\\shots\\win.png")
+        );
+        let plain = "  ✓ Saved: C:\\shots\\one.png";
+        assert_eq!(
+            extract_screenshot_path(plain).as_deref(),
+            Some("C:\\shots\\one.png")
+        );
+        assert_eq!(extract_screenshot_path("no image here").as_deref(), None);
+        // Deduped results never re-attach the image.
+        assert_eq!(
+            extract_screenshot_path("[identical to your earlier call: 152 bytes, unchanged]").as_deref(),
+            None
+        );
     }
 }

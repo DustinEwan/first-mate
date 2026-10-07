@@ -130,11 +130,13 @@ enter as a separate command.
 winapp ui set-value <selector> <value> -a <app-name>
 \`\`\`
 
-### Screenshot (returns a file path — you CANNOT see the image)
+### Screenshot (the image is attached to your context — you CAN see it)
 \`\`\`
 winapp ui screenshot -a <app-name>
 \`\`\`
-Do not use screenshots to judge UI state; use inspect/search text output.
+The screenshot image is attached automatically right after the command; look
+at it to judge UI state, verify your last action, or find things the UIA tree
+does not expose.
 
 ## Command Rules
 - Quote multi-word arguments: winapp ui search "Qwen 3.8 Flash Next" -a zen
