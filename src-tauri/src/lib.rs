@@ -412,34 +412,101 @@ fn needs_shell(cmd: &str) -> bool {
     )
 }
 
-/// Keep tool output from exploding the context. Identical repeat results
-/// collapse to a pointer; oversized output is truncated with a hint to
-/// narrow the command. `seen` maps tool call -> full result, per chat run.
-fn budget_output(seen: &mut HashMap<String, String>, key: String, result: String) -> String {
-    const MAX: usize = 8000;
-    if let Some(prev) = seen.get(&key) {
-        if *prev == result {
-            let msg = format!(
-                "[identical to your earlier call: {} bytes, unchanged — the state has not changed]",
-                result.len()
-            );
-            log(&format!("BUDGET: deduped identical result ({} bytes)", result.len()));
-            return msg;
+/// LCS-based line diff: lines dropped from `prev` are `-`, added lines `+`.
+fn line_diff(prev: &str, now: &str) -> String {
+    let a: Vec<&str> = prev.lines().collect();
+    let b: Vec<&str> = now.lines().collect();
+    let (n, m) = (a.len(), b.len());
+    let mut dp = vec![vec![0u32; m + 1]; n + 1];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            dp[i][j] = if a[i] == b[j] {
+                dp[i + 1][j + 1] + 1
+            } else {
+                dp[i + 1][j].max(dp[i][j + 1])
+            };
         }
     }
-    let out = if result.chars().count() > MAX {
-        let head: String = result.chars().take(MAX).collect();
-        let rest = result.chars().count() - MAX;
+    let mut out = String::new();
+    let (mut i, mut j) = (0usize, 0usize);
+    while i < n && j < m {
+        if a[i] == b[j] {
+            i += 1;
+            j += 1;
+        } else if dp[i + 1][j] >= dp[i][j + 1] {
+            out.push_str("- ");
+            out.push_str(a[i]);
+            out.push('\n');
+            i += 1;
+        } else {
+            out.push_str("+ ");
+            out.push_str(b[j]);
+            out.push('\n');
+            j += 1;
+        }
+    }
+    while i < n {
+        out.push_str("- ");
+        out.push_str(a[i]);
+        out.push('\n');
+        i += 1;
+    }
+    while j < m {
+        out.push_str("+ ");
+        out.push_str(b[j]);
+        out.push('\n');
+        j += 1;
+    }
+    out
+}
+
+/// Truncate output over `max` chars with a hint to narrow the command.
+fn truncate_if_over(s: String, max: usize) -> String {
+    if s.chars().count() > max {
+        let head: String = s.chars().take(max).collect();
+        let rest = s.chars().count() - max;
         log(&format!("BUDGET: truncated {} chars", rest));
         format!(
             "{}\n...[truncated {} chars — narrow the command: --depth N, a selector, or pipe to findstr]",
             head, rest
         )
     } else {
-        result.clone()
-    };
-    seen.insert(key, result);
-    out
+        s
+    }
+}
+
+/// Keep tool output from exploding the context. An identical repeat result
+/// collapses to a pointer; a changed repeat returns only the line diff
+/// against the previous output; oversized output is truncated. `seen` maps
+/// tool call -> full result, per chat run.
+fn budget_output(seen: &mut HashMap<String, String>, key: String, result: String) -> String {
+    const MAX: usize = 8000;
+    if let Some(prev) = seen.get(&key) {
+        if *prev == result {
+            log(&format!("BUDGET: deduped identical result ({} bytes)", result.len()));
+            seen.insert(key, result.clone());
+            return format!(
+                "[identical to your earlier call: {} bytes, unchanged — the state has not changed]",
+                result.len()
+            );
+        }
+        let diff = line_diff(prev, &result);
+        let out = if diff.trim().is_empty() {
+            "[no visible line changes vs your earlier call]".to_string()
+        } else if diff.chars().count() >= result.chars().count() {
+            result.clone() // wholesale change: a diff would save nothing
+        } else {
+            log(&format!(
+                "BUDGET: returned line diff instead of full {}-byte result",
+                result.len()
+            ));
+            format!("[changes vs your earlier call]\n{}", diff)
+        };
+        seen.insert(key, result);
+        return truncate_if_over(out, MAX);
+    }
+    seen.insert(key, result.clone());
+    truncate_if_over(result, MAX)
 }
 
 /// Execute a tool by name with JSON arguments. Returns the result as a string.
@@ -753,19 +820,20 @@ fn merge_tool_call_delta(calls: &mut Vec<CallAcc>, tc: &serde_json::Value) {
     }
 }
 
-/// If a tool result reports a saved screenshot, return its path.
+/// If a tool result reports a saved screenshot, return its path. Handles
+/// winapp's variants: `Saved composite: <path>`, `Saved: <path>`, and
+/// `Screenshot of "X" ... saved to <path> (WxH, NNNKB)`.
 fn extract_screenshot_path(result: &str) -> Option<String> {
     for line in result.lines() {
-        let l = line.trim();
-        let rest = match l
-            .split_once("Saved composite:")
-            .or_else(|| l.split_once("Saved:"))
+        if !line.to_lowercase().contains("saved") {
+            continue;
+        }
+        if let Some(tok) = line
+            .split_whitespace()
+            .rev()
+            .find(|t| t.to_lowercase().ends_with(".png"))
         {
-            Some((_, rest)) => rest.trim(),
-            None => continue,
-        };
-        if rest.to_lowercase().ends_with(".png") {
-            return Some(rest.to_string());
+            return Some(tok.to_string());
         }
     }
     None
@@ -1184,6 +1252,29 @@ mod tests {
     }
 
     #[test]
+    fn changed_repeat_returns_line_diff() {
+        let mut seen = HashMap::new();
+        budget_output(&mut seen, "inspect".into(), "tab A\ntab B\ntab C".into());
+        let out = budget_output(&mut seen, "inspect".into(), "tab A\ntab B2\ntab C".into());
+        assert!(out.starts_with("[changes vs your earlier call]"));
+        assert!(out.contains("- tab B"));
+        assert!(out.contains("+ tab B2"));
+        // Unchanged lines are omitted entirely.
+        assert!(!out.contains("tab A"));
+        assert!(!out.contains("tab C"));
+    }
+
+    #[test]
+    fn wholesale_change_falls_back_to_full_output() {
+        let mut seen = HashMap::new();
+        budget_output(&mut seen, "k".into(), "completely\ndifferent\ncontent".into());
+        let now = "a\nb".to_string();
+        let out = budget_output(&mut seen, "k".into(), now.clone());
+        // Diff (3 removals + 2 additions) is bigger than the output itself.
+        assert_eq!(out, now);
+    }
+
+    #[test]
     fn merge_streamed_tool_call_across_deltas() {
         let mut calls: Vec<CallAcc> = Vec::new();
         merge_tool_call_delta(
@@ -1224,6 +1315,12 @@ mod tests {
         assert_eq!(
             extract_screenshot_path(plain).as_deref(),
             Some("C:\\shots\\one.png")
+        );
+        let single = "Screenshot of \"Google — Zen Browser\" (PID 4892) saved to \
+                       \\\\wsl.localhost\\Ubuntu\\tmp\\screenshot.png (2560x1392, 185KB)";
+        assert_eq!(
+            extract_screenshot_path(single).as_deref(),
+            Some("\\\\wsl.localhost\\Ubuntu\\tmp\\screenshot.png")
         );
         assert_eq!(extract_screenshot_path("no image here").as_deref(), None);
         // Deduped results never re-attach the image.
