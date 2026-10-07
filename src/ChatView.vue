@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, Window } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { ref, onMounted, watch, nextTick } from "vue";
 import { NConfigProvider, NInput, darkTheme } from "naive-ui";
@@ -18,6 +19,12 @@ const input = ref("");
 let nextId = 0;
 const messagesWrap = ref<HTMLElement>();
 const isThinking = ref(false);
+const inputRef = ref<HTMLElement>();
+
+function focusInput() {
+  const el = inputRef.value?.querySelector("input");
+  if (el) el.focus();
+}
 
 interface LlmSettings {
   provider: string;
@@ -38,6 +45,9 @@ onMounted(() => {
   invoke<{ llm: LlmSettings }>("get_settings").then((s) => {
     llmSettings = s.llm;
   });
+  // Focus the input when the window is shown/focused.
+  nextTick(() => focusInput());
+  listen("tauri://focus", () => focusInput());
 });
 
 
@@ -148,8 +158,11 @@ watch(messages, () => {
   nextTick(() => {
     const el = messagesWrap.value;
     if (el) {
-      console.log("scrolling to bottom", el.scrollTop, el.scrollHeight);
-      el.scrollTop = el.scrollHeight;
+      // Only auto-scroll if the user is already near the bottom (following the conversation).
+      const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 80;
+      if (nearBottom) {
+        el.scrollTop = el.scrollHeight;
+      }
     }
   });
 }, { deep: true });
@@ -179,7 +192,7 @@ window.addEventListener("keydown", (e) => {
           </template>
         </RecycleScroller>
       </div>
-      <div class="input-row">
+      <div class="input-row" ref="inputRef">
         <n-input
           v-model:value="input"
           placeholder="Type a message…"
