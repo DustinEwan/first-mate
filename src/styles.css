@@ -48,32 +48,28 @@ body {
   height: 100vh;
 }
 
-.messages-wrap {
+
+.scroller {
   flex: 1;
   min-height: 0;
-  overflow: auto;
   position: relative;
-  height: 0;
 }
 
 /* Scrollbar styling to match theme */
-.messages-wrap::-webkit-scrollbar {
+.scroller::-webkit-scrollbar {
   width: 8px;
 }
-.messages-wrap::-webkit-scrollbar-track {
+.scroller::-webkit-scrollbar-track {
   background: #101113;
 }
-.messages-wrap::-webkit-scrollbar-thumb {
+.scroller::-webkit-scrollbar-thumb {
   background: #2c2c31;
   border-radius: 4px;
 }
-.messages-wrap::-webkit-scrollbar-thumb:hover {
+.scroller::-webkit-scrollbar-thumb:hover {
   background: #3c3c41;
 }
 
-.vue-recycle-scroller {
-  height: 100%;
-}
 
 
 

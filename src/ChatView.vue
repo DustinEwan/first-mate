@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { ref, onMounted, watch, nextTick } from "vue";
 import { NConfigProvider, NInput, darkTheme } from "naive-ui";
-import { RecycleScroller } from "vue-virtual-scroller";
+import { DynamicScroller, DynamicScrollerItem } from "vue-virtual-scroller";
 
 const win = getCurrentWindow();
 
@@ -17,7 +17,7 @@ interface Msg {
 const messages = ref<Msg[]>([]);
 const input = ref("");
 let nextId = 0;
-const messagesWrap = ref<HTMLElement>();
+const scrollerRef = ref();
 const isThinking = ref(false);
 const inputRef = ref<HTMLElement>();
 
@@ -156,13 +156,9 @@ function hide() {
 // Auto-scroll to bottom when new messages arrive.
 watch(messages, () => {
   nextTick(() => {
-    const el = messagesWrap.value;
+    const el = scrollerRef.value?.$el as HTMLElement | undefined;
     if (el) {
-      // Only auto-scroll if the user is already near the bottom (following the conversation).
-      const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 80;
-      if (nearBottom) {
-        el.scrollTop = el.scrollHeight;
-      }
+      el.scrollTop = el.scrollHeight;
     }
   });
 }, { deep: true });
@@ -180,18 +176,23 @@ window.addEventListener("keydown", (e) => {
         <span class="title">First Mate</span>
         <button class="close" @click="hide">&#10005;</button>
       </header>
-      <div class="messages-wrap" ref="messagesWrap">
-        <RecycleScroller
-          :items="messages"
-          :item-size="72"
-          key-field="id"
-          :page-mode="true"
-        >
-          <template #default="{ item }">
+      <DynamicScroller
+        ref="scrollerRef"
+        :items="messages"
+        :min-size="40"
+        key-field="id"
+        class="scroller"
+      >
+        <template v-slot="{ item, active }">
+          <DynamicScrollerItem
+            :item="item"
+            :active="active"
+            :size-dependencies="[item.text]"
+          >
             <div class="msg" :class="item.cls">{{ item.text }}</div>
-          </template>
-        </RecycleScroller>
-      </div>
+          </DynamicScrollerItem>
+        </template>
+      </DynamicScroller>
       <div class="input-row" ref="inputRef">
         <n-input
           v-model:value="input"
