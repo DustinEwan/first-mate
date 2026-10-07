@@ -48,6 +48,22 @@ onMounted(() => {
   // Focus the input when the window is shown/focused.
   nextTick(() => focusInput());
   listen("tauri://focus", () => focusInput());
+  setTimeout(() => {
+    const chat = document.querySelector(".chat");
+    const scroller = document.querySelector(".scroller");
+    const inputRow = document.querySelector(".input-row");
+    const cs = scroller ? getComputedStyle(scroller) : null;
+    console.log("layout debug", {
+      chatH: chat?.clientHeight,
+      scrollerH: scroller?.clientHeight,
+      scrollerScrollH: scroller?.scrollHeight,
+      scrollerTop: scroller?.offsetTop,
+      scrollerOverflow: cs?.overflowY,
+      scrollerPos: cs?.position,
+      inputTop: inputRow?.offsetTop,
+      inputH: inputRow?.clientHeight,
+    });
+  }, 500);
 });
 
 

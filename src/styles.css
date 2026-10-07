@@ -53,6 +53,7 @@ body {
   flex: 1;
   min-height: 0;
   position: relative;
+  overflow: auto;
 }
 
 /* Scrollbar styling to match theme */
