@@ -303,14 +303,121 @@ fn agent_tools() -> serde_json::Value {
     ])
 }
 
+/// Append a timestamped line to the local log file.
+fn log(msg: &str) {
+    use std::io::Write;
+    let path = std::env::temp_dir().join("firstmate.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        let _ = writeln!(f, "[{}.{:03}] {}", ts.as_secs(), ts.subsec_millis(), msg);
+    }
+}
+
+/// Build a serializable view of the request (ChatRequest itself doesn't impl Serialize).
+fn request_to_json(
+    history: &[lmkit::ChatMessage],
+    tools: &[lmkit::ToolDefinition],
+) -> serde_json::Value {
+    let msgs: Vec<serde_json::Value> = history.iter().map(|m| {
+        let role = match m.role {
+            lmkit::Role::System => "system",
+            lmkit::Role::User => "user",
+            lmkit::Role::Assistant => "assistant",
+            lmkit::Role::Tool => "tool",
+        };
+        let mut obj = serde_json::json!({ "role": role });
+        if let Some(c) = &m.content {
+            obj["content"] = serde_json::Value::String(c.clone());
+        }
+        if let Some(tcs) = &m.tool_calls {
+            let arr: Vec<serde_json::Value> = tcs.iter().map(|tc| {
+                serde_json::json!({
+                    "id": tc.id,
+                    "type": "function",
+                    "function": { "name": tc.function.name, "arguments": tc.function.arguments }
+                })
+            }).collect();
+            obj["tool_calls"] = serde_json::Value::Array(arr);
+        }
+        if let Some(id) = &m.tool_call_id {
+            obj["tool_call_id"] = serde_json::Value::String(id.clone());
+        }
+        if let Some(n) = &m.name {
+            obj["name"] = serde_json::Value::String(n.clone());
+        }
+        obj
+    }).collect();
+    let tools_arr: Vec<serde_json::Value> = tools.iter().map(|t| {
+        serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": t.function.name,
+                "description": t.function.description,
+                "parameters": t.function.parameters
+            }
+        })
+    }).collect();
+    serde_json::json!({ "messages": msgs, "tools": tools_arr })
+}
+
+/// Split a command line into arguments, respecting double quotes.
+/// `winapp ui search "Qwen 3.8 Flash Next" -a zen`
+///   -> ["winapp", "ui", "search", "Qwen 3.8 Flash Next", "-a", "zen"]
+fn parse_command(cmd: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut started = false;
+    for c in cmd.chars() {
+        match c {
+            '"' => {
+                in_quotes = !in_quotes;
+                started = true;
+            }
+            ' ' | '\t' if !in_quotes => {
+                if started {
+                    args.push(current.clone());
+                    current.clear();
+                    started = false;
+                }
+            }
+            _ => {
+                current.push(c);
+                started = true;
+            }
+        }
+    }
+    if started {
+        args.push(current);
+    }
+    args
+}
+
 /// Execute a tool by name with JSON arguments. Returns the result as a string.
 async fn execute_tool(name: &str, args: &serde_json::Value) -> Result<String, String> {
+    log(&format!("TOOL CALL: {} args={}", name, args));
+    let result = execute_tool_inner(name, args).await;
+    let summary = match &result {
+        Ok(s) => format!("OK len={}", s.len()),
+        Err(e) => format!("ERR {}", e.chars().take(200).collect::<String>()),
+    };
+    log(&format!("TOOL RESULT: {} -> {}", name, summary));
+    result
+}
+
+async fn execute_tool_inner(name: &str, args: &serde_json::Value) -> Result<String, String> {
     match name {
         "run_command" => {
             let command = args.get("command").and_then(|c| c.as_str()).unwrap_or("");
-            let output = tokio::process::Command::new("cmd.exe")
-                .arg("/C")
-                .arg(command)
+            let argv = parse_command(command);
+            let (program, rest) = match argv.split_first() {
+                Some((p, r)) => (p, r),
+                None => return Err("empty command".into()),
+            };
+            let output = tokio::process::Command::new(program)
+                .args(rest)
                 .output()
                 .await
                 .map_err(|e| e.to_string())?;
@@ -347,6 +454,15 @@ async fn execute_tool(name: &str, args: &serde_json::Value) -> Result<String, St
         _ => Err(format!("unknown tool: {name}")),
     }
 }
+
+/// A prior conversation turn sent by the frontend so the agent has memory
+/// across chat_with_llm invocations.
+#[derive(serde::Deserialize)]
+struct HistoryItem {
+    role: String,
+    content: String,
+}
+
 /// Send a message to the LLM and return the response.
 #[tauri::command]
 async fn chat_with_llm(
@@ -356,162 +472,160 @@ async fn chat_with_llm(
     api_key: String,
     model: String,
     message: String,
+    prior_history: Vec<HistoryItem>,
     system_prompt: String,
 ) -> Result<String, String> {
+    use futures_util::StreamExt;
+    use lmkit::{
+        create_chat_provider, merge_tool_call_deltas, ChatEvent, ChatMessage,
+        ChatRequest, FunctionDefinition, Provider, ProviderConfig, Role, ToolCallDelta,
+        ToolDefinition,
+    };
+
     let base = base_url.trim_end_matches('/');
+    let base = base.strip_suffix("/v1").unwrap_or(base);
     if base.is_empty() {
         return Err("base URL is empty".into());
     }
     if model.is_empty() {
         return Err("no model selected".into());
     }
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .map_err(|e| e.to_string())?;
-    match provider.as_str() {
-        "ollama" => {
-            let body = serde_json::json!({
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": message}
-                ],
-                "stream": false,
-            });
-            let resp = client
-                .post(format!("{base}/api/chat"))
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| e.to_string())?;
-            let status = resp.status();
-            let text = resp.text().await.map_err(|e| e.to_string())?;
-            if !status.is_success() {
-                return Err(format!("HTTP {status}: {text}"));
-            }
-            let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-            let reply = v
-                .get("message")
-                .and_then(|m| m.get("content"))
-                .and_then(|c| c.as_str())
+    log(&format!(
+        "CHAT START: provider={} base={} model={} msg_len={} sys_len={} prior={}",
+        provider, base, model, message.len(), system_prompt.len(), prior_history.len()
+    ));
+
+    // Map the provider string to a lmkit Provider.
+    let provider_enum = match provider.as_str() {
+        "ollama" => Provider::Ollama,
+        "anthropic" => Provider::Anthropic,
+        _ => Provider::OpenAI, // openai / custom / any OpenAI-compatible endpoint
+    };
+
+    // Create the provider with a custom base URL.
+    let config = ProviderConfig::with_base_url(provider_enum, api_key, format!("{base}/v1"), model);
+    let llm = create_chat_provider(&config).map_err(|e| e.to_string())?;
+
+    // Convert the tools JSON to lmkit types.
+    let tools: Vec<ToolDefinition> = agent_tools()
+        .as_array()
+        .expect("agent_tools returns an array")
+        .iter()
+        .map(|t| {
+            let func = t.get("function").expect("tool has a function");
+            let name = func
+                .get("name")
+                .and_then(|n| n.as_str())
                 .unwrap_or("")
                 .to_string();
-            Ok(reply)
-        }
-        "openai" | "custom" => {
-            let completions = if base.ends_with("/v1") {
-                format!("{base}/chat/completions")
-            } else {
-                format!("{base}/v1/chat/completions")
+            let parameters = func
+                .get("parameters")
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
+            let function = match func.get("description").and_then(|d| d.as_str()) {
+                Some(desc) => FunctionDefinition::with_description(name, desc, parameters),
+                None => FunctionDefinition::new(name, parameters),
             };
-            // Build the conversation history.
-            let mut messages: Vec<serde_json::Value> = vec![
-                serde_json::json!({"role": "system", "content": system_prompt}),
-                serde_json::json!({"role": "user", "content": message}),
-            ];
-            let tools = agent_tools();
-            // Tool-calling loop: send to LLM, execute any tool calls, feed results back.
-            for _ in 0..20 {
-                let body = serde_json::json!({
-                    "model": model,
-                    "messages": messages,
-                    "tools": tools,
-                });
-                let mut req = client.post(&completions).json(&body);
-                if !api_key.is_empty() {
-                    req = req.bearer_auth(api_key.clone());
-                }
-                let resp = req.send().await.map_err(|e| e.to_string())?;
-                let status = resp.status();
-                let text = resp.text().await.map_err(|e| e.to_string())?;
-                if !status.is_success() {
-                    return Err(format!("HTTP {status}: {text}"));
-                }
-                let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-                let choice = v.get("choices").and_then(|c| c.get(0));
-                let choice = match choice {
-                    Some(c) => c,
-                    None => return Err("no choices in response".into()),
-                };
-                // Check for tool calls.
-                let tool_calls = choice
-                    .get("message")
-                    .and_then(|m| m.get("tool_calls"))
-                    .and_then(|t| t.as_array());
-                if let Some(calls) = tool_calls {
-                    // Add the assistant's tool-call message to history.
-                    messages.push(serde_json::json!({
-                        "role": "assistant",
-                        "content": choice.get("message").and_then(|m| m.get("content")).and_then(|c| c.as_str()).unwrap_or(""),
-                        "tool_calls": calls,
-                    }));
-                    // Execute each tool call and add the results.
-                    for call in calls {
-                        let id = call.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
-                        let func = call.get("function").unwrap_or(&serde_json::Value::Null);
-                        let name = func.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                        let args_str = func.get("arguments").and_then(|a| a.as_str()).unwrap_or("{}");
-                        let args: serde_json::Value = serde_json::from_str(args_str).unwrap_or(serde_json::json!({}));
-                        // Emit a tool_call event so the frontend can show what the agent is doing.
-                        let _ = app.emit(
-                            "tool_call",
-                            serde_json::json!({
-                                "name": name,
-                                "args": args,
-                            }),
-                        );
-                        let result = execute_tool(name, &args).await.unwrap_or_else(|e| format!("Error: {e}"));
-                        messages.push(serde_json::json!({
-                            "role": "tool",
-                            "tool_call_id": id,
-                            "content": result,
-                        }));
-                    }
-                    // Loop back to send the updated history to the LLM.
-                    continue;
-                }
-                // No tool calls — return the text response.
-                let reply = choice
-                    .get("message")
-                    .and_then(|m| m.get("content"))
-                    .and_then(|c| c.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                return Ok(reply);
-            }
-            Err("max tool iterations reached".into())
+            ToolDefinition { function }
+        })
+        .collect();
+
+    // Build the conversation history: system prompt, prior turns, new message.
+    let mut history: Vec<ChatMessage> = vec![ChatMessage::system(system_prompt)];
+    for h in &prior_history {
+        match h.role.as_str() {
+            "user" => history.push(ChatMessage::user(&h.content)),
+            "assistant" => history.push(ChatMessage::assistant(&h.content)),
+            _ => {}
         }
-        "anthropic" => {
-            let body = serde_json::json!({
-                "model": model,
-                "max_tokens": 1024,
-                "system": system_prompt,
-                "messages": [{"role": "user", "content": message}],
+    }
+    history.push(ChatMessage::user(message));
+
+    let mut turn = 0;
+    loop {
+        log(&format!("TURN {}: history_msgs={} tools={}", turn, history.len(), tools.len()));
+        let request = ChatRequest {
+            messages: history.clone(),
+            tools: Some(tools.clone()),
+            ..Default::default()
+        };
+        // Serialize the request once; log the head, and dump the full body on error.
+        let req_json = match serde_json::to_string(&request_to_json(&history, &tools)) {
+            Ok(j) => j,
+            Err(e) => {
+                log(&format!("TURN {} REQUEST SERIALIZE ERROR: {}", turn, e));
+                return Err(e.to_string());
+            }
+        };
+        log(&format!(
+            "TURN {} REQUEST: len={} head={:?}",
+            turn,
+            req_json.len(),
+            req_json.chars().take(300).collect::<String>()
+        ));
+
+        // Stream the response, accumulating text and tool-call deltas.
+        let mut text = String::new();
+        let mut deltas: Vec<ToolCallDelta> = Vec::new();
+        let mut stream = match llm.complete_stream(&request).await {
+            Ok(s) => s,
+            Err(e) => {
+                log(&format!("TURN {} ERROR: complete_stream failed: {}", turn, e));
+                let dump = std::env::temp_dir().join(format!("firstmate_req_t{}.json", turn));
+                let _ = std::fs::write(&dump, &req_json);
+                log(&format!("TURN {} REQUEST DUMPED to {}", turn, dump.display()));
+                return Err(e.to_string());
+            }
+        };
+        while let Some(event) = stream.next().await {
+            let event = event.map_err(|e| e.to_string())?;
+            match event {
+                ChatEvent::Delta(t) => {
+                    text.push_str(&t);
+                    let _ = app.emit("stream_chunk", serde_json::json!({ "text": t }));
+                }
+                ChatEvent::ToolCallDelta(d) => deltas.extend(d),
+                ChatEvent::Finish(_) => {}
+            }
+        }
+        log(&format!(
+            "TURN {} STREAM DONE: text_len={} tool_deltas={} history_msgs={}",
+            turn, text.len(), deltas.len(), history.len()
+        ));
+
+        // Tool-call turn: execute, feed back, loop.
+        let calls = merge_tool_call_deltas(&deltas);
+        if !calls.is_empty() {
+            let _ = app.emit("stream_reset", serde_json::json!({}));
+            history.push(ChatMessage {
+                role: Role::Assistant,
+                content: Some(text.clone()),
+                tool_calls: Some(calls.clone()),
+                tool_call_id: None,
+                name: None,
             });
-            let mut req = client
-                .post(format!("{base}/v1/messages"))
-                .header("x-api-key", api_key)
-                .header("anthropic-version", "2023-06-01")
-                .json(&body);
-            let _ = &mut req;
-            let resp = req.send().await.map_err(|e| e.to_string())?;
-            let status = resp.status();
-            let text = resp.text().await.map_err(|e| e.to_string())?;
-            if !status.is_success() {
-                return Err(format!("HTTP {status}: {text}"));
+            for call in &calls {
+                let name = call.function.name.clone();
+                let args: serde_json::Value =
+                    serde_json::from_str(&call.function.arguments)
+                        .unwrap_or(serde_json::json!({}));
+                let _ = app.emit("tool_call", serde_json::json!({ "name": &name, "args": &args }));
+                let result = execute_tool(&name, &args)
+                    .await
+                    .unwrap_or_else(|e| format!("Error: {e}"));
+                history.push(ChatMessage::tool(call.id.clone(), result));
             }
-            let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-            let reply = v
-                .get("content")
-                .and_then(|c| c.get(0))
-                .and_then(|c| c.get("text"))
-                .and_then(|t| t.as_str())
-                .unwrap_or("")
-                .to_string();
-            Ok(reply)
+            log(&format!(
+                "TURN {} TOOL TURN: {} calls, history_msgs={}",
+                turn, calls.len(), history.len()
+            ));
+            turn += 1;
+            continue;
         }
-        _ => Err("no chat endpoint for this provider".into()),
+
+        // Final turn: emit done, return.
+        let _ = app.emit("stream_done", serde_json::json!({}));
+        return Ok(text);
     }
 }
 

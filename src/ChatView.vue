@@ -19,8 +19,9 @@ const input = ref("");
 let nextId = 0;
 const scrollerRef = ref();
 const isThinking = ref(false);
-const pendingToolCalls: { id: number; text: string; cls: string }[] = [];
 const inputRef = ref<HTMLElement>();
+let liveMsgId = -1;
+const spinnerChar = ref("⠋");
 
 function focusInput() {
   const el = inputRef.value?.querySelector("input");
@@ -49,14 +50,30 @@ onMounted(() => {
   // Focus the input when the window is shown/focused.
   nextTick(() => focusInput());
   listen("tauri://focus", () => focusInput());
-  // Show tool calls made by the agent.
+  // Show tool calls in real-time as the agent makes them.
   listen<{ name: string; args: Record<string, string> }>("tool_call", (event) => {
     const { name, args } = event.payload;
     const argStr = Object.entries(args)
       .map(([k, v]) => `${k}=${v}`)
       .join(" ");
-    // Accumulate tool calls; they'll be inserted before the final response.
-    pendingToolCalls.push({ id: nextId++, text: `🔧 ${name} ${argStr}`, cls: "tool" });
+    addMsg(`🔧 ${name} ${argStr}`, "tool");
+  });
+  // Stream the assistant text in as it arrives, creating the live message on
+  // the first chunk.
+  listen<{ text: string }>("stream_chunk", (event) => {
+    if (liveMsgId < 0) {
+      addMsg("", "assistant");
+      liveMsgId = nextId - 1;
+    }
+    const idx = messages.value.findIndex((m) => m.id === liveMsgId);
+    if (idx >= 0) {
+      messages.value[idx] = { id: liveMsgId, text: messages.value[idx].text + event.payload.text, cls: "assistant" };
+    }
+  });
+  // A tool-call turn: finalize the current live message so the next turn
+  // streams into a fresh one.
+  listen("stream_reset", () => {
+    liveMsgId = -1;
   });
 });
 
@@ -119,29 +136,23 @@ When the user asks you to interact with a Windows application, use the run_comma
 - If a command fails, do NOT retry it more than once. Report the error to the user and suggest an alternative.
 - Keep tool calls minimal: aim for 1-3 tool calls per task. Do not loop.
 - When you have enough information to answer, stop calling tools and give your final text response.`;
-// Braille spinner for the thinking indicator.
+// Braille spinner for the standalone thinking indicator (a div, not a message).
 const BRAILLE = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 let spinnerInterval: number | null = null;
-let spinnerId = -1;
 
-function startSpinner(id: number) {
-  spinnerId = id;
-  let i = 0;
-  spinnerInterval = window.setInterval(() => {
-    const idx = messages.value.findIndex((m) => m.id === spinnerId);
-    if (idx >= 0) {
-      messages.value[idx] = { id: spinnerId, text: `First Mate ${BRAILLE[i % BRAILLE.length]}`, cls: "dim" };
-    }
-    i++;
-  }, 100);
-}
-
-function stopSpinner() {
-  if (spinnerInterval !== null) {
+watch(isThinking, (thinking) => {
+  if (thinking) {
+    let i = 0;
+    spinnerChar.value = BRAILLE[0];
+    spinnerInterval = window.setInterval(() => {
+      spinnerChar.value = BRAILLE[i % BRAILLE.length];
+      i++;
+    }, 100);
+  } else if (spinnerInterval !== null) {
     clearInterval(spinnerInterval);
     spinnerInterval = null;
   }
-}
+});
 async function submit() {
   const text = input.value.trim();
   if (!text) return;
@@ -153,43 +164,40 @@ async function submit() {
     return;
   }
 
+  // Send prior turns so the agent remembers earlier messages. The message
+  // just added is the current one, so drop it from the history.
+  const priorHistory = messages.value
+    .filter((m) => (m.cls === "user" || m.cls === "assistant") && m.text.trim())
+    .slice(0, -1)
+    .map((m) => ({ role: m.cls, content: m.text }));
+
   isThinking.value = true;
-  pendingToolCalls.length = 0;
-  addMsg("First Mate ⠋", "dim");
-  const thinkingId = nextId - 1;
-  startSpinner(thinkingId);
+  liveMsgId = -1;
 
   try {
-    const reply = await invoke<string>("chat_with_llm", {
+    await invoke<string>("chat_with_llm", {
       provider: llmSettings.provider,
       baseUrl: llmSettings.base_url,
       apiKey: llmSettings.api_key,
       model: llmSettings.model,
       message: text,
+      priorHistory,
       systemPrompt: SYSTEM_PROMPT,
     });
-    // Insert any tool calls, then the final response (in order).
-    const idx = messages.value.findIndex((m) => m.id === thinkingId);
-    if (idx >= 0) {
-      const newMsgs = [
-        ...pendingToolCalls,
-        { id: thinkingId, text: reply, cls: "assistant" },
-      ];
-      messages.value.splice(idx, 1, ...newMsgs);
-    } else {
-      pendingToolCalls.forEach((tc) => messages.value.push(tc));
-      addMsg(reply, "assistant");
+    // If no text ever streamed in (e.g. the model returned nothing), show the
+    // final reply as a fallback.
+    if (liveMsgId < 0) {
+      addMsg("(no response)", "dim");
     }
   } catch (e) {
-    const idx = messages.value.findIndex((m) => m.id === thinkingId);
-    if (idx >= 0) {
-      messages.value[idx] = { id: thinkingId, text: `Error: ${e}`, cls: "error" };
-    } else {
-      addMsg(`Error: ${e}`, "error");
-    }
+    const msg = typeof e === "string" ? e : (e && e.message) ? e.message : String(e);
+    addMsg(
+      `Error: ${msg}\n\nThe agent stopped. For details, open firstmate.log in your temp folder (Windows: Win+R → %temp%).`,
+      "error",
+    );
   } finally {
     isThinking.value = false;
-    stopSpinner();
+    liveMsgId = -1;
   }
 }
 
@@ -239,6 +247,7 @@ window.addEventListener("keydown", (e) => {
           </DynamicScrollerItem>
         </template>
       </DynamicScroller>
+      <div v-if="isThinking" class="msg dim thinking">First Mate {{ spinnerChar }}</div>
       <div class="input-row" ref="inputRef">
         <n-input
           v-model:value="input"
