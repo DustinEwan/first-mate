@@ -158,11 +158,23 @@ body {
 .msg.md table {
   border-collapse: collapse;
   margin: 0 0 8px;
+  /* Wide tables scroll instead of clipping at the window edge. */
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  overflow-x: auto;
 }
 .msg.md th,
 .msg.md td {
   border: 1px solid #3c3c41;
-  padding: 3px 8px;
+  padding: 4px 10px;
+  text-align: left;
+}
+.msg.md th {
+  background: #2c2c31;
+}
+.msg.md tbody tr:nth-child(even) td {
+  background: #1a1a1e;
 }
 .msg.md a {
   color: #2080f0;

@@ -5,13 +5,32 @@ import { invoke } from "@tauri-apps/api/core";
 import { ref, onMounted, watch, nextTick } from "vue";
 import { NConfigProvider, NInput, darkTheme } from "naive-ui";
 import { DynamicScroller, DynamicScrollerItem } from "vue-virtual-scroller";
-import { marked } from "marked";
+import { Marked } from "marked";
+import { markedHighlight } from "marked-highlight";
+import hljs from "highlight.js/lib/common";
 import DOMPurify from "dompurify";
+import "highlight.js/styles/github-dark.css";
 
-marked.setOptions({ gfm: true, breaks: true, async: false });
+const escapeHtml = (s: string) =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+const mdParser = new Marked(
+  markedHighlight({
+    langPrefix: "hljs language-",
+    // Tagged fences only; the return value is inserted verbatim, so the
+    // untagged/unknown path must escape the code itself (empty string would
+    // silently drop it).
+    highlight(code, lang) {
+      if (lang && hljs.getLanguage(lang)) {
+        return hljs.highlight(code, { language: lang }).value;
+      }
+      return escapeHtml(code);
+    },
+  }),
+);
+mdParser.setOptions({ gfm: true, breaks: true, async: false });
 // Model output is untrusted: sanitize before it reaches v-html.
 function renderMd(text: string): string {
-  return DOMPurify.sanitize(marked.parse(text));
+  return DOMPurify.sanitize(mdParser.parse(text));
 }
 
 const win = getCurrentWindow();
