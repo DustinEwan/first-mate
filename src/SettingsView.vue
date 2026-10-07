@@ -101,7 +101,8 @@ async function test() {
 
 const win = getCurrentWindow();
 function closeWindow() {
-  win.close();
+  console.log("closeWindow() called");
+  win.close().then(() => console.log("closed")).catch((e) => console.error("close error", e));
 }
 </script>
 

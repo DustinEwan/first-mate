@@ -105,7 +105,12 @@ async fn list_models(provider: String, base_url: String, api_key: String) -> Res
                 .unwrap_or_default()
         }
         "openai" | "custom" => {
-            let mut req = client.get(format!("{base}/v1/models"));
+            let models_url = if base.ends_with("/v1") {
+                format!("{base}/models")
+            } else {
+                format!("{base}/v1/models")
+            };
+            let mut req = client.get(&models_url);
             if !api_key.is_empty() {
                 req = req.bearer_auth(api_key);
             }
@@ -177,7 +182,12 @@ async fn test_llm(provider: String, base_url: String, api_key: String, model: St
                 "model": model,
                 "messages": [{"role": "user", "content": "ping"}],
             });
-            let mut req = client.post(format!("{base}/v1/chat/completions")).json(&body);
+            let completions = if base.ends_with("/v1") {
+                format!("{base}/chat/completions")
+            } else {
+                format!("{base}/v1/chat/completions")
+            };
+            let mut req = client.post(&completions).json(&body);
             if !api_key.is_empty() {
                 req = req.bearer_auth(api_key);
             }

@@ -38,7 +38,8 @@ function submit() {
 }
 
 function hide() {
-  win.hide();
+  console.log("hide() called");
+  win.hide().then(() => console.log("hidden")).catch((e) => console.error("hide error", e));
 }
 
 // Auto-scroll to bottom when new messages arrive.
