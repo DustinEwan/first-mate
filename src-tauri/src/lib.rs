@@ -247,6 +247,7 @@ async fn chat_with_llm(
     api_key: String,
     model: String,
     message: String,
+    system_prompt: String,
 ) -> Result<String, String> {
     let base = base_url.trim_end_matches('/');
     if base.is_empty() {
@@ -263,7 +264,10 @@ async fn chat_with_llm(
         "ollama" => {
             let body = serde_json::json!({
                 "model": model,
-                "messages": [{"role": "user", "content": message}],
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": message}
+                ],
                 "stream": false,
             });
             let resp = client
@@ -289,7 +293,10 @@ async fn chat_with_llm(
         "openai" | "custom" => {
             let body = serde_json::json!({
                 "model": model,
-                "messages": [{"role": "user", "content": message}],
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": message}
+                ],
             });
             let completions = if base.ends_with("/v1") {
                 format!("{base}/chat/completions")
@@ -321,6 +328,7 @@ async fn chat_with_llm(
             let body = serde_json::json!({
                 "model": model,
                 "max_tokens": 1024,
+                "system": system_prompt,
                 "messages": [{"role": "user", "content": message}],
             });
             let mut req = client
@@ -347,6 +355,58 @@ async fn chat_with_llm(
         }
         _ => Err("no chat endpoint for this provider".into()),
     }
+}
+
+/// Execute a command on the Windows system and return the output.
+#[tauri::command]
+async fn run_command(command: String) -> Result<String, String> {
+    let output = tokio::process::Command::new("cmd.exe")
+        .arg("/C")
+        .arg(&command)
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    if !output.status.success() {
+        return Err(format!("exit {:?}: {}\n{}", output.status, stdout, stderr));
+    }
+    Ok(stdout)
+}
+
+/// Read a file from the Windows filesystem.
+#[tauri::command]
+async fn read_file(path: String) -> Result<String, String> {
+    tokio::fs::read_to_string(&path)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Write a file to the Windows filesystem.
+#[tauri::command]
+async fn write_file(path: String, content: String) -> Result<(), String> {
+    tokio::fs::write(&path, content)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// List directory contents.
+#[tauri::command]
+async fn list_dir(path: String) -> Result<Vec<String>, String> {
+    let mut entries = Vec::new();
+    let mut dir = tokio::fs::read_dir(&path)
+        .await
+        .map_err(|e| e.to_string())?;
+    while let Some(entry) = dir.next_entry().await.map_err(|e| e.to_string())? {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let path = entry.path();
+        let is_dir = tokio::fs::metadata(&path)
+            .await
+            .map(|m| m.is_dir())
+            .unwrap_or(false);
+        entries.push(if is_dir { format!("{name}/") } else { name });
+    }
+    Ok(entries)
 }
 
 fn toggle_window(app: &tauri::AppHandle) {
@@ -399,7 +459,7 @@ fn open_settings(app: &tauri::AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, list_models, test_llm, chat_with_llm])
+        .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, list_models, test_llm, chat_with_llm, run_command, read_file, write_file, list_dir])
         .setup(|app| {
             // Tray: left-click toggles the console; menu for explicit actions.
             let toggle_item =
