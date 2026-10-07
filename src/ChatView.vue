@@ -7,9 +7,11 @@ import { NConfigProvider, NInput, darkTheme } from "naive-ui";
 import { DynamicScroller, DynamicScrollerItem } from "vue-virtual-scroller";
 import { Marked } from "marked";
 import { markedHighlight } from "marked-highlight";
+import markedKatex from "marked-katex-extension";
 import hljs from "highlight.js/lib/common";
 import DOMPurify from "dompurify";
 import "highlight.js/styles/github-dark.css";
+import "katex/dist/katex.min.css";
 
 const escapeHtml = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -28,6 +30,14 @@ const mdParser = new Marked(
   }),
 );
 mdParser.setOptions({ gfm: true, breaks: true, async: false });
+mdParser.use(
+  markedKatex({
+    // Streaming: an unclosed $...$ mid-chunk stays literal text until the
+    // delimiter closes; bad TeX renders in error color instead of throwing.
+    throwOnError: false,
+    output: "html",
+  }),
+);
 // Model output is untrusted: sanitize before it reaches v-html.
 function renderMd(text: string): string {
   return DOMPurify.sanitize(mdParser.parse(text));
