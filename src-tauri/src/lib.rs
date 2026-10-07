@@ -1,8 +1,11 @@
 use tauri::{
     menu::{Menu, MenuItem},
-    tray::{TrayIconBuilder, TrayIconEvent},
+    tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
     Manager, PhysicalPosition,
 };
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 /// Summon hotkey. Change here; it's registered once in `run`.
@@ -58,9 +61,23 @@ pub fn run() {
                     "quit" => app.exit(0),
                     _ => {}
                 })
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click { .. } = event {
-                        toggle_window(tray.app_handle());
+                .on_tray_icon_event({
+                    // A single tray click can emit more than one event; debounce so a
+                    // double event doesn't show-then-hide (flash) the window.
+                    let last_toggle = Arc::new(AtomicU64::new(0));
+                    move |tray, event| {
+                        if let TrayIconEvent::Click { button: MouseButton::Left, .. } = event {
+                            let now = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .unwrap()
+                                .as_millis() as u64;
+                            let last = last_toggle.load(Ordering::Relaxed);
+                            if now.saturating_sub(last) < 300 {
+                                return;
+                            }
+                            last_toggle.store(now, Ordering::Relaxed);
+                            toggle_window(tray.app_handle());
+                        }
                     }
                 })
                 .build(app)?;

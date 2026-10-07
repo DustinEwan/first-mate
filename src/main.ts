@@ -27,7 +27,6 @@ document.querySelector("#input-form")!.addEventListener("submit", (e) => {
 });
 
 document.querySelector("#close")!.addEventListener("click", () => win.hide());
-window.addEventListener("blur", () => win.hide());
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape") win.hide();
 });
