@@ -5,6 +5,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { ref, onMounted, watch, nextTick } from "vue";
 import { NConfigProvider, NInput, darkTheme } from "naive-ui";
 import { DynamicScroller, DynamicScrollerItem } from "vue-virtual-scroller";
+import { marked } from "marked";
+import DOMPurify from "dompurify";
+
+marked.setOptions({ gfm: true, breaks: true, async: false });
+// Model output is untrusted: sanitize before it reaches v-html.
+function renderMd(text: string): string {
+  return DOMPurify.sanitize(marked.parse(text));
+}
 
 const win = getCurrentWindow();
 
@@ -285,7 +293,12 @@ window.addEventListener("keydown", (e) => {
             :active="active"
             :size-dependencies="[item.text]"
           >
-            <div class="msg" :class="item.cls">{{ item.text }}</div>
+            <div
+              v-if="item.cls === 'assistant'"
+              class="msg assistant md"
+              v-html="renderMd(item.text)"
+            ></div>
+            <div v-else class="msg" :class="item.cls">{{ item.text }}</div>
           </DynamicScrollerItem>
         </template>
       </DynamicScroller>

@@ -102,6 +102,77 @@ body {
   font-family: monospace;
 }
 
+/* Markdown-rendered assistant output. */
+.msg.md {
+  white-space: normal;
+  line-height: 1.5;
+}
+.msg.md > :first-child {
+  margin-top: 0;
+}
+.msg.md > :last-child {
+  margin-bottom: 0;
+}
+.msg.md p {
+  margin: 0 0 8px;
+}
+.msg.md h1,
+.msg.md h2,
+.msg.md h3 {
+  margin: 12px 0 6px;
+  font-size: 15px;
+}
+.msg.md ul,
+.msg.md ol {
+  margin: 0 0 8px;
+  padding-left: 22px;
+}
+.msg.md li {
+  margin: 2px 0;
+}
+.msg.md code {
+  background: #2c2c31;
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-family: monospace;
+  font-size: 13px;
+}
+.msg.md pre {
+  background: #1e1e22;
+  border: 1px solid #2c2c31;
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 0 0 8px;
+  overflow-x: auto;
+}
+.msg.md pre code {
+  background: none;
+  padding: 0;
+}
+.msg.md blockquote {
+  margin: 0 0 8px;
+  border-left: 3px solid #3c3c41;
+  padding-left: 10px;
+  color: #8a8f98;
+}
+.msg.md table {
+  border-collapse: collapse;
+  margin: 0 0 8px;
+}
+.msg.md th,
+.msg.md td {
+  border: 1px solid #3c3c41;
+  padding: 3px 8px;
+}
+.msg.md a {
+  color: #2080f0;
+}
+.msg.md hr {
+  border: none;
+  border-top: 1px solid #3c3c41;
+  margin: 10px 0;
+}
+
 .input-row {
   padding: 8px 12px;
   border-top: 1px solid #2c2c31;
