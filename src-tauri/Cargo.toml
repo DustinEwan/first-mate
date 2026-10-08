@@ -5,6 +5,14 @@ description = "First Mate — hotkey-summoned desktop assistant"
 authors = ["you"]
 edition = "2021"
 
+# Alpha quality gate: any rustc or clippy diagnostic fails the build.
+# Mirrors the frontend's eslint --max-warnings 0.
+[lints.rust]
+warnings = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
