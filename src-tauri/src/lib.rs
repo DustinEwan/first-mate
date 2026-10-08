@@ -34,7 +34,7 @@ use crate::modelapi::{list_models, list_providers, test_llm};
 use crate::openpath::open_path;
 use crate::settings::{HOTKEY, get_hotkey, get_settings, save_settings};
 use crate::skills::{get_system_prompt, list_skills};
-use crate::window::{open_settings, open_settings_inner, set_main_icon, toggle_window};
+use crate::window::{open_settings, open_settings_inner, toggle_window};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -42,8 +42,6 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, list_models, list_providers, test_llm, chat_with_llm, stop_chat, list_skills, list_conversations, load_conversation, delete_conversation, save_conversation, get_system_prompt, open_path, bootstrap_status, install_winapp, open_settings])
         .setup(|app| {
-            // Taskbar buttons show the anchor, not the exe's embedded icon.
-            set_main_icon(app.handle());
             // Scratch hygiene (P6): drop old generations of generated
             // scripts and spilled output from previous sessions.
             trim_dir(&fm_tmp_dir(), 50);

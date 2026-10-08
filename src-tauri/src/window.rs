@@ -1,19 +1,11 @@
 use tauri::{Manager, PhysicalPosition};
 
 /// The anchor glyph (icons/window.png, 256px) — same artwork as the tray.
-/// Windows without an explicit icon inherit the exe's embedded icon.ico,
-/// which used to be the Tauri default; both windows set this instead so
-/// taskbar buttons show the anchor.
+/// The bundle icons are generated from the same source, so windows inherit
+/// it by default; the settings window still sets it explicitly.
 pub(crate) fn anchor_icon() -> tauri::image::Image<'static> {
     tauri::image::Image::from_bytes(include_bytes!("../icons/window.png"))
         .expect("icons/window.png must be a valid PNG")
-}
-
-/// Set the anchor on the main window (called from setup).
-pub(crate) fn set_main_icon(app: &tauri::AppHandle) {
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.set_icon(anchor_icon());
-    }
 }
 
 pub(crate) fn toggle_window(app: &tauri::AppHandle) {
