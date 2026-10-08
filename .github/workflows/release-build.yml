@@ -35,12 +35,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - id: tag
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |
-          $tag = gh api repos/$env:GITHUB_REPOSITORY/releases/latest --jq .tag_name
-          "tag=$tag" >> $env:GITHUB_OUTPUT
+          $ver = (Select-String -Path src-tauri/Cargo.toml -Pattern '^version = "([^"]+)"').Matches.Groups[1].Value
+          $tag = "firstmate-v$ver"
+          "resolved release tag: $tag"
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding ascii
       - uses: actions/setup-node@v4
         with:
           node-version: 22
