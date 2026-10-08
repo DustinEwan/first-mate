@@ -480,15 +480,25 @@ function hide() {
   win.hide().then(() => console.log("hidden")).catch((e) => console.error("hide error", e));
 }
 
-// Auto-scroll to bottom when new messages arrive.
-watch(messages, () => {
+// Auto-scroll to bottom when new messages arrive. DynamicScroller measures
+// item sizes asynchronously, so right after a bulk load (opening a
+// conversation) scrollHeight still reflects estimates: jump to the last
+// item via the scroller API, then re-pin once real sizes settle.
+function scrollToBottom() {
   nextTick(() => {
     const el = scrollerRef.value?.$el as HTMLElement | undefined;
-    if (el) {
+    if (!el) return;
+    scrollerRef.value?.scrollToItem?.(messages.value.length - 1);
+    el.scrollTop = el.scrollHeight;
+    requestAnimationFrame(() => {
       el.scrollTop = el.scrollHeight;
-    }
+      setTimeout(() => {
+        el.scrollTop = el.scrollHeight;
+      }, 150);
+    });
   });
-}, { deep: true });
+}
+watch(messages, scrollToBottom, { deep: true });
 
 // Escape closes the panel first, then hides the window.
 window.addEventListener("keydown", (e) => {
