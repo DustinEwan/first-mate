@@ -233,6 +233,8 @@ const panelOpen = ref(false);
 const wizardOpen = ref(false);
 const conversations = ref<ConvInfo[]>([]);
 const convName = ref<string | null>(null);
+// Temporary conversations: never written to disk, vanish on New/restart.
+const tempChat = ref(false);
 
 function focusInput() {
   const el = inputRef.value?.querySelector("input");
@@ -252,6 +254,7 @@ function addMsg(text: string, cls = "", extra: Partial<Msg> = {}) {
 }
 
 function persistConversation() {
+  if (tempChat.value) return; // temp chats live only in this window's memory
   // The tool ledger persists too: a resumed conversation can see what was
   // already inspected, verified, and executed instead of re-doing it.
   const turns = messages.value
@@ -287,6 +290,7 @@ function openConversation(c: ConvInfo) {
           : {}),
       }));
       convName.value = c.name;
+      tempChat.value = false;
       panelOpen.value = false;
     })
     .catch((e) => console.error("load failed", e));
@@ -295,7 +299,16 @@ function openConversation(c: ConvInfo) {
 function newChat() {
   messages.value = [];
   convName.value = null;
+  tempChat.value = false;
   panelOpen.value = false;
+}
+
+function newTempChat() {
+  messages.value = [];
+  convName.value = null;
+  tempChat.value = true;
+  panelOpen.value = false;
+  addMsg("Temporary conversation — nothing here is saved to disk.", "dim");
 }
 
 function deleteConversation(c: ConvInfo) {
@@ -528,7 +541,7 @@ window.addEventListener("keydown", (e) => {
   <n-config-provider :theme="darkTheme">
     <div class="chat">
       <header class="titlebar">
-        <span class="title">⚓️ First Mate</span>
+        <span class="title">⚓️ First Mate<span v-if="tempChat" class="temp-badge">TEMP</span></span>
         <button
           class="panel-toggle"
           :title="panelOpen ? 'Hide chats' : 'Show chats'"
@@ -596,9 +609,14 @@ window.addEventListener("keydown", (e) => {
         <aside v-if="panelOpen" class="side">
           <div class="side-head">
             <span>Chats</span>
-            <button class="new-chat" title="Start a new conversation (Ctrl+N)" @click="newChat">
-              <span class="plus">+</span> New
-            </button>
+            <span class="head-actions">
+              <button class="new-chat temp" title="Start a temporary conversation — never saved (Ctrl+Shift+N)" @click="newTempChat">
+                <span class="plus">+</span> Temp
+              </button>
+              <button class="new-chat" title="Start a new conversation (Ctrl+N)" @click="newChat">
+                <span class="plus">+</span> New
+              </button>
+            </span>
           </div>
           <ul class="conv-list">
             <li

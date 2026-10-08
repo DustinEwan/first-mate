@@ -28,6 +28,18 @@ body {
   font-weight: 600;
 }
 
+.titlebar .temp-badge {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border: 1px solid #f0a020;
+  border-radius: 4px;
+  color: #f0a020;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  vertical-align: 1px;
+}
+
 .titlebar .close {
   -webkit-app-region: no-drag;
   background: none;
@@ -110,6 +122,23 @@ body {
 .side-head .new-chat:hover {
   background: #4096ff;
   border-color: #4096ff;
+}
+
+.side-head .head-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.side-head .new-chat.temp {
+  background: none;
+  border-color: #3c3c41;
+  color: #c9ced6;
+  font-weight: 400;
+}
+
+.side-head .new-chat.temp:hover {
+  border-color: #2080f0;
+  color: #2080f0;
 }
 
 .conv-list {
