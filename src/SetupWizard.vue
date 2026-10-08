@@ -82,20 +82,6 @@ watch([provider, baseUrl], ([p, u]) => {
   detectTimer = setTimeout(refreshModels, 700);
 });
 
-async function testModel() {
-  modelStatus.value = "Testing connection…";
-  try {
-    modelStatus.value = await invoke<string>("test_llm", {
-      provider: provider.value,
-      baseUrl: baseUrl.value,
-      apiKey: apiKey.value,
-      model: model.value,
-    });
-  } catch (e) {
-    modelStatus.value = `Test failed: ${e}`;
-  }
-}
-
 const modelReady = () => provider.value !== "" && model.value !== "";
 
 async function saveModel() {
@@ -183,11 +169,14 @@ onBeforeUnmount(() => {
         <div v-if="step === 1" class="wizard-body">
           <h2>⚓ First Mate</h2>
           <p>
-            A local-first agent that controls this machine: shell, files, and
-            real desktop apps via the winapp CLI. Summon it from anywhere with
-            <b>{{ hotkey }}</b>.
+            A local-first agent that controls this machine: shell, files, and real desktop apps via
+            the winapp CLI. Summon it from anywhere with
+            <b>{{ hotkey }}</b
+            >.
           </p>
-          <p class="dim">Setup takes about a minute: pick a model, then verify the desktop harness.</p>
+          <p class="dim">
+            Setup takes about a minute: pick a model, then verify the desktop harness.
+          </p>
         </div>
 
         <div v-else-if="step === 2" class="wizard-body">
@@ -199,11 +188,21 @@ onBeforeUnmount(() => {
               <n-input v-model:value="baseUrl" placeholder="e.g. http://localhost:11434" />
             </n-form-item>
             <n-form-item label="API key">
-              <n-input v-model:value="apiKey" type="password" show-password-on="click" placeholder="sk-..." />
+              <n-input
+                v-model:value="apiKey"
+                type="password"
+                show-password-on="click"
+                placeholder="sk-..."
+              />
             </n-form-item>
             <n-form-item label="Model">
               <div class="model-row">
-                <n-select v-model:value="model" :options="modelOptions()" placeholder="— none —" clearable />
+                <n-select
+                  v-model:value="model"
+                  :options="modelOptions()"
+                  placeholder="— none —"
+                  clearable
+                />
                 <n-button size="small" secondary :disabled="provider === ''" @click="refreshModels">
                   &#8635; refresh
                 </n-button>
@@ -215,10 +214,9 @@ onBeforeUnmount(() => {
 
         <div v-else-if="step === 3" class="wizard-body">
           <p>
-            Desktop automation runs through the <b>winapp</b> CLI — Microsoft's
-            official tool for inspecting and driving Windows apps. First Mate
-            checks for it on every start but never installs anything without
-            asking.
+            Desktop automation runs through the <b>winapp</b> CLI — Microsoft's official tool for
+            inspecting and driving Windows apps. First Mate checks for it on every start but never
+            installs anything without asking.
           </p>
           <n-alert v-if="boot === null" type="default" :bordered="false">Checking harness…</n-alert>
           <n-alert v-else-if="boot.winapp" type="success" :bordered="false">
@@ -226,16 +224,19 @@ onBeforeUnmount(() => {
           </n-alert>
           <template v-else>
             <n-alert type="warning" :bordered="false">
-              The winapp CLI is not installed, so First Mate can't drive
-              desktop apps yet.
+              The winapp CLI is not installed, so First Mate can't drive desktop apps yet.
             </n-alert>
             <n-alert v-if="!boot.winget" type="error" :bordered="false">
-              winget is unavailable on this machine, so First Mate can't
-              install it. Install the winapp CLI manually, then reopen this
-              wizard.
+              winget is unavailable on this machine, so First Mate can't install it. Install the
+              winapp CLI manually, then reopen this wizard.
             </n-alert>
             <div v-else class="install-row">
-              <n-button type="primary" :loading="installing" :disabled="installing" @click="installWinapp">
+              <n-button
+                type="primary"
+                :loading="installing"
+                :disabled="installing"
+                @click="installWinapp"
+              >
                 {{ installing ? "Installing…" : "Install winapp CLI" }}
               </n-button>
               <n-button text tag="a" @click="openDocs">What am I installing?</n-button>
@@ -249,12 +250,13 @@ onBeforeUnmount(() => {
         <div v-else class="wizard-body">
           <h2>You're set</h2>
           <p>
-            First Mate can now run commands, edit files, and drive your
-            desktop apps using <b>{{ model }}</b>.
+            First Mate can now run commands, edit files, and drive your desktop apps using
+            <b>{{ model }}</b
+            >.
           </p>
           <p>
-            Summon it with <b>{{ hotkey }}</b> and just ask — "screenshot the
-            browser", "commit my changes", "what's eating my CPU".
+            Summon it with <b>{{ hotkey }}</b> and just ask — "screenshot the browser", "commit my
+            changes", "what's eating my CPU".
           </p>
         </div>
 
@@ -262,23 +264,21 @@ onBeforeUnmount(() => {
           <n-button text @click="emit('done')">Skip setup</n-button>
           <n-space>
             <n-button v-if="step > 1" secondary @click="step--">Back</n-button>
-            <n-button
-              v-if="step === 1"
-              type="primary"
-              @click="step = 2"
-            >Next</n-button>
+            <n-button v-if="step === 1" type="primary" @click="step = 2">Next</n-button>
             <n-button
               v-else-if="step === 2"
               type="primary"
               :disabled="!modelReady()"
               @click="nextFromModel"
-            >Save &amp; continue</n-button>
+              >Save &amp; continue</n-button
+            >
             <n-button
               v-else-if="step === 3"
               type="primary"
               :disabled="!boot?.winapp"
               @click="step = 4"
-            >Next</n-button>
+              >Next</n-button
+            >
             <n-button v-else type="primary" @click="emit('done')">Finish</n-button>
           </n-space>
         </div>

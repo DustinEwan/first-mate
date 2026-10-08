@@ -12,7 +12,6 @@ body {
   overflow: hidden;
 }
 
-
 /* Shared titlebar (drag region) */
 .titlebar {
   display: flex;
@@ -216,7 +215,6 @@ body {
   color: #d03050;
 }
 
-
 .scroller {
   flex: 1;
   min-height: 0;
@@ -245,9 +243,6 @@ body {
 .scroller::-webkit-scrollbar-thumb:hover {
   background: #3c3c41;
 }
-
-
-
 
 .msg {
   padding: 12px;

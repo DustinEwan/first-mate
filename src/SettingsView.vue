@@ -102,7 +102,10 @@ async function test() {
 const win = getCurrentWindow();
 function closeWindow() {
   console.log("closeWindow() called");
-  win.close().then(() => console.log("closed")).catch((e) => console.error("close error", e));
+  win
+    .close()
+    .then(() => console.log("closed"))
+    .catch((e) => console.error("close error", e));
 }
 </script>
 
@@ -119,10 +122,7 @@ function closeWindow() {
             <n-select v-model:value="provider" :options="providerOptions" />
           </n-form-item>
           <n-form-item label="Base URL">
-            <n-input
-              v-model:value="baseUrl"
-              placeholder="e.g. http://localhost:11434"
-            />
+            <n-input v-model:value="baseUrl" placeholder="e.g. http://localhost:11434" />
           </n-form-item>
           <n-form-item label="API key">
             <n-input
@@ -140,9 +140,7 @@ function closeWindow() {
                 placeholder="— none —"
                 clearable
               />
-              <n-button size="small" secondary @click="refreshModels">
-                &#8635; refresh
-              </n-button>
+              <n-button size="small" secondary @click="refreshModels"> &#8635; refresh </n-button>
             </n-space>
           </n-form-item>
         </n-form>

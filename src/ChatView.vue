@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { getCurrentWindow, Window } from "@tauri-apps/api/window";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { ref, onMounted, watch, nextTick } from "vue";
@@ -158,8 +158,7 @@ function reportFooter(r: ToolReport): string {
   if (r.wall_ms > 0) parts.push((r.wall_ms / 1000).toFixed(1) + "s");
   if (r.tag) parts.push("#" + r.tag);
   // write_file's header already states the byte count; don't repeat it.
-  if (r.count != null && r.unit && r.tool !== "write_file")
-    parts.push(`${r.count} ${r.unit}`);
+  if (r.count != null && r.unit && r.tool !== "write_file") parts.push(`${r.count} ${r.unit}`);
   if (r.pid != null && r.status) parts.push("pid " + r.pid);
   const mark = r.ok ? "✅" : `❌ ${r.error ?? "failed"}`;
   return parts.length ? `${mark} ${parts.join(" · ")}` : mark;
@@ -237,8 +236,7 @@ const convName = ref<string | null>(null);
 const tempChat = ref(false);
 
 function focusInput() {
-  const el =
-    inputRef.value?.querySelector("textarea") || inputRef.value?.querySelector("input");
+  const el = inputRef.value?.querySelector("textarea") || inputRef.value?.querySelector("input");
   if (el) el.focus();
 }
 
@@ -286,9 +284,7 @@ function openConversation(c: ConvInfo) {
         id: nextId++,
         text: m.text,
         cls: m.role,
-        ...(m.role === "tool" && m.report
-          ? { tool: m.report, done: true }
-          : {}),
+        ...(m.role === "tool" && m.report ? { tool: m.report, done: true } : {}),
       }));
       convName.value = c.name;
       tempChat.value = false;
@@ -354,40 +350,33 @@ onMounted(() => {
   listen("tauri://focus", () => focusInput());
   // Show tool calls in real-time as the agent makes them: the pending panel
   // is built from the call args (UI-side provisional facts).
-  listen<{ name: string; args: Record<string, unknown> }>(
-    "tool_call",
-    (event) => {
-      const { name, args } = event.payload;
-      const tool = pendingReport(name, args);
-      addMsg(reportIdentity(tool), "tool", {
-        toolName: name,
-        tool: { ...tool, status: undefined, tag: undefined },
-      });
-    },
-  );
+  listen<{ name: string; args: Record<string, unknown> }>("tool_call", (event) => {
+    const { name, args } = event.payload;
+    const tool = pendingReport(name, args);
+    addMsg(reportIdentity(tool), "tool", {
+      toolName: name,
+      tool: { ...tool, status: undefined, tag: undefined },
+    });
+  });
   // Replace the pending panel with the finished report. The transcript (the
   // backend's model-facing flat form) becomes the persisted text; the UI
   // renders only the structured facts.
-  listen<{ name: string; transcript: string; report?: ToolReport }>(
-    "tool_result",
-    (event) => {
-      const { name, transcript, report } = event.payload;
-      let matched = false;
-      for (let i = messages.value.length - 1; i >= 0; i--) {
-        const m = messages.value[i];
-        if (m.cls === "tool" && m.toolName === name && !m.done) {
-          messages.value[i] = { ...m, text: transcript, tool: report, done: true };
-          matched = true;
-          break;
-        }
+  listen<{ name: string; transcript: string; report?: ToolReport }>("tool_result", (event) => {
+    const { name, transcript, report } = event.payload;
+    let matched = false;
+    for (let i = messages.value.length - 1; i >= 0; i--) {
+      const m = messages.value[i];
+      if (m.cls === "tool" && m.toolName === name && !m.done) {
+        messages.value[i] = { ...m, text: transcript, tool: report, done: true };
+        matched = true;
+        break;
       }
-      // Unmatched results are async announcements (e.g. a background job that
-      // finished after its turn): they get their own report so the model
-      // resumes with them as context.
-      if (!matched)
-        addMsg(transcript, "tool", { toolName: name, done: true, tool: report });
-    },
-  );
+    }
+    // Unmatched results are async announcements (e.g. a background job that
+    // finished after its turn): they get their own report so the model
+    // resumes with them as context.
+    if (!matched) addMsg(transcript, "tool", { toolName: name, done: true, tool: report });
+  });
   // Stream the assistant text in as it arrives, creating the live message on
   // the first chunk.
   listen<{ text: string }>("stream_chunk", (event) => {
@@ -397,7 +386,11 @@ onMounted(() => {
     }
     const idx = messages.value.findIndex((m) => m.id === liveMsgId);
     if (idx >= 0) {
-      messages.value[idx] = { id: liveMsgId, text: messages.value[idx].text + event.payload.text, cls: "assistant" };
+      messages.value[idx] = {
+        id: liveMsgId,
+        text: messages.value[idx].text + event.payload.text,
+        cls: "assistant",
+      };
     }
   });
   // A tool-call turn: finalize the current live message so the next turn
@@ -406,7 +399,6 @@ onMounted(() => {
     liveMsgId = -1;
   });
 });
-
 
 // Behavior text comes from AGENTS.md (repo root or ~/.firstmate), loaded via
 // get_system_prompt; the Rust fallback applies only when no file exists.
@@ -493,7 +485,7 @@ async function submit() {
       else addMsg("(no response)", "dim");
     }
   } catch (e) {
-    const msg = typeof e === "string" ? e : (e && e.message) ? e.message : String(e);
+    const msg = typeof e === "string" ? e : e && e.message ? e.message : String(e);
     addMsg(
       `Error: ${msg}\n\nThe agent stopped. For details, open firstmate.log in your temp folder (Windows: Win+R → %temp%).`,
       "error",
@@ -505,7 +497,6 @@ async function submit() {
   }
 }
 
-
 // Ask the running agent loop to stop; it returns "(stopped)" at the next
 // turn/tool boundary.
 function stopRun() {
@@ -514,7 +505,10 @@ function stopRun() {
 
 function hide() {
   console.log("hide() called");
-  win.hide().then(() => console.log("hidden")).catch((e) => console.error("hide error", e));
+  win
+    .hide()
+    .then(() => console.log("hidden"))
+    .catch((e) => console.error("hide error", e));
 }
 
 // Auto-scroll to bottom when new messages arrive. DynamicScroller measures
@@ -560,8 +554,13 @@ window.addEventListener("keydown", (e) => {
         <button
           class="panel-toggle"
           :title="panelOpen ? 'Hide chats' : 'Show chats'"
-          @click="panelOpen = !panelOpen; refreshConversations()"
-        >&#9776;</button>
+          @click="
+            panelOpen = !panelOpen;
+            refreshConversations();
+          "
+        >
+          &#9776;
+        </button>
         <button class="close" @click="hide">&#10005;</button>
       </header>
       <div class="body">
@@ -573,23 +572,19 @@ window.addEventListener("keydown", (e) => {
             key-field="id"
             class="scroller"
           >
-            <template v-slot="{ item, active }">
-              <DynamicScrollerItem
-                :item="item"
-                :active="active"
-                :size-dependencies="[item.text]"
-              >
+            <template #default="{ item, active }">
+              <DynamicScrollerItem :item="item" :active="active" :size-dependencies="[item.text]">
+                <!-- Safe by construction: renderMd() = marked -> DOMPurify.sanitize. -->
+                <!-- eslint-disable vue/no-v-html -->
                 <div
                   v-if="item.cls === 'assistant'"
                   class="msg md assistant"
                   @click="onContentClick"
                   v-html="renderMd(item.text)"
                 ></div>
+                <!-- eslint-enable vue/no-v-html -->
                 <div v-else-if="item.cls === 'tool' && item.tool" class="rb-wrap">
-                  <div
-                    class="msg tool report"
-                    :class="{ failed: item.done && !item.tool.ok }"
-                  >
+                  <div class="msg tool report" :class="{ failed: item.done && !item.tool.ok }">
                     <div class="rb-head">{{ reportIdentity(item.tool) }}</div>
                     <pre v-if="item.tool.body" class="rb-body"><span
                       v-for="(ln, i) in item.tool.body.text.split('\n')"
@@ -612,14 +607,18 @@ window.addEventListener("keydown", (e) => {
             class="msg dim thinking stoppable"
             title="Click to stop the agent"
             @click="stopRun"
-          >First Mate {{ spinnerChar }} — click to stop</div>
-          <div class="input-row" ref="inputRef">
+          >
+            First Mate {{ spinnerChar }} — click to stop
+          </div>
+          <div ref="inputRef" class="input-row">
             <n-input
               v-model:value="input"
               type="textarea"
               autosize
               :placeholder="
-                isThinking ? 'First Mate is working… type to queue' : 'Type a message… (Shift+Enter for newline)'
+                isThinking
+                  ? 'First Mate is working… type to queue'
+                  : 'Type a message… (Shift+Enter for newline)'
               "
               @keydown="onInputKey"
             />
@@ -629,7 +628,11 @@ window.addEventListener("keydown", (e) => {
           <div class="side-head">
             <span>Chats</span>
             <span class="head-actions">
-              <button class="new-chat temp" title="Start a temporary conversation — never saved (Ctrl+Shift+N)" @click="newTempChat">
+              <button
+                class="new-chat temp"
+                title="Start a temporary conversation — never saved (Ctrl+Shift+N)"
+                @click="newTempChat"
+              >
                 <span class="plus">+</span> Temp
               </button>
               <button class="new-chat" title="Start a new conversation (Ctrl+N)" @click="newChat">
@@ -650,7 +653,9 @@ window.addEventListener("keydown", (e) => {
                 class="conv-delete"
                 title="Delete conversation"
                 @click.stop="deleteConversation(c)"
-              >&times;</button>
+              >
+                &times;
+              </button>
             </li>
           </ul>
         </aside>
