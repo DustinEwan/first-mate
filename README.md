@@ -93,7 +93,7 @@ messages must be Conventional Commits — `<type>(<scope>): <subject>`, types
 feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert, `!` for breaking.
 
 ## Tests
- 
+
 ```
 cd src-tauri && cargo-vs.bat test
 ```

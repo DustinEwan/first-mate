@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use tauri::Emitter;
 use crate::execute::execute_tool;
 use crate::log::log;
+use crate::provider_catalog::{self, Api};
 use crate::report::tool_report;
 use crate::route::looks_like_unexecuted_intent;
 use crate::tooldefs::{core_tools, enable_skill_tools, to_tool_defs, tool_is_disclosed};
@@ -119,7 +120,10 @@ pub(crate) async fn chat_with_llm(
         prior_history,
         system_prompt,
     };
-    if params.provider == "anthropic" {
+    // Native-protocol providers go through lmkit (it owns the Messages and
+    // generateContent wire formats); everything else is OpenAI-compatible.
+    let api = provider_catalog::lookup(&params.provider).map(|s| s.api);
+    if matches!(api, Some(Api::Anthropic) | Some(Api::Gemini)) {
         chat_via_lmkit(app, params).await
     } else {
         chat_via_openai(app, params).await
@@ -161,11 +165,17 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
     let provider_enum = match provider.as_str() {
         "ollama" => Provider::Ollama,
         "anthropic" => Provider::Anthropic,
+        "google" => Provider::Google,
         _ => Provider::OpenAI, // openai / custom / any OpenAI-compatible endpoint
     };
 
-    // Create the provider with a custom base URL.
-    let config = ProviderConfig::with_base_url(provider_enum, api_key, format!("{base}/v1"), model);
+    // Google's base URL already carries its version segment (/v1beta); the
+    // others are rooted at bare hosts and take /v1.
+    let config = if matches!(provider_enum, Provider::Google) {
+        ProviderConfig::with_base_url(provider_enum, api_key, base, model)
+    } else {
+        ProviderConfig::with_base_url(provider_enum, api_key, format!("{base}/v1"), model)
+    };
     let llm = create_chat_provider(&config).map_err(|e| e.to_string())?;
 
     // Active tool schemas: core only until a skill's `tools:` enables more
@@ -405,14 +415,13 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
     use futures_util::StreamExt;
 
     let base = base_url.trim_end_matches('/');
-    let base = base.strip_suffix("/v1").unwrap_or(base);
     if base.is_empty() {
         return Err("base URL is empty".into());
     }
     if model.is_empty() {
         return Err("no model selected".into());
     }
-    let url = format!("{base}/v1/chat/completions");
+    let url = format!("{}/chat/completions", provider_catalog::root(base));
     log(&format!(
         "CHAT START: provider={} base={} model={} msg_len={} sys_len={} prior={}",
         provider, base, model, message.len(), system_prompt.len(), prior_history.len()

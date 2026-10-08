@@ -1,0 +1,214 @@
+[
+  {
+    "id": "ollama",
+    "label": "Ollama",
+    "api": "ollama",
+    "auth": "none",
+    "base": "http://localhost:11434",
+    "keyHint": "",
+    "keyOptional": true
+  },
+  {
+    "id": "lm-studio",
+    "label": "LM Studio",
+    "api": "openai",
+    "auth": "none",
+    "base": "http://localhost:1234/v1",
+    "keyHint": "",
+    "keyOptional": true
+  },
+  {
+    "id": "llama-cpp",
+    "label": "llama.cpp",
+    "api": "openai",
+    "auth": "none",
+    "base": "http://localhost:8080/v1",
+    "keyHint": "",
+    "keyOptional": true
+  },
+  {
+    "id": "openai",
+    "label": "OpenAI",
+    "api": "openai",
+    "auth": "bearer",
+    "base": "https://api.openai.com/v1",
+    "keyHint": "sk-..."
+  },
+  {
+    "id": "anthropic",
+    "label": "Anthropic",
+    "api": "anthropic",
+    "auth": "x_api_key",
+    "base": "https://api.anthropic.com",
+    "keyHint": "sk-ant-..."
+  },
+  {
+    "id": "google",
+    "label": "Google Gemini",
+    "api": "gemini",
+    "auth": "query_key",
+    "base": "https://generativelanguage.googleapis.com/v1beta",
+    "keyHint": "AIza..."
+  },
+  {
+    "id": "groq",
+    "label": "Groq",
+    "api": "openai",
+    "auth": "bearer",
+    "base": "https://api.groq.com/openai/v1",
+    "keyHint": "gsk_..."
+  },
+  {
+    "id": "mistral",
+    "label": "Mistral",
+    "api": "openai",
+    "auth": "bearer",
+    "base": "https://api.mistral.ai/v1",
+    "keyHint": "..."
+  },
+  {
+    "id": "xai",
+    "label": "xAI (Grok)",
+    "api": "openai",
+    "auth": "bearer",
+    "base": "https://api.x.ai/v1",
+    "keyHint": "xai-..."
+  },
+  {
+    "id": "deepseek",
+    "label": "DeepSeek",
+    "api": "openai",
+    "auth": "bearer",
+    "base": "https://api.deepseek.com/v1",
+    "keyHint": "sk-..."
+  },
+  {
+    "id": "openrouter",
+    "label": "OpenRouter",
+    "api": "openai",
+    "auth": "bearer",
+    "base": "https://openrouter.ai/api/v1",
+    "keyHint": "sk-or-..."
+  },
+  {
+    "id": "github-models",
+    "label": "GitHub Models",
+    "api": "openai",
+    "auth": "bearer",
+    "base": "https://models.github.ai/inference/v1",
+    "keyHint": "ghp_... (PAT)"
+  },
+  {
+    "id": "together",
+    "label": "Together AI",
+    "api": "openai",
+    "auth": "bearer",
+    "base": "https://api.together.xyz/v1",
+    "keyHint": "..."
+  },
+  {
+    "id": "fireworks",
+    "label": "Fireworks",
+    "api": "openai",
+    "auth": "bearer",
+    "base": "https://api.fireworks.ai/inference/v1",
+    "keyHint": "fw_..."
+  },
+  {
+    "id": "cerebras",
+    "label": "Cerebras",
+    "api": "openai",
+    "auth": "bearer",
+    "base": "https://api.cerebras.ai/v1",
+    "keyHint": "csk-..."
+  },
+  {
+    "id": "nvidia",
+    "label": "NVIDIA NIM",
+    "api": "openai",
+    "auth": "bearer",
+    "base": "https://integrate.api.nvidia.com/v1",
+    "keyHint": "nvapi-..."
+  },
+  {
+    "id": "moonshot",
+    "label": "Moonshot (Kimi)",
+    "api": "openai",
+    "auth": "bearer",
+    "base": "https://api.moonshot.cn/v1",
+    "keyHint": "sk-..."
+  },
+  {
+    "id": "zhipu",
+    "label": "Z.ai (GLM)",
+    "api": "openai",
+    "auth": "bearer",
+    "base": "https://open.bigmodel.cn/api/paas/v4",
+    "keyHint": "..."
+  },
+  {
+    "id": "aliyun",
+    "label": "Aliyun (Qwen)",
+    "api": "openai",
+    "auth": "bearer",
+    "base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "keyHint": "sk-..."
+  },
+  {
+    "id": "deepinfra",
+    "label": "DeepInfra",
+    "api": "openai",
+    "auth": "bearer",
+    "base": "https://api.deepinfra.com/v1/openai",
+    "keyHint": "..."
+  },
+  {
+    "id": "siliconflow",
+    "label": "SiliconFlow",
+    "api": "openai",
+    "auth": "bearer",
+    "base": "https://api.siliconflow.cn/v1",
+    "keyHint": "sk-..."
+  },
+  {
+    "id": "huggingface",
+    "label": "Hugging Face",
+    "api": "openai",
+    "auth": "bearer",
+    "base": "https://router.huggingface.co/v1",
+    "keyHint": "hf_..."
+  },
+  {
+    "id": "venice",
+    "label": "Venice",
+    "api": "openai",
+    "auth": "bearer",
+    "base": "https://api.venice.ai/api/v1",
+    "keyHint": "sk-..."
+  },
+  {
+    "id": "ollama-cloud",
+    "label": "Ollama Cloud",
+    "api": "openai",
+    "auth": "bearer",
+    "base": "https://ollama.com/v1",
+    "keyHint": "..."
+  },
+  {
+    "id": "vercel",
+    "label": "Vercel AI Gateway",
+    "api": "openai",
+    "auth": "bearer",
+    "base": "https://ai-gateway.vercel.sh/v1",
+    "keyHint": "ai-gw-..."
+  },
+  {
+    "id": "custom",
+    "label": "Custom (OpenAI-compatible)",
+    "api": "openai",
+    "auth": "bearer",
+    "base": "",
+    "keyHint": "...",
+    "keyOptional": true
+  }
+]

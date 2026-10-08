@@ -37,13 +37,36 @@ const model = ref("");
 const models = ref<string[]>([]);
 const modelStatus = ref("");
 
-const providerOptions = [
-  { label: "— none —", value: "" },
-  { label: "Ollama (local)", value: "ollama" },
-  { label: "OpenAI", value: "openai" },
-  { label: "Anthropic", value: "anthropic" },
-  { label: "Custom (OpenAI-compatible)", value: "custom" },
-];
+interface ProviderSpec {
+  id: string;
+  label: string;
+  api: string;
+  auth: string;
+  base: string;
+  keyHint: string;
+  keyOptional: boolean;
+}
+
+// The roster lives in the backend (providers.json); the UI renders it verbatim.
+const providerSpecs = ref<ProviderSpec[]>([]);
+const providerOptions = ref([{ label: "— none —", value: "" }]);
+const keyPlaceholder = ref("sk-...");
+invoke<ProviderSpec[]>("list_providers").then((ps) => {
+  providerSpecs.value = ps;
+  providerOptions.value = [
+    ...providerOptions.value,
+    ...ps.map((p) => ({ label: p.label, value: p.id })),
+  ];
+});
+
+// Picking a provider prefills its endpoint (the watch below then auto-
+// discovers models) and its key hint. Select-only: restored settings stay.
+function onProviderChange(id: string) {
+  const spec = providerSpecs.value.find((p) => p.id === id);
+  if (!spec) return;
+  baseUrl.value = spec.base;
+  keyPlaceholder.value = spec.keyHint || "not required";
+}
 
 function modelOptions() {
   const opts = models.value.map((m) => ({ label: m, value: m }));
@@ -182,7 +205,11 @@ onBeforeUnmount(() => {
         <div v-else-if="step === 2" class="wizard-body">
           <n-form label-placement="top" :show-require-mark="false">
             <n-form-item label="Provider">
-              <n-select v-model:value="provider" :options="providerOptions" />
+              <n-select
+                v-model:value="provider"
+                :options="providerOptions"
+                @update:value="onProviderChange"
+              />
             </n-form-item>
             <n-form-item label="Base URL">
               <n-input v-model:value="baseUrl" placeholder="e.g. http://localhost:11434" />
@@ -192,7 +219,7 @@ onBeforeUnmount(() => {
                 v-model:value="apiKey"
                 type="password"
                 show-password-on="click"
-                placeholder="sk-..."
+                :placeholder="keyPlaceholder"
               />
             </n-form-item>
             <n-form-item label="Model">

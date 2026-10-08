@@ -17,6 +17,7 @@ mod llm;
 mod log;
 mod modelapi;
 mod openpath;
+mod provider_catalog;
 mod psrep;
 mod report;
 mod route;
@@ -29,7 +30,7 @@ use crate::conversations::{delete_conversation, list_conversations, load_convers
 use crate::harness::{bootstrap_status, cli_version, install_winapp};
 use crate::llm::{chat_with_llm, stop_chat};
 use crate::log::{fm_out_dir, fm_tmp_dir, log, trim_dir};
-use crate::modelapi::{list_models, test_llm};
+use crate::modelapi::{list_models, list_providers, test_llm};
 use crate::openpath::open_path;
 use crate::settings::{HOTKEY, get_hotkey, get_settings, save_settings};
 use crate::skills::{get_system_prompt, list_skills};
@@ -39,7 +40,7 @@ use crate::window::{open_settings, toggle_window};
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, list_models, test_llm, chat_with_llm, stop_chat, list_skills, list_conversations, load_conversation, delete_conversation, save_conversation, get_system_prompt, open_path, bootstrap_status, install_winapp])
+        .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, list_models, list_providers, test_llm, chat_with_llm, stop_chat, list_skills, list_conversations, load_conversation, delete_conversation, save_conversation, get_system_prompt, open_path, bootstrap_status, install_winapp])
         .setup(|app| {
             // Scratch hygiene (P6): drop old generations of generated
             // scripts and spilled output from previous sessions.
