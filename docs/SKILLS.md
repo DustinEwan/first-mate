@@ -1,11 +1,21 @@
 # First Mate — Agent Skills Design
 
-First Mate is a Windows control agent. Its base system prompt carries only
-behavioral rules; every capability — including **winapp**, its primary UI
-automation tool — is delivered as a skill and loaded on demand.
+First Mate is a Windows control agent. Its behavior text lives in
+**AGENTS.md** (repo root, or `~/.firstmate/AGENTS.md`; a built-in constant
+is the last-resort fallback), and carries only behavioral rules. Every
+capability — including **winapp**, its primary UI automation tool — is
+delivered as a skill and loaded on demand.
 
 First Mate follows the [Agent Skills](https://agentskills.io/) open
 specification for extensible, on-demand capabilities.
+
+
+## Behavior Text (AGENTS.md)
+
+`get_system_prompt()` searches `AGENTS.md` in cwd, `../` (dev layout), the
+exe directory and its parent, then `~/.firstmate/AGENTS.md`; the first hit
+is the system prompt, so behavior is edited as content, not recompiled
+code. The frontend appends the skill advertisement to it at mount.
 
 
 ## Skill Structure
@@ -202,6 +212,29 @@ skill's `tools:` schemas to the run's active set (both provider loops
 rebuild the request's tool list each turn). The tool loop is uncapped; the
 user stops a run with the stop button (`stop_chat`, checked between turns
 and tool calls).
+
+### Dispatch gate
+
+`tool_is_disclosed()` runs before every execution: a tool whose schema is
+not in the run's active set is refused with an instruction to load the
+skill that enables it. Implementation without disclosure is not a path to
+execution — resumed conversations and hallucinated calls included.
+
+### Conversation persistence (tool ledger)
+
+`.chat` files store user, assistant, AND tool turns. Tool lines carry both
+call and result (`🔧 list_dir path=… -> ok: …`, result capped at 160 chars
+via the `tool_result` event). On resume the ledger rides along as assistant
+context, so a continued conversation knows what was already inspected and
+verified; tool availability still resets to core (self-discovery again).
+
+### External links
+
+All links in assistant output leave the webview through the `open_path`
+command: `http(s)` opens the system browser, `file://` opens Explorer/the
+default app (path must exist; quotes and cmd metacharacters refused). The
+chat window itself never navigates. AGENTS.md tells the model to emit file
+references as `file://` markdown links.
 
 ### Example
 

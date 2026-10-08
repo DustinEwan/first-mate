@@ -88,8 +88,24 @@ On browsers, prefer screenshot over inspect/click: keep `--depth <= 4`, skip
 - Element selectors go stale after the UI changes — re-inspect before clicking
   by slug, and never click a selector from an older inspect result twice.
 
+## Input injection contract
+- BEFORE `click` or `send-keys --via send-input`: `winapp ui focus <selector>
+  -a <app>`. It activates the window, focuses the element, and VERIFIES
+  foreground — it fails loudly when Windows refuses, so you never act blind.
+- `click` refuses to run unless the target window is foreground. Do not
+  activate your own app's window to work around anything; `focus` the target.
+- `send-keys` default transport (`post-message`) is window-scoped and needs
+  no foreground for classic Win32/WinForms — but XAML/WinUI/UWP apps are
+  windowless and IGNORE it silently, and accelerators (ctrl+t) only fire via
+  `--via send-input` (which is OS-wide: foreground is mandatory there).
+- `set-value` needs no foreground at all — prefer it over typing into text
+  boxes; type only when the control rejects ValuePattern.
+- If keystrokes "didn't land": do NOT retype. Run `get-focused` (or
+  `list-windows`, which marks the foreground window), fix focus, send ONCE.
+  Retyping after a silently-partial send is how text gets duplicated.
+
 ## Workflow
 1. Desktop app: `inspect` with `--depth` to find selectors. Browser: start
    with `screenshot` and only inspect a scoped subtree if you must.
-2. `invoke`/`click`/`set-value`/`send-keys` to interact.
+2. `focus` the target, then `invoke`/`click`/`set-value`/`send-keys`.
 3. Verify: re-inspect a small subtree (desktop) or screenshot (browser).

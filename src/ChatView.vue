@@ -38,9 +38,27 @@ mdParser.use(
     output: "html",
   }),
 );
-// Model output is untrusted: sanitize before it reaches v-html.
+// Model output is untrusted: sanitize before it reaches v-html. file:// is
+// allowed through on purpose — clicks are intercepted (onContentClick) and
+// opened via the validated open_path command, never by the webview itself.
+const ALLOWED_URI =
+  /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|file):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i;
 function renderMd(text: string): string {
-  return DOMPurify.sanitize(mdParser.parse(text));
+  return DOMPurify.sanitize(mdParser.parse(text), { ALLOWED_URI_REGEXP: ALLOWED_URI });
+}
+
+// All link clicks leave the webview: http(s) -> system browser, file:// ->
+// Explorer/default app. Navigation inside the chat window is never allowed.
+async function onContentClick(e: MouseEvent) {
+  const a = (e.target as HTMLElement).closest("a");
+  if (!a) return;
+  e.preventDefault();
+  const href = a.getAttribute("href") || "";
+  try {
+    await invoke("open_path", { target: href });
+  } catch (err) {
+    addMsg(`Could not open ${href}: ${err}`, "dim");
+  }
 }
 
 const win = getCurrentWindow();
@@ -92,8 +110,10 @@ function addMsg(text: string, cls = "") {
 }
 
 function persistConversation() {
+  // The tool ledger persists too: a resumed conversation can see what was
+  // already inspected, verified, and executed instead of re-doing it.
   const turns = messages.value
-    .filter((m) => (m.cls === "user" || m.cls === "assistant") && m.text.trim())
+    .filter((m) => ["user", "assistant", "tool"].includes(m.cls) && m.text.trim())
     .map((m) => ({ role: m.cls, text: m.text }));
   if (turns.length === 0) return;
   if (!convName.value) {
@@ -142,6 +162,9 @@ onMounted(() => {
   invoke<{ llm: LlmSettings }>("get_settings").then((s) => {
     llmSettings = s.llm;
   });
+  invoke<string>("get_system_prompt").then((p) => {
+    systemPromptBase.value = p;
+  });
   invoke<SkillInfo[]>("list_skills").then((skills) => {
     if (skills.length === 0) return;
     const list = skills.map((s) => `- ${s.name}: ${s.description}`).join("\n");
@@ -163,6 +186,19 @@ onMounted(() => {
       .join(" ");
     addMsg(`🔧 ${name} ${argStr}`, "tool");
   });
+  // Annotate the tool line with its result: the ledger that persists to
+  // .chat (and resumes as context) says what happened, not just what ran.
+  listen<{ name: string; summary: string }>("tool_result", (event) => {
+    const { name, summary } = event.payload;
+    const one = summary.replace(/\s+/g, " ").trim();
+    for (let i = messages.value.length - 1; i >= 0; i--) {
+      const m = messages.value[i];
+      if (m.cls === "tool" && m.text.startsWith(`🔧 ${name} `) && !m.text.includes(" -> ")) {
+        messages.value[i] = { ...m, text: `${m.text} -> ${one}` };
+        break;
+      }
+    }
+  });
   // Stream the assistant text in as it arrives, creating the live message on
   // the first chunk.
   listen<{ text: string }>("stream_chunk", (event) => {
@@ -183,15 +219,9 @@ onMounted(() => {
 });
 
 
-const SYSTEM_PROMPT = `You are First Mate, a Windows control agent. You control this machine and its applications by running commands and loading skills.
-
-## Rules
-- When you decide to take an action, call the tool in the SAME turn. NEVER end your reply with only a declaration of intent ("Let me check X", "I'll verify Y") — prose alone executes nothing and the run ends there.
-- Capabilities beyond the bare tools live in skills: when a task matches an advertised skill, load_skill("<name>") FIRST, then follow its instructions.
-
-## Convergence
-- If a command fails, do NOT retry it more than once. Report the error to the user and suggest an alternative.
-- When you have enough information to answer, stop calling tools and give your final text response.`;
+// Behavior text comes from AGENTS.md (repo root or ~/.firstmate), loaded via
+// get_system_prompt; the Rust fallback applies only when no file exists.
+const systemPromptBase = ref("");
 
 interface SkillInfo {
   name: string;
@@ -236,10 +266,13 @@ async function submit() {
   // an unbounded history bloats every request (760KB observed) and, worse,
   // conditions small models into narrating without ever calling tools.
   const priorHistory = messages.value
-    .filter((m) => (m.cls === "user" || m.cls === "assistant") && m.text.trim())
+    .filter((m) => ["user", "assistant", "tool"].includes(m.cls) && m.text.trim())
     .slice(0, -1)
     .slice(-30)
-    .map((m) => ({ role: m.cls, content: m.text }));
+    // The wire only knows user/assistant: the tool ledger rides along as
+    // assistant context ("🔧 name args -> result") so a resumed run knows
+    // what was already done. Tools themselves stay undisclosed until reloaded.
+    .map((m) => ({ role: m.cls === "tool" ? "assistant" : m.cls, content: m.text }));
 
   isThinking.value = true;
   liveMsgId = -1;
@@ -252,7 +285,7 @@ async function submit() {
       model: llmSettings.model,
       message: text,
       priorHistory,
-      systemPrompt: SYSTEM_PROMPT + skillsAds.value,
+      systemPrompt: systemPromptBase.value + skillsAds.value,
     });
     // The return value is the unstreamed remainder (e.g. the turn-cap note
     // after a tool turn reset the live message). Only when nothing at all
@@ -335,6 +368,7 @@ window.addEventListener("keydown", (e) => {
                 <div
                   v-if="item.cls === 'assistant'"
                   class="msg assistant md"
+                  @click="onContentClick"
                   v-html="renderMd(item.text)"
                 ></div>
                 <div v-else class="msg" :class="item.cls">{{ item.text }}</div>

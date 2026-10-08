@@ -494,6 +494,118 @@ fn to_tool_defs(values: &[serde_json::Value]) -> Vec<lmkit::ToolDefinition> {
         .collect()
 }
 
+/// Fallback behavior text, used only when no AGENTS.md exists. The real
+/// system prompt is content, and content belongs to the repo/user — see
+/// `get_system_prompt`.
+const DEFAULT_SYSTEM_PROMPT: &str = "You are First Mate, a Windows control agent. You control this machine and its applications by running commands and loading skills.\n\n## Rules\n- When you decide to take an action, call the tool in the SAME turn. NEVER end your reply with only a declaration of intent (\"Let me check X\", \"I'll verify Y\") — prose alone executes nothing and the run ends there.\n- Capabilities beyond the bare tools live in skills: when a task matches an advertised skill, load_skill(\"<name>\") FIRST, then follow its instructions.\n\n## Convergence\n- If a command fails, do NOT retry it more than once. Report the error to the user and suggest an alternative.\n- When you have enough information to answer, stop calling tools and give your final text response.";
+
+/// AGENTS.md locations: cwd, parent (src-tauri dev layout), exe dir and its
+/// parent, then ~/.firstmate. First hit wins.
+fn agents_md_path() -> Option<std::path::PathBuf> {
+    let mut candidates: Vec<std::path::PathBuf> =
+        vec![std::path::PathBuf::from("AGENTS.md"), std::path::PathBuf::from("../AGENTS.md")];
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("AGENTS.md"));
+            if let Some(parent) = dir.parent() {
+                candidates.push(parent.join("AGENTS.md"));
+            }
+        }
+    }
+    candidates.push(home_dir().join(".firstmate").join("AGENTS.md"));
+    candidates.into_iter().find(|p| p.is_file())
+}
+
+/// The agent's behavior text: AGENTS.md when present, built-in otherwise.
+#[tauri::command]
+fn get_system_prompt() -> String {
+    match agents_md_path().and_then(|p| std::fs::read_to_string(p).ok()) {
+        Some(s) if !s.trim().is_empty() => s,
+        _ => DEFAULT_SYSTEM_PROMPT.to_string(),
+    }
+}
+
+/// Open a URL or filesystem path in the user's default handler — the ONLY
+/// sanctioned way anything leaves the webview (browser for http/https,
+/// Explorer / default app for file://). Rejects anything else (powershell
+/// schemes, UNC tricks, command injection via cmd /c start "").
+#[tauri::command]
+fn open_path(target: String) -> Result<(), String> {
+    let result = open_path_inner(&target);
+    log(&format!(
+        "OPEN_PATH {target} -> {}",
+        result.as_ref().map(|_| "ok").unwrap_or_else(|e| e.as_str())
+    ));
+    result
+}
+
+fn open_path_inner(target: &str) -> Result<(), String> {
+    let t = target.trim();
+    if let Some(rest) = t.strip_prefix("file:///").or_else(|| t.strip_prefix("file://")) {
+        let path = rest.split('#').next().unwrap_or(rest).split('?').next().unwrap_or(rest);
+        let decoded = percent_decode(path);
+        if decoded.contains('"') {
+            return Err("path contains a quote character".to_string());
+        }
+        let p = std::path::PathBuf::from(&decoded);
+        if !p.exists() {
+            return Err(format!("path does not exist: {decoded}"));
+        }
+        // explorer.exe takes the path verbatim — no cmd re-parsing, no pre-quoting
+        // (pre-quoting here made Rust escape the quotes to \" and cmd mangled the path).
+        let ok = std::process::Command::new("explorer").arg(&decoded).spawn().is_ok();
+        return if ok {
+            Ok(())
+        } else {
+            Err("could not launch explorer".to_string())
+        };
+    }
+    let lower = t.to_ascii_lowercase();
+    if lower.starts_with("https://") || lower.starts_with("http://") {
+        if t.chars().any(|c| matches!(c, '"' | '&' | '|' | '^' | '\n' | '\r')) {
+            return Err("url contains forbidden characters".to_string());
+        }
+        let ok = std::process::Command::new("cmd")
+            .args(["/C", "start", "", "/MIN", t])
+            .spawn()
+            .is_ok();
+        return if ok {
+            Ok(())
+        } else {
+            Err("could not launch the default handler".to_string())
+        };
+    }
+    Err(format!("refusing to open: {t}"))
+}
+
+/// Minimal percent-decoding for file:// paths (%20 etc.); leaves '+' alone.
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(b) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(b);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
+/// Dispatch gate: a tool may execute only if its schema is disclosed in the
+/// current run (core or skill-enabled). Resumed conversations and hallucinated
+/// calls must not reach undisclosed implementations.
+fn tool_is_disclosed(active: &[serde_json::Value], name: &str) -> bool {
+    active
+        .iter()
+        .any(|t| t.pointer("/function/name").and_then(|n| n.as_str()) == Some(name))
+}
+
 /// Skills advertised to the frontend for system-prompt injection (stage 1
 /// of progressive disclosure, docs/SKILLS.md).
 #[tauri::command]
@@ -1391,7 +1503,7 @@ async fn chat_via_lmkit(
     use futures_util::StreamExt;
     use lmkit::{
         create_chat_provider, merge_tool_call_deltas, ChatEvent, ChatMessage,
-        ChatRequest, FunctionDefinition, Provider, ProviderConfig, Role, ToolCallDelta,
+        ChatRequest, Provider, ProviderConfig, Role, ToolCallDelta,
         ToolDefinition,
     };
 
@@ -1519,10 +1631,18 @@ async fn chat_via_lmkit(
                     serde_json::from_str(&call.function.arguments)
                         .unwrap_or(serde_json::json!({}));
                 let _ = app.emit("tool_call", serde_json::json!({ "name": &name, "args": &args }));
-                let result = execute_tool(&name, &args, &mut seen)
-                    .await
-                    .unwrap_or_else(|e| format!("Error: {e}"));
+                let result = if tool_is_disclosed(&active, &name) {
+                    execute_tool(&name, &args, &mut seen)
+                        .await
+                        .unwrap_or_else(|e| format!("Error: {e}"))
+                } else {
+                    format!("Error: tool '{name}' is not available in this conversation. Its implementation exists but its schema is not disclosed; load the skill whose 'tools:' list enables it, then call it again.")
+                };
                 let ok = !result.starts_with("Error");
+                let _ = app.emit("tool_result", serde_json::json!({
+                    "name": &name,
+                    "summary": result.chars().take(160).collect::<String>(),
+                }));
                 history.push(ChatMessage::tool(call.id.clone(), result));
                 if name == "load_skill" && ok {
                     let skill = args.get("name").and_then(|n| n.as_str()).unwrap_or("");
@@ -1799,9 +1919,17 @@ async fn chat_via_openai(
                 let args: serde_json::Value =
                     serde_json::from_str(&call.args).unwrap_or(serde_json::json!({}));
                 let _ = app.emit("tool_call", serde_json::json!({ "name": &name, "args": &args }));
-                let result = execute_tool(&name, &args, &mut seen)
-                    .await
-                    .unwrap_or_else(|e| format!("Error: {e}"));
+                let result = if tool_is_disclosed(&tools, &name) {
+                    execute_tool(&name, &args, &mut seen)
+                        .await
+                        .unwrap_or_else(|e| format!("Error: {e}"))
+                } else {
+                    format!("Error: tool '{name}' is not available in this conversation. Its implementation exists but its schema is not disclosed; load the skill whose 'tools:' list enables it, then call it again.")
+                };
+                let _ = app.emit("tool_result", serde_json::json!({
+                    "name": &name,
+                    "summary": result.chars().take(160).collect::<String>(),
+                }));
                 msgs.push(serde_json::json!({
                     "role": "tool", "tool_call_id": call.id, "content": result
                 }));
@@ -1918,7 +2046,7 @@ fn open_settings(app: &tauri::AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, list_models, test_llm, chat_with_llm, stop_chat, list_skills, list_conversations, load_conversation, save_conversation])
+        .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, list_models, test_llm, chat_with_llm, stop_chat, list_skills, list_conversations, load_conversation, save_conversation, get_system_prompt, open_path])
         .setup(|app| {
             // Tray: left-click toggles the console; menu for explicit actions.
             let toggle_item =
@@ -1990,10 +2118,11 @@ pub fn run() {
 mod tests {
     use super::{
         budget_output, conv_dir, core_tools, discover_skills, enable_skill_tools, exec_capped,
-        execute_tool_inner, extract_screenshot_path, looks_like_unexecuted_intent,
-        merge_tool_call_delta, needs_shell, parse_command, parse_conversation, parse_frontmatter,
-        resolve_conv_path, resolve_skill_resource, sanitize_conv_name, serialize_conversation,
-        skill_dir, spawn_background, CallAcc, ConvMsg, CORE_TOOLS,
+        execute_tool_inner, extract_screenshot_path, get_system_prompt,
+        looks_like_unexecuted_intent, merge_tool_call_delta, needs_shell, open_path, parse_command,
+        parse_conversation, parse_frontmatter, resolve_conv_path, resolve_skill_resource,
+        sanitize_conv_name, serialize_conversation, skill_dir, spawn_background, tool_is_disclosed,
+        CallAcc, ConvMsg, CORE_TOOLS,
     };
     use std::collections::HashMap;
 
@@ -2228,6 +2357,53 @@ mod tests {
         // Pure-behavior skill enables nothing; unknown skill enables nothing.
         assert!(enable_skill_tools(&mut active, "winapp").is_empty());
         assert!(enable_skill_tools(&mut active, "no-such-skill").is_empty());
+    }
+
+    #[test]
+    fn undisclosed_tools_are_refused_at_dispatch() {
+        // The gate mirrors disclosure: core run cannot execute fs tools;
+        // after the skill enables them, the same check passes.
+        let core = core_tools();
+        assert!(tool_is_disclosed(&core, "run_command"));
+        assert!(tool_is_disclosed(&core, "load_skill"));
+        for hidden in ["read_file", "write_file", "list_dir", "search_files", "list_processes"] {
+            assert!(!tool_is_disclosed(&core, hidden), "{hidden} undisclosed");
+        }
+        let mut active = core.clone();
+        enable_skill_tools(&mut active, "filesystem");
+        assert!(tool_is_disclosed(&active, "read_file"));
+    }
+
+    #[test]
+    fn open_path_refuses_everything_but_http_https_and_existing_files() {
+        assert!(open_path("javascript:alert(1)".into()).is_err());
+        assert!(open_path("powershell.exe -c calc".into()).is_err());
+        assert!(open_path("file:///C:/nope/nothing-here-xyzzy.txt".into()).is_err());
+        assert!(open_path("https://example.com/&calc|x".into()).is_err());
+    }
+
+    #[test]
+    fn tool_ledger_round_trips_through_conversation_file() {
+        let msgs = vec![
+            ConvMsg { role: "user".into(), text: "do it".into() },
+            ConvMsg { role: "tool".into(), text: "🔧 list_dir path=C:\\x -> ok: a, b".into() },
+            ConvMsg { role: "assistant".into(), text: "done".into() },
+        ];
+        let raw = serialize_conversation("demo", &msgs);
+        let (name, back) = parse_conversation(&raw);
+        assert_eq!(name, "demo");
+        assert_eq!(back.len(), 3);
+        assert_eq!(back[1].role, "tool");
+        assert!(back[1].text.contains("-> ok:"));
+    }
+
+    #[test]
+    fn system_prompt_comes_from_agents_md_not_the_binary() {
+        // cargo test runs with cwd = src-tauri: ../AGENTS.md is the repo file.
+        // It carries the file:// link rule; the built-in fallback does not.
+        let p = get_system_prompt();
+        assert!(p.contains("First Mate"));
+        assert!(p.contains("file://"), "repo AGENTS.md must win over fallback");
     }
 
     #[test]
