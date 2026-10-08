@@ -1,0 +1,316 @@
+<script setup lang="ts">
+// First-run stepper: model setup and harness readiness, MUI-Stepper style
+// via Naive UI's n-steps. Shown when no model is configured; reopenable
+// from the tray ("Setup Wizard").
+import { invoke } from "@tauri-apps/api/core";
+import { onBeforeUnmount, onMounted, ref } from "vue";
+import {
+  NAlert,
+  NButton,
+  NConfigProvider,
+  NForm,
+  NFormItem,
+  NInput,
+  NSelect,
+  NSpace,
+  NStep,
+  NSteps,
+  darkTheme,
+} from "naive-ui";
+
+const emit = defineEmits<{ done: [] }>();
+
+const step = ref(1);
+const hotkey = ref("");
+
+// --- Step 2: model -------------------------------------------------------
+interface LlmSettings {
+  provider: string;
+  model: string;
+  api_key: string;
+  base_url: string;
+}
+const provider = ref("");
+const baseUrl = ref("");
+const apiKey = ref("");
+const model = ref("");
+const models = ref<string[]>([]);
+const modelStatus = ref("");
+
+const providerOptions = [
+  { label: "— none —", value: "" },
+  { label: "Ollama (local)", value: "ollama" },
+  { label: "OpenAI", value: "openai" },
+  { label: "Anthropic", value: "anthropic" },
+  { label: "Custom (OpenAI-compatible)", value: "custom" },
+];
+
+function modelOptions() {
+  const opts = models.value.map((m) => ({ label: m, value: m }));
+  if (model.value && !models.value.includes(model.value)) {
+    opts.push({ label: `${model.value} (not in list)`, value: model.value });
+  }
+  return opts;
+}
+
+async function refreshModels() {
+  modelStatus.value = "Refreshing models…";
+  try {
+    models.value = await invoke<string[]>("list_models", {
+      provider: provider.value,
+      baseUrl: baseUrl.value,
+      apiKey: apiKey.value,
+    });
+    modelStatus.value =
+      models.value.length > 0 ? `${models.value.length} models found` : "no models found";
+  } catch (e) {
+    modelStatus.value = `Error: ${e}`;
+  }
+}
+
+async function testModel() {
+  modelStatus.value = "Testing connection…";
+  try {
+    modelStatus.value = await invoke<string>("test_llm", {
+      provider: provider.value,
+      baseUrl: baseUrl.value,
+      apiKey: apiKey.value,
+      model: model.value,
+    });
+  } catch (e) {
+    modelStatus.value = `Test failed: ${e}`;
+  }
+}
+
+const modelReady = () => provider.value !== "" && model.value !== "";
+
+async function saveModel() {
+  const settings = {
+    llm: {
+      provider: provider.value,
+      model: model.value,
+      api_key: apiKey.value,
+      base_url: baseUrl.value,
+    },
+  };
+  await invoke("save_settings", { settings });
+}
+
+// --- Step 3: harness ------------------------------------------------------
+interface BootstrapStatus {
+  winapp: string | null;
+  winget: boolean;
+}
+const boot = ref<BootstrapStatus | null>(null);
+const installing = ref(false);
+let poll: ReturnType<typeof setInterval> | null = null;
+
+async function checkHarness() {
+  boot.value = await invoke<BootstrapStatus>("bootstrap_status");
+}
+
+async function installWinapp() {
+  installing.value = true;
+  try {
+    await invoke<string>("install_winapp");
+    // Poll until the CLI answers; the install itself announces in the ledger.
+    poll = setInterval(async () => {
+      await checkHarness();
+      if (boot.value?.winapp) {
+        if (poll) clearInterval(poll);
+        poll = null;
+        installing.value = false;
+      }
+    }, 3000);
+  } catch (e) {
+    modelStatus.value = `Install failed: ${e}`;
+    installing.value = false;
+  }
+}
+
+async function nextFromModel() {
+  await saveModel();
+  step.value = 3;
+  checkHarness();
+}
+
+onMounted(async () => {
+  hotkey.value = await invoke<string>("get_hotkey");
+  const s = await invoke<{ llm: LlmSettings }>("get_settings");
+  provider.value = s.llm.provider;
+  baseUrl.value = s.llm.base_url;
+  apiKey.value = s.llm.api_key;
+  model.value = s.llm.model;
+});
+
+onBeforeUnmount(() => {
+  if (poll) clearInterval(poll);
+});
+</script>
+
+<template>
+  <n-config-provider :theme="darkTheme">
+    <div class="wizard">
+      <div class="wizard-card">
+        <n-steps :current="step" size="small">
+          <n-step title="Welcome" />
+          <n-step title="Model" />
+          <n-step title="Harness" />
+          <n-step title="Ready" />
+        </n-steps>
+
+        <div v-if="step === 1" class="wizard-body">
+          <h2>⚓ First Mate</h2>
+          <p>
+            A local-first agent that controls this machine: shell, files, and
+            real desktop apps via the winapp CLI. Summon it from anywhere with
+            <b>{{ hotkey }}</b>.
+          </p>
+          <p class="dim">Setup takes about a minute: pick a model, then verify the desktop harness.</p>
+        </div>
+
+        <div v-else-if="step === 2" class="wizard-body">
+          <n-form label-placement="top" :show-require-mark="false">
+            <n-form-item label="Provider">
+              <n-select v-model:value="provider" :options="providerOptions" />
+            </n-form-item>
+            <n-form-item label="Base URL">
+              <n-input v-model:value="baseUrl" placeholder="e.g. http://localhost:11434" />
+            </n-form-item>
+            <n-form-item label="API key">
+              <n-input v-model:value="apiKey" type="password" show-password-on="click" placeholder="sk-..." />
+            </n-form-item>
+            <n-form-item label="Model">
+              <n-space align="center" :wrap="false">
+                <n-select v-model:value="model" :options="modelOptions()" placeholder="— none —" clearable />
+                <n-button size="small" secondary :disabled="provider === ''" @click="refreshModels">
+                  &#8635; refresh
+                </n-button>
+              </n-space>
+            </n-form-item>
+          </n-form>
+          <div v-if="modelStatus" class="status">{{ modelStatus }}</div>
+        </div>
+
+        <div v-else-if="step === 3" class="wizard-body">
+          <p>
+            Desktop automation runs through the <b>winapp</b> CLI
+            (microsoft/winappCli). First Mate checks it on every start and
+            installs it automatically when missing.
+          </p>
+          <n-alert
+            v-if="boot === null"
+            type="default"
+            :bordered="false"
+          >Checking harness…</n-alert>
+          <n-alert v-else-if="boot.winapp" type="success" :bordered="false">
+            winapp {{ boot.winapp }} is installed — UI automation is ready.
+          </n-alert>
+          <template v-else>
+            <n-alert type="warning" :bordered="false">
+              winapp CLI not found.
+            </n-alert>
+            <n-alert v-if="!boot.winget" type="error" :bordered="false">
+              winget is unavailable, so automatic install can't run. Install
+              the winapp CLI manually, then reopen this wizard.
+            </n-alert>
+            <n-button
+              v-else
+              type="primary"
+              :loading="installing"
+              :disabled="installing"
+              @click="installWinapp"
+            >
+              {{ installing ? "Installing (watch the ledger)…" : "Install winapp CLI now" }}
+            </n-button>
+          </template>
+        </div>
+
+        <div v-else class="wizard-body">
+          <h2>You're set</h2>
+          <p>
+            Model <b>{{ model }}</b> is saved and the harness is
+            {{ boot?.winapp ? "ready" : "still installing" }}.
+          </p>
+          <p>
+            Press <b>{{ hotkey }}</b> anytime, ask for anything, and watch the
+            tool ledger for exactly what was done.
+          </p>
+        </div>
+
+        <div class="wizard-foot">
+          <n-button text @click="emit('done')">Skip setup</n-button>
+          <n-space>
+            <n-button v-if="step > 1" secondary @click="step--">Back</n-button>
+            <n-button
+              v-if="step === 1"
+              type="primary"
+              @click="step = 2"
+            >Next</n-button>
+            <n-button
+              v-else-if="step === 2"
+              type="primary"
+              :disabled="!modelReady()"
+              @click="nextFromModel"
+            >Save &amp; continue</n-button>
+            <n-button
+              v-else-if="step === 3"
+              type="primary"
+              :disabled="!boot?.winapp"
+              @click="step = 4"
+            >Next</n-button>
+            <n-button v-else type="primary" @click="emit('done')">Finish</n-button>
+          </n-space>
+        </div>
+      </div>
+    </div>
+  </n-config-provider>
+</template>
+
+<style scoped>
+.wizard {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  background: rgba(16, 17, 19, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+.wizard-card {
+  width: 100%;
+  max-width: 560px;
+  background: #18181c;
+  border: 1px solid #2c2c31;
+  border-radius: 10px;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-height: 100%;
+  overflow: auto;
+}
+.wizard-body h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+.wizard-body p {
+  margin: 0 0 8px;
+  line-height: 1.5;
+  color: #c9ced6;
+}
+.wizard-body .dim {
+  color: #8a8f98;
+}
+.status {
+  color: #8a8f98;
+  font-size: 13px;
+  margin-top: 4px;
+}
+.wizard-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+</style>

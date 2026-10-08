@@ -137,6 +137,7 @@ body {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  position: relative; /* anchor for the setup wizard overlay */
 }
 
 /* The thinking line doubles as the stop control while the agent runs. */

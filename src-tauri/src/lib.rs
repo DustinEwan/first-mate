@@ -1391,18 +1391,52 @@ impl BgNotifier for AppNotifier {
         log(&format!("BG ANNOUNCE pid {pid}: {status}"));
     }
 }
-/// True if a CLI resolves on PATH and exits 0 for `--version`.
-async fn cli_available(name: &str) -> bool {
+/// Version string if a CLI resolves on PATH and exits 0 for `--version`.
+async fn cli_version(name: &str) -> Option<String> {
     let mut cmd = tokio::process::Command::new(name);
     // tokio::process::Command has an inherent creation_flags on Windows.
     #[cfg(windows)]
     cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    cmd.arg("--version")
-        .stdout(std::process::Stdio::null())
+    let out = cmd
+        .arg("--version")
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .status()
+        .output()
         .await
-        .is_ok_and(|s| s.success())
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+fn cli_available(name: &str) -> impl std::future::Future<Output = bool> {
+    let name = name.to_string();
+    async move { cli_version(&name).await.is_some() }
+}
+
+/// What the setup wizard shows for harness readiness.
+#[derive(serde::Serialize)]
+struct BootstrapStatus {
+    /// winapp CLI version, or None when missing.
+    winapp: Option<String>,
+    /// Whether the unattended install channel exists at all.
+    winget: bool,
+}
+
+#[tauri::command]
+async fn bootstrap_status() -> BootstrapStatus {
+    let (winapp, winget) = tokio::join!(cli_version("winapp"), cli_available("winget"));
+    BootstrapStatus { winapp, winget }
+}
+
+#[tauri::command]
+async fn install_winapp(app: tauri::AppHandle) -> Result<String, String> {
+    spawn_background_notify(
+        std::sync::Arc::new(AppNotifier(app)),
+        winapp_install_cmd(),
+        "winget install Microsoft.WinAppCli",
+    )
+    .await
 }
 
 /// The official non-interactive install for the winapp CLI, used by the
@@ -3503,7 +3537,7 @@ fn open_settings(app: &tauri::AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, list_models, test_llm, chat_with_llm, stop_chat, list_skills, list_conversations, load_conversation, save_conversation, get_system_prompt, open_path])
+        .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, list_models, test_llm, chat_with_llm, stop_chat, list_skills, list_conversations, load_conversation, save_conversation, get_system_prompt, open_path, bootstrap_status, install_winapp])
         .setup(|app| {
             // Scratch hygiene (P6): drop old generations of generated
             // scripts and spilled output from previous sessions.
@@ -3535,9 +3569,11 @@ pub fn run() {
                 MenuItem::with_id(app, "toggle", "Show / Hide", true, None::<&str>)?;
             let settings_item =
                 MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
+            let setup_item =
+                MenuItem::with_id(app, "setup", "Setup Wizard", true, None::<&str>)?;
             let quit_item =
                 MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&toggle_item, &settings_item, &quit_item])?;
+            let menu = Menu::with_items(app, &[&toggle_item, &setup_item, &settings_item, &quit_item])?;
 
             // The anchor glyph rendered from Segoe UI Emoji (icons/tray.png),
             // not the default Tauri icon.
@@ -3550,6 +3586,10 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "toggle" => toggle_window(app),
+                    "setup" => {
+                        toggle_window(app);
+                        let _ = app.emit("open_setup", ());
+                    }
                     "settings" => open_settings(app),
                     "quit" => app.exit(0),
                     _ => {}

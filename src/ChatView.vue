@@ -10,6 +10,7 @@ import { markedHighlight } from "marked-highlight";
 import markedKatex from "marked-katex-extension";
 import hljs from "highlight.js/lib/common";
 import DOMPurify from "dompurify";
+import SetupWizard from "./SetupWizard.vue";
 import "highlight.js/styles/github-dark.css";
 import "katex/dist/katex.min.css";
 
@@ -228,6 +229,8 @@ interface ConvMsg {
   report?: ToolReport;
 }
 const panelOpen = ref(false);
+// First-run stepper: shown when no model is configured; tray can reopen it.
+const wizardOpen = ref(false);
 const conversations = ref<ConvInfo[]>([]);
 const convName = ref<string | null>(null);
 
@@ -307,7 +310,9 @@ onMounted(() => {
   });
   invoke<{ llm: LlmSettings }>("get_settings").then((s) => {
     llmSettings = s.llm;
+    if (!s.llm.model) wizardOpen.value = true;
   });
+  listen("open_setup", () => (wizardOpen.value = true));
   invoke<string>("get_system_prompt").then((p) => {
     systemPromptBase.value = p;
   });
@@ -500,9 +505,10 @@ function scrollToBottom() {
 }
 watch(messages, scrollToBottom, { deep: true });
 
-// Escape closes the panel first, then hides the window.
+// Escape closes the wizard or panel first, then hides the window.
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
+    if (wizardOpen.value) return; // dismissed only via Skip/Finish
     if (panelOpen.value) panelOpen.value = false;
     else hide();
   }
@@ -594,6 +600,7 @@ window.addEventListener("keydown", (e) => {
           </ul>
         </aside>
       </div>
+      <SetupWizard v-if="wizardOpen" @done="wizardOpen = false" />
     </div>
   </n-config-provider>
 </template>
