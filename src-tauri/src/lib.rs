@@ -254,7 +254,7 @@ fn agent_tools() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "run_command",
-                "description": "Execute a command on the Windows system and return the output. Use this to run winapp commands and other shell commands.",
+                "description": "Execute a command on the Windows system and return the output. Use this to run winapp commands and other shell commands. Commands are force-killed after 5 minutes; NEVER run interactive/blocking programs (login prompts, watchers) in the foreground - launch them detached with 'start /b prog > logfile 2>&1' and poll the log.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -832,6 +832,51 @@ fn resolve_skill_resource(path: &str) -> Result<std::path::PathBuf, String> {
     Ok(full)
 }
 
+/// Hard cap for one run_command. Detached grandchildren (e.g. `start /b
+/// gh auth login`) inherit the output pipes and can hold them open forever;
+/// without a cap the agent loop soft-locks waiting for EOF.
+/// Override with FIRSTMATE_CMD_TIMEOUT_SECS.
+fn cmd_timeout() -> std::time::Duration {
+    let secs = std::env::var("FIRSTMATE_CMD_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|s| *s > 0)
+        .unwrap_or(300);
+    std::time::Duration::from_secs(secs)
+}
+
+/// Spawn with a deadline. On timeout the direct child dies (kill_on_drop),
+/// the process tree is swept, and an actionable error is returned - a tool
+/// call must always come back so the agent loop can never wedge.
+async fn exec_capped(
+    cmd: &mut tokio::process::Command,
+    timeout: std::time::Duration,
+) -> Result<std::process::Output, String> {
+    cmd.kill_on_drop(true);
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    let pid = child.id().unwrap_or(0);
+    match tokio::time::timeout(timeout, child.wait_with_output()).await {
+        Ok(Ok(output)) => Ok(output),
+        Ok(Err(e)) => Err(format!("spawn failed: {e}")),
+        Err(_) => {
+            if pid > 0 {
+                let _ = tokio::process::Command::new("taskkill")
+                    .args(["/F", "/T", "/PID", &pid.to_string()])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .await;
+            }
+            Err(format!(
+                "command timed out after {}s; killed pid {pid} and its tree. \
+                 Detached grandchildren may still run (taskkill /F /PID them) \
+                 and their partial output is lost.",
+                timeout.as_secs()
+            ))
+        }
+    }
+}
+
 /// Execute a tool by name with JSON arguments. Returns the result as a string.
 async fn execute_tool(
     name: &str,
@@ -858,13 +903,11 @@ async fn execute_tool_inner(name: &str, args: &serde_json::Value) -> Result<Stri
                 // quotes survive (plain /C mangles them). raw_arg avoids
                 // Rust re-escaping the string.
                 log(&format!("RUN via cmd shell: {}", command));
-                tokio::process::Command::new("cmd.exe")
-                    .raw_arg("/S")
+                let mut c = tokio::process::Command::new("cmd.exe");
+                c.raw_arg("/S")
                     .raw_arg("/C")
-                    .raw_arg(format!("\"{}\"", command))
-                    .output()
-                    .await
-                    .map_err(|e| e.to_string())?
+                    .raw_arg(format!("\"{}\"", command));
+                exec_capped(&mut c, cmd_timeout()).await?
             } else {
                 // Direct launch: quotes are parsed by us, so multi-word
                 // quoted arguments reach the program intact.
@@ -874,11 +917,9 @@ async fn execute_tool_inner(name: &str, args: &serde_json::Value) -> Result<Stri
                     None => return Err("empty command".into()),
                 };
                 log(&format!("RUN direct: {} {:?}", program, rest));
-                tokio::process::Command::new(program)
-                    .args(rest)
-                    .output()
-                    .await
-                    .map_err(|e| e.to_string())?
+                let mut c = tokio::process::Command::new(program);
+                c.args(rest);
+                exec_capped(&mut c, cmd_timeout()).await?
             };
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -1588,7 +1629,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        budget_output, conv_dir, discover_skills, extract_screenshot_path,
+        budget_output, conv_dir, discover_skills, exec_capped, extract_screenshot_path,
         merge_tool_call_delta, needs_shell, parse_command, parse_conversation,
         parse_frontmatter, resolve_conv_path, resolve_skill_resource, sanitize_conv_name,
         serialize_conversation, skill_dir, CallAcc, ConvMsg,
@@ -1821,5 +1862,35 @@ mod tests {
         assert!(resolve_conv_path(f.to_str().unwrap()).is_ok());
         assert!(resolve_conv_path("C:\\Windows\\win.ini").is_err());
         let _ = std::fs::remove_file(&f);
+    }
+
+    #[test]
+    fn hung_command_is_killed_at_the_cap() {
+        // The soft-lock shape: the process keeps stdout open and never
+        // exits (here ping -n 3600; in the wild, `start /b gh auth login`).
+        // The call must return with an error, not wait for EOF forever.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let t0 = std::time::Instant::now();
+            let mut c = tokio::process::Command::new("ping");
+            c.args(["-n", "3600", "127.0.0.1"]);
+            let err = exec_capped(&mut c, std::time::Duration::from_secs(2))
+                .await
+                .expect_err("hanging command must not return Ok");
+            assert!(err.contains("timed out"), "{err}");
+            assert!(t0.elapsed() < std::time::Duration::from_secs(30));
+            // The child must actually be dead, not orphaned holding pipes.
+            let out = std::process::Command::new("tasklist")
+                .args(["/FI", "IMAGENAME eq ping.exe", "/FO", "CSV", "/NH"])
+                .output()
+                .unwrap();
+            assert!(
+                !String::from_utf8_lossy(&out.stdout).contains("ping.exe"),
+                "ping survived the timeout kill"
+            );
+        });
     }
 }
