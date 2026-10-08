@@ -793,6 +793,16 @@ fn load_conversation(path: String) -> Result<Vec<ConvMsg>, String> {
     Ok(parse_conversation(&raw).1)
 }
 
+/// Delete a conversation file. The path goes through the same containment
+/// check as load: only files inside the conversations dir can be removed.
+#[tauri::command]
+fn delete_conversation(path: String) -> Result<(), String> {
+    let full = resolve_conv_path(&path)?;
+    std::fs::remove_file(&full).map_err(|e| e.to_string())?;
+    log(&format!("CONV DELETE {}", full.display()));
+    Ok(())
+}
+
 /// Append a timestamped line to the local log file.
 fn log(msg: &str) {
     use std::io::Write;
@@ -3537,7 +3547,7 @@ fn open_settings(app: &tauri::AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, list_models, test_llm, chat_with_llm, stop_chat, list_skills, list_conversations, load_conversation, save_conversation, get_system_prompt, open_path, bootstrap_status, install_winapp])
+        .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, list_models, test_llm, chat_with_llm, stop_chat, list_skills, list_conversations, load_conversation, delete_conversation, save_conversation, get_system_prompt, open_path, bootstrap_status, install_winapp])
         .setup(|app| {
             // Scratch hygiene (P6): drop old generations of generated
             // scripts and spilled output from previous sessions.
@@ -4007,6 +4017,15 @@ mod tests {
         assert_eq!(sanitize_conv_name("a/b:c*d?e\"f<g>h|i"), "a-b-c-d-e-f-g-h-i");
         assert_eq!(sanitize_conv_name("..."), "chat");
         assert_eq!(sanitize_conv_name(&"x".repeat(80)).len(), 48);
+    }
+
+    #[test]
+    fn delete_cannot_escape_conversations_dir() {
+        // Anything outside the conversations dir is refused before any
+        // remove_file runs: existing file elsewhere, traversal, missing file.
+        assert!(resolve_conv_path("C:\\Windows\\win.ini").is_err());
+        assert!(resolve_conv_path("..\\..\\settings.json").is_err());
+        assert!(resolve_conv_path("no-such-file-here").is_err());
     }
 
     #[test]

@@ -112,13 +112,20 @@ body {
 }
 
 .conv-list li {
+  display: flex;
+  align-items: center;
   padding: 8px 12px;
   cursor: pointer;
   color: #c9ced6;
+  font-size: 13px;
+}
+
+.conv-list li .conv-name {
+  flex: 1;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-size: 13px;
 }
 
 .conv-list li:hover {
@@ -130,6 +137,28 @@ body {
   color: #ffffff;
   border-left: 2px solid #2080f0;
   padding-left: 10px;
+}
+
+.conv-list .conv-delete {
+  flex: none;
+  visibility: hidden;
+  border: none;
+  background: none;
+  color: #8a8f98;
+  font-size: 15px;
+  line-height: 1;
+  padding: 2px 6px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.conv-list li:hover .conv-delete {
+  visibility: visible;
+}
+
+.conv-list .conv-delete:hover {
+  color: #e05252;
+  background: rgba(224, 82, 82, 0.12);
 }
 
 /* Chat window layout */

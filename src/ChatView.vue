@@ -298,6 +298,15 @@ function newChat() {
   panelOpen.value = false;
 }
 
+function deleteConversation(c: ConvInfo) {
+  invoke("delete_conversation", { path: c.path })
+    .then(() => {
+      if (c.name === convName.value) newChat();
+      return refreshConversations();
+    })
+    .catch((e) => console.error("delete failed", e));
+}
+
 onMounted(() => {
   // Restore the most recent conversation so chats survive restarts.
   refreshConversations().then(() => {
@@ -596,7 +605,14 @@ window.addEventListener("keydown", (e) => {
               :class="{ active: c.name === convName }"
               :title="c.name"
               @click="openConversation(c)"
-            >{{ c.name }}</li>
+            >
+              <span class="conv-name">{{ c.name }}</span>
+              <button
+                class="conv-delete"
+                title="Delete conversation"
+                @click.stop="deleteConversation(c)"
+              >&times;</button>
+            </li>
           </ul>
         </aside>
       </div>
