@@ -191,13 +191,19 @@ onMounted(() => {
   listen<{ name: string; summary: string }>("tool_result", (event) => {
     const { name, summary } = event.payload;
     const one = summary.replace(/\s+/g, " ").trim();
+    let matched = false;
     for (let i = messages.value.length - 1; i >= 0; i--) {
       const m = messages.value[i];
       if (m.cls === "tool" && m.text.startsWith(`🔧 ${name} `) && !m.text.includes(" -> ")) {
         messages.value[i] = { ...m, text: `${m.text} -> ${one}` };
+        matched = true;
         break;
       }
     }
+    // Unmatched results are async announcements (e.g. a background job that
+    // finished after its turn): they get their own ledger line so the model
+    // resumes with them as context.
+    if (!matched) addMsg(`🔧 ${name} -> ${one}`, "tool");
   });
   // Stream the assistant text in as it arrives, creating the live message on
   // the first chunk.

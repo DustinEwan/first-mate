@@ -283,7 +283,7 @@ fn agent_tools() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "run_command",
-                "description": "Execute a command on the Windows system and return the output. shell='powershell' is REQUIRED for any PowerShell containing $vars, quotes, or multiple statements: the command text is written VERBATIM to a scratch script and run with 'powershell -File', so $, ' and \" survive exactly as typed — never route PowerShell through the default cmd form (cmd.exe re-quoting corrupts it). shell='cmd' (default) runs argv directly, or via cmd.exe when the text contains pipes/&&/redirection. Foreground commands are force-killed after 5 minutes; interactive or long-running programs MUST use background:true and are driven via get_command_output / kill_command.",
+                "description": "Execute a command on the Windows system and return the output. shell='powershell' is REQUIRED for any PowerShell containing $vars, quotes, or multiple statements: it runs in a PERSISTENT session, so $vars, functions and cwd you set carry into later calls, and $, ' and \" survive exactly as typed — never route PowerShell through the default cmd form (cmd.exe re-quoting corrupts it). shell='cmd' (default) runs argv directly, or via cmd.exe when the text contains pipes/&&/redirection. A foreground command still running after 20s is auto-moved to the background and its completion is announced in the conversation later — NEVER poll for it; use background:true for servers/watchers/interactive programs up front.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -300,7 +300,7 @@ fn agent_tools() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_command_output",
-                "description": "Get status and accumulated output of a background command started with run_command background:true. Status is 'running' or 'exited: <code>'. Safe to poll repeatedly.",
+                "description": "Get status and accumulated output of a background command (pid from run_command). Usually UNNECESSARY: completion is announced in the conversation automatically. Use only to peek at partial output of a still-running job.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -1294,7 +1294,69 @@ fn evict_bg_jobs(reg: &mut std::collections::HashMap<u32, BgJob>) {
     }
 }
 
+/// Foreground grace period before a command is auto-backgrounded. Beyond
+/// this, waiting is a wasted agent turn: the job goes to the background and
+/// its completion is announced in the conversation ledger by itself.
+fn auto_bg_secs() -> u64 {
+    std::env::var("FIRSTMATE_AUTO_BG_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|s| *s > 0)
+        .unwrap_or(20)
+}
+
+/// Announces a finished background job into the conversation: the frontend
+/// appends it as a ledger line, so the model sees the outcome on the NEXT
+/// user turn without ever polling.
+///
+/// Deliberately abstract over `AppHandle`: the test binary only references
+/// `NoopNotifier`, so the linker's /OPT:REF never pulls the tauri machinery
+/// (and its comctl32-v6 imports, which need an app manifest the test exe
+/// lacks) into unit tests.
+trait BgNotifier: Send + Sync {
+    fn announce(&self, pid: u32, command: &str, status: &str, out: &str, err: &str);
+}
+
+struct NoopNotifier;
+
+impl BgNotifier for NoopNotifier {
+    fn announce(&self, _pid: u32, _command: &str, _status: &str, _out: &str, _err: &str) {}
+}
+
+struct AppNotifier(tauri::AppHandle);
+
+impl BgNotifier for AppNotifier {
+    fn announce(&self, pid: u32, command: &str, status: &str, out: &str, err: &str) {
+        let body = truncate_if_over(
+            if err.trim().is_empty() {
+                out.to_string()
+            } else {
+                format!("{out}\n--- stderr ---\n{err}")
+            },
+            1500,
+        );
+        let _ = self.0.emit(
+            "tool_result",
+            serde_json::json!({
+                "name": format!("bg {pid}"),
+                "summary": format!("`{command}` {status}\n{body}"),
+            }),
+        );
+        log(&format!("BG ANNOUNCE pid {pid}: {status}"));
+    }
+}
+
+/// Convenience wrapper (tests / headless): completions are recorded in the
+/// registry but never announced.
 async fn spawn_background(
+    cmd: tokio::process::Command,
+    command: &str,
+) -> Result<String, String> {
+    spawn_background_notify(std::sync::Arc::new(NoopNotifier), cmd, command).await
+}
+
+async fn spawn_background_notify(
+    notifier: std::sync::Arc<dyn BgNotifier>,
     mut cmd: tokio::process::Command,
     command: &str,
 ) -> Result<String, String> {
@@ -1315,12 +1377,20 @@ async fn spawn_background(
     let status = std::sync::Arc::new(std::sync::Mutex::new("running".to_string()));
     {
         let status = status.clone();
+        let notify = notifier.clone();
+        let command = command.to_string();
+        let (jout, jerr) = (stdout.clone(), stderr.clone());
         tokio::spawn(async move {
             let s = match child.wait().await {
                 Ok(s) => format!("exited: {}", s.code().unwrap_or(-1)),
                 Err(e) => format!("wait error: {e}"),
             };
-            *status.lock().unwrap() = s;
+            *status.lock().unwrap() = s.clone();
+            // Give the pump tasks a beat to flush their final chunk.
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            let out = String::from_utf8_lossy(&jout.lock().unwrap()).to_string();
+            let err = String::from_utf8_lossy(&jerr.lock().unwrap()).to_string();
+            notify.announce(pid, &command, &s, &out, &err);
         });
     }
     {
@@ -1338,8 +1408,111 @@ async fn spawn_background(
         );
     }
     Ok(format!(
-        "started background pid {pid}. Poll with get_command_output(pid), stop with kill_command(pid)."
+        "started background pid {pid}. Its completion is announced automatically in the conversation \
+         — do NOT poll get_command_output for it; use that only if you need partial output early, \
+         and kill_command(pid) to stop it."
     ))
+}
+
+/// Run a foreground command with an auto-background escape: if it outlives
+/// `auto_bg_secs`, it is registered as a background job (same pid, same
+/// pipes — nothing is killed or re-run) and the tool returns immediately
+/// with the never-poll contract. Completion lands in the ledger by itself.
+async fn exec_or_background(
+    notifier: std::sync::Arc<dyn BgNotifier>,
+    mut cmd: tokio::process::Command,
+    command: &str,
+    script_path: Option<std::path::PathBuf>,
+) -> Result<String, String> {
+    cmd.stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    let stdout = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let stderr = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    if let Some(out) = child.stdout.take() {
+        pump_bg_output(out, stdout.clone());
+    }
+    if let Some(err) = child.stderr.take() {
+        pump_bg_output(err, stderr.clone());
+    }
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(auto_bg_secs()),
+        child.wait(),
+    )
+    .await
+    {
+        Ok(Ok(status)) => {
+            // Streams are EOF (child exited); let the pumps flush.
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            if let Some(p) = &script_path {
+                let _ = std::fs::remove_file(p);
+            }
+            let out = String::from_utf8_lossy(&stdout.lock().unwrap()).to_string();
+            let err = String::from_utf8_lossy(&stderr.lock().unwrap()).to_string();
+            if status.success() {
+                if err.trim().is_empty() {
+                    Ok(out)
+                } else {
+                    Ok(format!("{}\n--- stderr ---\n{}", out, err))
+                }
+            } else {
+                Err(format!("exit {status}: {}\n{}", out, err))
+            }
+        }
+        Ok(Err(e)) => {
+            if let Some(p) = &script_path {
+                let _ = std::fs::remove_file(p);
+            }
+            Err(format!("spawn failed: {e}"))
+        }
+        Err(_) => {
+            // Still running: adopt into the background registry WITHOUT
+            // touching the process, and announce on completion.
+            let pid = child.id().unwrap_or(0);
+            let status = std::sync::Arc::new(std::sync::Mutex::new("running".to_string()));
+            {
+                let status = status.clone();
+                let notify = notifier.clone();
+                let command = command.to_string();
+                let (jout, jerr) = (stdout.clone(), stderr.clone());
+                tokio::spawn(async move {
+                    let s = match child.wait().await {
+                        Ok(s) => format!("exited: {}", s.code().unwrap_or(-1)),
+                        Err(e) => format!("wait error: {e}"),
+                    };
+                    *status.lock().unwrap() = s.clone();
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    let out = String::from_utf8_lossy(&jout.lock().unwrap()).to_string();
+                    let err = String::from_utf8_lossy(&jerr.lock().unwrap()).to_string();
+                    notify.announce(pid, &command, &s, &out, &err);
+                });
+            }
+            {
+                let mut reg = bg_registry().lock().unwrap();
+                evict_bg_jobs(&mut reg);
+                reg.insert(
+                    pid,
+                    BgJob {
+                        command: command.to_string(),
+                        stdout,
+                        stderr,
+                        status,
+                        started: std::time::Instant::now(),
+                    },
+                );
+            }
+            // The scratch script belongs to the running job now; tmp/ is
+            // LRU-trimmed, so it cannot leak.
+            Ok(format!(
+                "still running after {}s → moved to background (pid {pid}). \
+                 Its completion is announced automatically in the conversation — do NOT poll; \
+                 use get_command_output(pid) only if you need partial output now, \
+                 kill_command(pid) to stop it.",
+                auto_bg_secs()
+            ))
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1680,14 +1853,17 @@ async fn ps_session_shutdown() {
     }
 }
 
-/// Execute a tool by name with JSON arguments. Returns the result as a string.
+/// Execute a tool by name with JSON arguments. Returns the result as a
+/// string. `app` enables background-job completion announcements.
 async fn execute_tool(
+    app: &tauri::AppHandle,
     name: &str,
     args: &serde_json::Value,
     seen: &mut HashMap<String, String>,
 ) -> Result<String, String> {
     log(&format!("TOOL CALL: {} args={}", name, args));
-    let result = execute_tool_inner(name, args).await;
+    let notifier = std::sync::Arc::new(AppNotifier(app.clone()));
+    let result = execute_tool_notify(notifier, name, args).await;
     let summary = match &result {
         Ok(s) => format!("OK len={}", s.len()),
         Err(e) => format!("ERR {}", e.chars().take(200).collect::<String>()),
@@ -1696,7 +1872,18 @@ async fn execute_tool(
     result.map(|r| budget_output(seen, format!("{}{}", name, args), r))
 }
 
+/// Test / headless convenience: no notifier, so completions are recorded
+/// but never announced.
+#[cfg_attr(not(test), allow(dead_code))]
 async fn execute_tool_inner(name: &str, args: &serde_json::Value) -> Result<String, String> {
+    execute_tool_notify(std::sync::Arc::new(NoopNotifier), name, args).await
+}
+
+async fn execute_tool_notify(
+    notifier: std::sync::Arc<dyn BgNotifier>,
+    name: &str,
+    args: &serde_json::Value,
+) -> Result<String, String> {
     match name {
         "run_command" => {
             let command = args.get("command").and_then(|c| c.as_str()).unwrap_or("");
@@ -1798,20 +1985,9 @@ async fn execute_tool_inner(name: &str, args: &serde_json::Value) -> Result<Stri
             if background {
                 // The scratch script must outlive the spawn; tmp/ is
                 // LRU-trimmed at startup, so it cannot leak forever.
-                return spawn_background(cmd, command).await;
+                return spawn_background_notify(notifier, cmd, command).await;
             }
-            let output = exec_capped(&mut cmd, cmd_timeout()).await;
-            if let Some(p) = &script_path {
-                let _ = std::fs::remove_file(p);
-            }
-            let output = output?;
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            if !output.status.success() {
-                Err(format!("exit {:?}: {}\n{}", output.status, stdout, stderr))
-            } else {
-                Ok(stdout)
-            }
+            exec_or_background(notifier, cmd, command, script_path).await
         }
         "get_command_output" => {
             let pid = args.get("pid").and_then(|p| p.as_u64()).ok_or("pid required")? as u32;
@@ -2134,7 +2310,7 @@ async fn chat_via_lmkit(
                         .unwrap_or(serde_json::json!({}));
                 let _ = app.emit("tool_call", serde_json::json!({ "name": &name, "args": &args }));
                 let result = if tool_is_disclosed(&active, &name) {
-                    execute_tool(&name, &args, &mut seen)
+                    execute_tool(&app, &name, &args, &mut seen)
                         .await
                         .unwrap_or_else(|e| format!("Error: {e}"))
                 } else {
@@ -2422,7 +2598,7 @@ async fn chat_via_openai(
                     serde_json::from_str(&call.args).unwrap_or(serde_json::json!({}));
                 let _ = app.emit("tool_call", serde_json::json!({ "name": &name, "args": &args }));
                 let result = if tool_is_disclosed(&tools, &name) {
-                    execute_tool(&name, &args, &mut seen)
+                    execute_tool(&app, &name, &args, &mut seen)
                         .await
                         .unwrap_or_else(|e| format!("Error: {e}"))
                 } else {
@@ -3280,5 +3456,37 @@ mod tests {
         .await;
         assert!(bad.unwrap_err().contains("exit code 3"));
         ps_session_shutdown().await;
+    }
+
+
+    #[tokio::test]
+    async fn slow_foreground_command_is_auto_backgrounded() {
+        std::env::set_var("FIRSTMATE_AUTO_BG_SECS", "1");
+        let r = execute_tool_inner(
+            "run_command",
+            &serde_json::json!({ "command": "ping -n 30 127.0.0.1 > NUL" }),
+        )
+        .await
+        .expect("auto-bg notice");
+        std::env::remove_var("FIRSTMATE_AUTO_BG_SECS");
+        assert!(r.contains("moved to background (pid"), "got: {r}");
+        assert!(r.contains("do NOT poll"), "never-poll contract in notice: {r}");
+        let pid: u32 = r
+            .split("pid ")
+            .nth(1)
+            .unwrap()
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<String>()
+            .parse()
+            .expect("pid in notice");
+        // The SAME process is adopted by the registry, not restarted.
+        let out = execute_tool_inner("get_command_output", &serde_json::json!({ "pid": pid }))
+            .await
+            .unwrap();
+        assert!(out.contains("running"), "{out}");
+        execute_tool_inner("kill_command", &serde_json::json!({ "pid": pid }))
+            .await
+            .unwrap();
     }
 }
