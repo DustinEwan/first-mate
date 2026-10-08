@@ -11,7 +11,7 @@ fn agent_tools() -> serde_json::Value {
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "command": {"type": "string", "description": "The command to execute (e.g. 'winapp ui inspect -a notepad', or PowerShell statements when shell='powershell')"},
+                        "command": {"type": "string", "description": "The command to execute (e.g. 'winapp ui inspect -a notepad', or PowerShell statements when shell='powershell'). With shell='powershell' the text IS PowerShell: never wrap it in 'powershell -Command', because the outer session interpolates $vars before the inner one sees them"},
                         "shell": {"type": "string", "enum": ["cmd", "powershell"], "description": "Interpreter. 'powershell' passes command text as script data (zero re-quoting). Default 'cmd'."},
                         "cwd": {"type": "string", "description": "Absolute directory to run the command in (optional)."},
                         "background": {"type": "boolean", "description": "Start detached and return a pid immediately instead of waiting for completion"}

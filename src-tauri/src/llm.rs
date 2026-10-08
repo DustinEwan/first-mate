@@ -10,7 +10,7 @@ use crate::tooldefs::{core_tools, enable_skill_tools, to_tool_defs, tool_is_disc
 /// User interrupt for the running agent loop. The tool loop is uncapped
 /// (real work takes many turns), so the stop button is the brake: checked
 /// between turns and between tool calls.
-static CHAT_STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub(crate) static CHAT_STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn chat_stop_requested() -> bool {
     CHAT_STOP.load(std::sync::atomic::Ordering::SeqCst)

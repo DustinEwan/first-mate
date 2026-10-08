@@ -26,7 +26,13 @@ use crate::exec::{MAX_BG_OUTPUT, cmd_timeout};
 /// explicit flag because `$?` resets to True once a try/catch completes —
 /// a caught `throw` must still report failure — and it also folds in the
 /// final `$?` so non-terminating cmdlet errors (missing paths etc.) fail.
-const PS_REPL: &str = r#"[Console]::OutputEncoding=[Text.Encoding]::UTF8;[Console]::InputEncoding=[Text.Encoding]::UTF8;while($true){$c=[Console]::In.ReadLine();if($null -eq $c){break};$b=New-Object System.Collections.ArrayList;while($c -notlike '__FM_RUN_*'){[void]$b.Add($c);$c=[Console]::In.ReadLine();if($null -eq $c){break}};if($null -eq $c){break};$id=$c.Substring(9);$ok=$true;try{. ([scriptblock]::Create(($b -join [Environment]::NewLine)))}catch{Write-Error $_;$ok=$false};$ok=$ok -and $?;Write-Host "__FM_END_$($id):$([int]$ok):$LASTEXITCODE"}"#;
+/// Protocol variables carry the `$__fm_` prefix: dot-sourcing shares
+/// session scope, so a user script assigning common names used to be able
+/// to clobber the protocol state (live incident: `$id =
+/// [WindowsIdentity]::GetCurrent()` mangled the sentinel id, the harness
+/// never matched its line, and the session soft-locked until the
+/// timeout cap).
+const PS_REPL: &str = r#"[Console]::OutputEncoding=[Text.Encoding]::UTF8;[Console]::InputEncoding=[Text.Encoding]::UTF8;while($true){$__fm_c=[Console]::In.ReadLine();if($null -eq $__fm_c){break};$__fm_b=New-Object System.Collections.ArrayList;while($__fm_c -notlike '__FM_RUN_*'){[void]$__fm_b.Add($__fm_c);$__fm_c=[Console]::In.ReadLine();if($null -eq $__fm_c){break}};if($null -eq $__fm_c){break};$__fm_id=$__fm_c.Substring(9);$__fm_ok=$true;try{. ([scriptblock]::Create(($__fm_b -join [Environment]::NewLine)))}catch{Write-Error $_;$__fm_ok=$false};$__fm_ok=$__fm_ok -and $?;Write-Host "__FM_END_$($__fm_id):$([int]$__fm_ok):$LASTEXITCODE"}"#;
 
 struct PsCommand {
     text: String,
@@ -203,24 +209,31 @@ fn ps_handle(cmd: PsCommand, seq: u64, state: &mut Option<PsState>) {
         });
         return;
     }
-    let sentinel = format!("__FM_END_{id}:");
+    // Match on the sentinel PREFIX, not the exact id: the id round-trips
+    // through user-script scope and could still be clobbered by an
+    // assignment. The worker serializes commands and every failure path
+    // kills+respawns the child with a fresh line channel, so any
+    // `__FM_END_` line on this channel belongs to the in-flight command.
     let deadline = std::time::Instant::now() + cmd.timeout;
     let mut out = String::new();
     let mut disconnected = false;
+    let mut stopped = false;
     loop {
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         if remaining.is_zero() {
             break;
         }
-        match st.lines.recv_timeout(remaining) {
+        // Short slices so a user stop can interrupt a wedged command.
+        let slice = remaining.min(std::time::Duration::from_millis(250));
+        match st.lines.recv_timeout(slice) {
             Ok(line) => {
-                if let Some(rest) = line.strip_prefix(&sentinel) {
-                    let mut it = rest.split(':');
+                if let Some(rest) = line.strip_prefix("__FM_END_") {
+                    let mut it = rest.rsplitn(3, ':');
+                    let lastexit = it.next().and_then(|s| s.trim().parse::<i32>().ok());
                     let ok = it
                         .next()
                         .and_then(|s| s.trim().parse::<i32>().ok())
                         .unwrap_or(1);
-                    let lastexit = it.next().and_then(|s| s.trim().parse::<i32>().ok());
                     let code = if ok == 0 { 1 } else { lastexit.unwrap_or(0) };
                     let stderr =
                         std::mem::take(&mut *st.errbuf.lock().unwrap());
@@ -238,7 +251,18 @@ fn ps_handle(cmd: PsCommand, seq: u64, state: &mut Option<PsState>) {
                 disconnected = true; // child died mid-command
                 break;
             }
-            Err(_) => break, // deadline
+            Err(_) => {
+                if std::time::Instant::now() >= deadline {
+                    break; // deadline
+                }
+                // A user stop must interrupt a wedged command: this wait
+                // loop is the only thing blocking the agent loop, and
+                // CHAT_STOP is otherwise checked only between calls.
+                if crate::llm::CHAT_STOP.load(std::sync::atomic::Ordering::SeqCst) {
+                    stopped = true;
+                    break;
+                }
+            }
         }
     }
     // No sentinel: the command timed out, or the child exited mid-command.
@@ -274,7 +298,9 @@ fn ps_handle(cmd: PsCommand, seq: u64, state: &mut Option<PsState>) {
         None => {
             let _ = cmd.reply.send(PsReply::TimedOut {
                 partial: out,
-                note: if status.is_some() {
+                note: if stopped {
+                    "stopped by user; the command may have partially run".into()
+                } else if status.is_some() {
                     "session child exited mid-command without an exit code".into()
                 } else {
                     format!(
@@ -402,7 +428,29 @@ mod tests {
         }
         let i = ps_session_exec("Write-Output respawned", None, t).await;
         assert!(matches!(i, PsRun::Done { code: 0, .. }), "respawn: {i:?}");
-        // 6. Through the tool surface: session failure surfaces as tool error.
+        // 6. Protocol vars survive clobbering (live incident: `$id =
+        //    [WindowsIdentity]::GetCurrent()` mangled the sentinel id and
+        //    soft-locked the session until the timeout cap).
+        let j = ps_session_exec(
+            "$id = [Security.Principal.WindowsIdentity]::GetCurrent()\n$c = 'x'\n$b = 'y'\n$ok = $false\nWrite-Output survived",
+            None,
+            t,
+        )
+        .await;
+        match j {
+            PsRun::Done { stdout, code: 0, .. } => assert!(stdout.contains("survived")),
+            other => panic!("protocol-var clobber must complete, got {other:?}"),
+        }
+        // 7. A user stop interrupts a wedged command immediately instead
+        //    of waiting out the timeout cap.
+        crate::llm::stop_chat();
+        let k = ps_session_exec("Start-Sleep -Seconds 30", None, t).await;
+        crate::llm::CHAT_STOP.store(false, std::sync::atomic::Ordering::SeqCst);
+        match k {
+            PsRun::TimedOut { note, .. } => assert!(note.contains("stopped by user"), "{note}"),
+            other => panic!("stop must interrupt, got {other:?}"),
+        }
+        // 8. Through the tool surface: session failure surfaces as tool error.
         let bad = execute_tool_inner(
             "run_command",
             &serde_json::json!({ "command": "exit 3", "shell": "powershell" }),
