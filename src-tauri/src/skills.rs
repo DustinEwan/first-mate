@@ -1,10 +1,5 @@
 use crate::log::home_dir;
 
-/// Fallback behavior text, used only when no AGENTS.md exists. The real
-/// system prompt is content, and content belongs to the repo/user — see
-/// `get_system_prompt`.
-const DEFAULT_SYSTEM_PROMPT: &str = "You are First Mate, a Windows control agent. You control this machine and its applications by running commands and loading skills.\n\n## Rules\n- When you decide to take an action, call the tool in the SAME turn. NEVER end your reply with only a declaration of intent (\"Let me check X\", \"I'll verify Y\") — prose alone executes nothing and the run ends there.\n- Capabilities beyond the bare tools live in skills: when a task matches an advertised skill, load_skill(\"<name>\") FIRST, then follow its instructions.\n\n## Convergence\n- If a command fails, do NOT retry it more than once. Report the error to the user and suggest an alternative.\n- When you have enough information to answer, stop calling tools and give your final text response.";
-
 /// AGENTS.md locations: cwd, parent (src-tauri dev layout), exe dir and its
 /// parent, then ~/.firstmate. First hit wins.
 fn agents_md_path() -> Option<std::path::PathBuf> {
@@ -22,13 +17,15 @@ fn agents_md_path() -> Option<std::path::PathBuf> {
     candidates.into_iter().find(|p| p.is_file())
 }
 
-/// The agent's behavior text: AGENTS.md when present, built-in otherwise.
+/// The system prompt is content, not code: it is AGENTS.md, discovered via
+/// `agents_md_path`. The binary ships NO prompt text — with no AGENTS.md
+/// anywhere, the agent runs on the skill advertisements alone.
 #[tauri::command]
 pub(crate) fn get_system_prompt() -> String {
-    match agents_md_path().and_then(|p| std::fs::read_to_string(p).ok()) {
-        Some(s) if !s.trim().is_empty() => s,
-        _ => DEFAULT_SYSTEM_PROMPT.to_string(),
-    }
+    agents_md_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_default()
 }
 
 /// Skills advertised to the frontend for system-prompt injection (stage 1
@@ -232,11 +229,12 @@ mod tests {
 
     #[test]
     fn system_prompt_comes_from_agents_md_not_the_binary() {
-        // cargo test runs with cwd = src-tauri: ../AGENTS.md is the repo file.
-        // It carries the file:// link rule; the built-in fallback does not.
+        // cargo test runs with cwd = src-tauri: ../AGENTS.md is the repo
+        // file. The binary carries no prompt text at all, so anything
+        // present here necessarily came from the file.
         let p = get_system_prompt();
         assert!(p.contains("First Mate"));
-        assert!(p.contains("file://"), "repo AGENTS.md must win over fallback");
+        assert!(p.contains("file://"), "prompt must come from AGENTS.md");
     }
 
     #[test]
