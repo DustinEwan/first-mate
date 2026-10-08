@@ -344,14 +344,31 @@ fn agent_tools() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "write_file",
-                "description": "Write content to a file on the Windows filesystem.",
+                "description": "Create a new file, or replace an existing file ENTIRELY. Overwriting an existing file requires 'tag': the TAG from its [path#TAG] header in your latest read_file - an existing file you never read is refused. Prefer edit_file for partial changes.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "path": {"type": "string", "description": "The file path to write"},
-                        "content": {"type": "string", "description": "The content to write"}
+                        "content": {"type": "string", "description": "The full content to write"},
+                        "tag": {"type": "string", "description": "TAG from your last read of this file; required only when the file already exists"}
                     },
                     "required": ["path", "content"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "edit_file",
+                "description": "Line-anchored edits on a file you have read. 'tag' MUST be the TAG from the `[path#TAG]` header of your latest read_file of it; a stale or never-seen tag is refused (re-read, re-anchor, retry). 'ops' is newline-separated instructions using the 1-based line numbers from that read; body lines are prefixed '+' and inserted verbatim (a lone '+' is a blank line). Apply ops bottom-up (highest line number first). Forms: 'PUT N.=M:' replace lines N..M with the body; 'PUT <N:' insert body before line N; 'PUT >N:' insert body after line N; 'CUT N.=M' delete lines N..M. Ops must not overlap; two inserts at one anchor are rejected.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "The file path to edit"},
+                        "tag": {"type": "string", "description": "TAG from the [path#TAG] header of your last read of this file"},
+                        "ops": {"type": "string", "description": "Newline-separated PUT/CUT instructions, bottom-up"}
+                    },
+                    "required": ["path", "tag", "ops"]
                 }
             }
         },
@@ -1887,13 +1904,155 @@ fn record_snapshot(path: &str, tag: &str) {
 }
 
 /// The tag the model last saw for `path`, if it ever read it.
-#[allow(dead_code)] // consumed by edit_file/write_file guards
 fn seen_snapshot(path: &str) -> Option<String> {
     snapshot_tags()
         .lock()
         .unwrap()
         .get(&path.to_lowercase())
         .cloned()
+}
+
+/// One line-anchored instruction for `edit_file`.
+enum EditOp {
+    Replace { lo: usize, hi: usize, body: Vec<String> },
+    InsertBefore { at: usize, body: Vec<String> },
+    InsertAfter { at: usize, body: Vec<String> },
+    Cut { lo: usize, hi: usize },
+}
+
+impl EditOp {
+    /// Inclusive line span the op touches (inserts anchor at their gap).
+    fn span(&self) -> (usize, usize) {
+        match self {
+            EditOp::Replace { lo, hi, .. } | EditOp::Cut { lo, hi } => (*lo, *hi),
+            EditOp::InsertBefore { at, .. } | EditOp::InsertAfter { at, .. } => (*at, *at),
+        }
+    }
+    fn anchor(&self) -> usize {
+        self.span().0
+    }
+}
+
+fn parse_line(s: &str, op: &str) -> Result<usize, String> {
+    s.trim()
+        .parse::<usize>()
+        .map_err(|_| format!("op '{op}': '{s}' is not a line number"))
+}
+
+/// Parse the newline-separated `ops` payload. PUT headers end with ':' and
+/// take the following '+'-prefixed lines as their verbatim body.
+fn parse_edit_ops(ops: &str) -> Result<Vec<EditOp>, String> {
+    let lines: Vec<&str> = ops.split('\n').collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i].trim_end_matches('\r');
+        if line.trim().is_empty() {
+            i += 1;
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("PUT ") {
+            let Some(spec) = rest.strip_suffix(':') else {
+                return Err(format!("op '{line}': PUT header must end with ':'"));
+            };
+            let mut body = Vec::new();
+            i += 1;
+            while i < lines.len() && lines[i].starts_with('+') {
+                body.push(lines[i][1..].trim_end_matches('\r').to_string());
+                i += 1;
+            }
+            if let Some(at) = spec.strip_prefix('<') {
+                out.push(EditOp::InsertBefore { at: parse_line(at, line)?, body });
+            } else if let Some(at) = spec.strip_prefix('>') {
+                out.push(EditOp::InsertAfter { at: parse_line(at, line)?, body });
+            } else {
+                let (a, b) = match spec.split_once(".=") {
+                    Some((a, b)) => (a, b),
+                    None => {
+                        let a = spec.trim_end_matches('.');
+                        (a, a)
+                    }
+                };
+                let lo = parse_line(a, line)?;
+                let hi = parse_line(b, line)?;
+                if lo > hi {
+                    return Err(format!("op '{line}': empty range {lo}.={hi}"));
+                }
+                out.push(EditOp::Replace { lo, hi, body });
+            }
+        } else if let Some(rest) = line.strip_prefix("CUT ") {
+            let (a, b) = match rest.split_once(".=") {
+                Some((a, b)) => (a, b),
+                None => {
+                    let a = rest.trim_end_matches('.');
+                    (a, a)
+                }
+            };
+            let lo = parse_line(a, line)?;
+            let hi = parse_line(b, line)?;
+            if lo > hi {
+                return Err(format!("op '{line}': empty range {lo}.={hi}"));
+            }
+            out.push(EditOp::Cut { lo, hi });
+            i += 1;
+        } else {
+            return Err(format!(
+                "unknown op '{line}': expected PUT N.=M:, PUT <N:, PUT >N:, or CUT N.=M"
+            ));
+        }
+    }
+    if out.is_empty() {
+        return Err("no ops given".into());
+    }
+    Ok(out)
+}
+
+/// Validate against `total` lines, then apply bottom-up so earlier line
+/// numbers stay valid while later ops are applied. Returns per-op summaries.
+fn apply_edit_ops(lines: &mut Vec<String>, ops: &[EditOp], total: usize) -> Result<Vec<String>, String> {
+    let mut spans = Vec::new();
+    for op in ops {
+        let (lo, hi) = op.span();
+        if lo < 1 || hi > total {
+            return Err(format!(
+                "op anchors lines {lo}-{hi} but the file has {total} lines; re-read it"
+            ));
+        }
+        spans.push((lo, hi));
+    }
+    spans.sort();
+    for w in spans.windows(2) {
+        if w[1].0 <= w[0].1 {
+            return Err(format!(
+                "ops overlap around line {} (and two inserts at the same anchor are ambiguous)",
+                w[1].0
+            ));
+        }
+    }
+    let mut sorted: Vec<&EditOp> = ops.iter().collect();
+    sorted.sort_by_key(|o| std::cmp::Reverse(o.anchor()));
+    let mut summaries = Vec::new();
+    for op in sorted {
+        match op {
+            EditOp::Replace { lo, hi, body } => {
+                lines.splice((lo - 1)..(*hi), body.iter().cloned());
+                summaries.push(format!("PUT {lo}.{hi} -> {} line(s)", body.len()));
+            }
+            EditOp::Cut { lo, hi } => {
+                lines.drain((lo - 1)..*hi);
+                summaries.push(format!("CUT {lo}.{hi}"));
+            }
+            EditOp::InsertBefore { at, body } => {
+                lines.splice((*at - 1)..(*at - 1), body.iter().cloned());
+                summaries.push(format!("inserted {} line(s) before {at}", body.len()));
+            }
+            EditOp::InsertAfter { at, body } => {
+                lines.splice(*at..*at, body.iter().cloned());
+                summaries.push(format!("inserted {} line(s) after {at}", body.len()));
+            }
+        }
+    }
+    Ok(summaries)
 }
 
 /// Inline shell programs that duplicate a dedicated tool. Routing applies
@@ -2149,8 +2308,65 @@ async fn execute_tool_notify(
         "write_file" => {
             let path = args.get("path").and_then(|c| c.as_str()).unwrap_or("");
             let content = args.get("content").and_then(|c| c.as_str()).unwrap_or("");
-            tokio::fs::write(path, content).await.map_err(|e| e.to_string())?;
-            Ok("OK".to_string())
+            if tokio::fs::try_exists(path).await.unwrap_or(false) {
+                // Overwrite guard: the model must have READ this file and
+                // must echo its current snapshot tag. The current tag is
+                // deliberately not leaked in the error.
+                let bytes = tokio::fs::read(path).await.map_err(|e| e.to_string())?;
+                let current = snapshot_tag(&bytes);
+                let tag = args.get("tag").and_then(|c| c.as_str()).unwrap_or("");
+                if tag != current || seen_snapshot(path).as_deref() != Some(tag) {
+                    return Err(format!(
+                        "{path} already exists and this write would replace its entire \
+                         content. read_file it first, then re-issue write_file with the \
+                         tag from its [path#TAG] header (or use edit_file for partial \
+                         changes). If the tag you have is rejected, the file changed \
+                         since your read - read it again."
+                    ));
+                }
+            }
+            tokio::fs::write(path, content)
+                .await
+                .map_err(|e| format!("write {path}: {e}"))?;
+            let new_tag = snapshot_tag(content.as_bytes());
+            record_snapshot(path, &new_tag);
+            Ok(format!(
+                "wrote {} bytes to {path}\n[{path}#{new_tag}]",
+                content.len()
+            ))
+        }
+        "edit_file" => {
+            let path = args.get("path").and_then(|c| c.as_str()).unwrap_or("");
+            let tag = args.get("tag").and_then(|c| c.as_str()).unwrap_or("");
+            let ops = args.get("ops").and_then(|c| c.as_str()).unwrap_or("");
+            let bytes = tokio::fs::read(path).await.map_err(|e| format!("read {path}: {e}"))?;
+            if bytes.iter().take(8192).any(|b| *b == 0) {
+                return Err(format!("{path} is binary; edit_file refuses"));
+            }
+            let current = snapshot_tag(&bytes);
+            if tag != current || seen_snapshot(path).as_deref() != Some(tag) {
+                return Err(format!(
+                    "edit refused for {path}: tag '{tag}' is not the snapshot you last saw \
+                     (file's current tag is #{current}). read_file it again, re-anchor the \
+                     line numbers, and retry with the new tag."
+                ));
+            }
+            let ops = parse_edit_ops(ops)?;
+            let text = String::from_utf8_lossy(&bytes);
+            let mut lines: Vec<String> = text.split('\n').map(str::to_string).collect();
+            let total = lines.len().max(1);
+            let summaries = apply_edit_ops(&mut lines, &ops, total)?;
+            let new_text = lines.join("\n");
+            tokio::fs::write(path, &new_text)
+                .await
+                .map_err(|e| format!("write {path}: {e}"))?;
+            let new_tag = snapshot_tag(new_text.as_bytes());
+            record_snapshot(path, &new_tag);
+            Ok(format!(
+                "edited {path}: {}\n[{path}#{new_tag}] - line numbers shifted; re-read before \
+                 anchoring another edit unless you are certain of the layout.",
+                summaries.join("; ")
+            ))
         }
         "list_dir" => {
             let path = args.get("path").and_then(|c| c.as_str()).unwrap_or("");
@@ -3166,17 +3382,17 @@ mod tests {
             .map(|t| t.pointer("/function/name").and_then(|n| n.as_str()).unwrap())
             .collect();
         assert_eq!(core_names.len(), CORE_TOOLS.len());
-        for hidden in ["read_file", "write_file", "list_dir", "search_files", "list_processes"] {
+        for hidden in ["read_file", "edit_file", "write_file", "list_dir", "search_files", "list_processes"] {
             assert!(!core_names.contains(&hidden), "{hidden} must not be in core");
         }
         let fs_skill = skill_dir("filesystem").expect("filesystem skill dir");
         let md = std::fs::read_to_string(fs_skill.join("SKILL.md")).unwrap();
         let (_, _, declared, _) = parse_frontmatter(&md);
-        assert_eq!(declared.len(), 5, "filesystem skill declares 5 tools");
+        assert_eq!(declared.len(), 6, "filesystem skill declares 6 tools");
         let mut active = core.clone();
         let added = enable_skill_tools(&mut active, "filesystem");
-        assert_eq!(added.len(), 5);
-        assert_eq!(active.len(), core.len() + 5);
+        assert_eq!(added.len(), 6);
+        assert_eq!(active.len(), core.len() + 6);
         // Idempotent: loading twice adds nothing.
         assert!(enable_skill_tools(&mut active, "filesystem").is_empty());
         // Pure-behavior skill enables nothing; unknown skill enables nothing.
@@ -3709,6 +3925,135 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.contains("binary"), "{err}");
+        std::fs::remove_file(&p).ok();
+    }
+    fn fs_tools() -> Vec<serde_json::Value> {
+        ["read_file", "edit_file", "write_file"]
+            .iter()
+            .filter_map(|n| tool_schema(n))
+            .collect()
+    }
+
+    fn tag_of(out: &str) -> String {
+        let h = out.lines().find(|l| l.starts_with('[')).unwrap();
+        let start = h.find('#').unwrap() + 1;
+        h[start..start + 4].to_string()
+    }
+
+    async fn fs_call(name: &str, args: serde_json::Value) -> Result<String, String> {
+        execute_tool_notify(std::sync::Arc::new(NoopNotifier), &fs_tools(), name, &args).await
+    }
+
+    #[tokio::test]
+    async fn edit_file_applies_ops_against_snapshot_tag() {
+        let p = temp_path("edit1.txt");
+        std::fs::write(&p, "l1\nl2\nl3\nl4\n").unwrap();
+        let read = fs_call("read_file", serde_json::json!({ "path": &p }))
+            .await
+            .unwrap();
+        let tag = tag_of(&read);
+        // Bottom-up: replace line 4, cut 2-3, insert before 1.
+        let res = fs_call(
+            "edit_file",
+            serde_json::json!({
+                "path": &p, "tag": &tag,
+                "ops": "PUT 4.=4:\n+FOUR\nCUT 2.=3\nPUT <1:\n+HEAD\n"
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "HEAD\nl1\nFOUR\n");
+        // Result reports the new snapshot, and a re-read agrees.
+        let new_tag = tag_of(&res);
+        let again = fs_call("read_file", serde_json::json!({ "path": &p }))
+            .await
+            .unwrap();
+        assert_eq!(tag_of(&again), new_tag);
+        // The OLD tag is now refused: stale anchors must not corrupt.
+        let err = fs_call(
+            "edit_file",
+            serde_json::json!({ "path": &p, "tag": &tag, "ops": "CUT 1.=1" }),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("read_file"), "{err}");
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[tokio::test]
+    async fn edit_file_rejects_bad_ops() {
+        let p = temp_path("edit2.txt");
+        std::fs::write(&p, "a\nb\nc\n").unwrap();
+        let tag = tag_of(&fs_call("read_file", serde_json::json!({ "path": &p }))
+            .await
+            .unwrap());
+        let err = fs_call(
+            "edit_file",
+            serde_json::json!({ "path": &p, "tag": &tag, "ops": "CUT 9.=10" }),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("the file has"), "{err}");
+        let err = fs_call(
+            "edit_file",
+            serde_json::json!({ "path": &p, "tag": &tag, "ops": "PUT 1.=2:\n+x\nCUT 2.=3" }),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("overlap"), "{err}");
+        let err = fs_call(
+            "edit_file",
+            serde_json::json!({ "path": &p, "tag": &tag, "ops": "REPLACE 1 with x" }),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("unknown op"), "{err}");
+        // Untouched by the rejected attempts.
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "a\nb\nc\n");
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[tokio::test]
+    async fn write_file_requires_read_before_overwrite() {
+        let p = temp_path("guard.txt");
+        std::fs::remove_file(&p).ok();
+        // New file: no tag needed, result is meaningful.
+        let res = fs_call(
+            "write_file",
+            serde_json::json!({ "path": &p, "content": "v1\n" }),
+        )
+        .await
+        .unwrap();
+        assert!(res.contains("wrote 3 bytes"), "{res}");
+        // Existing file, no tag: refused, and the current tag is NOT leaked.
+        let err = fs_call(
+            "write_file",
+            serde_json::json!({ "path": &p, "content": "v2\n" }),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("read_file") && !err.contains(&tag_of(&res)), "{err}");
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "v1\n");
+        // Read it, then overwrite with the fresh tag.
+        let tag = tag_of(&fs_call("read_file", serde_json::json!({ "path": &p }))
+            .await
+            .unwrap());
+        fs_call(
+            "write_file",
+            serde_json::json!({ "path": &p, "content": "v2\n", "tag": &tag }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "v2\n");
+        // External change invalidates the tag we just saw.
+        std::fs::write(&p, "external\n").unwrap();
+        let err = fs_call(
+            "write_file",
+            serde_json::json!({ "path": &p, "content": "v3\n", "tag": &tag }),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("changed"), "{err}");
         std::fs::remove_file(&p).ok();
     }
 }
