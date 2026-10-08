@@ -58,4 +58,3 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           releaseTag: ${{ steps.tag.outputs.tag }}
-          args: --target x64
