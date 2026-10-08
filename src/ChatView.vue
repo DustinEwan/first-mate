@@ -60,6 +60,20 @@ const inputRef = ref<HTMLElement>();
 let liveMsgId = -1;
 const spinnerChar = ref("⠋");
 
+// Conversation persistence + side panel.
+interface ConvInfo {
+  name: string;
+  path: string;
+  modified: number;
+}
+interface ConvMsg {
+  role: string;
+  text: string;
+}
+const panelOpen = ref(false);
+const conversations = ref<ConvInfo[]>([]);
+const convName = ref<string | null>(null);
+
 function focusInput() {
   const el = inputRef.value?.querySelector("input");
   if (el) el.focus();
@@ -77,7 +91,51 @@ function addMsg(text: string, cls = "") {
   messages.value.push({ id: nextId++, text, cls });
 }
 
+function persistConversation() {
+  const turns = messages.value
+    .filter((m) => (m.cls === "user" || m.cls === "assistant") && m.text.trim())
+    .map((m) => ({ role: m.cls, text: m.text }));
+  if (turns.length === 0) return;
+  if (!convName.value) {
+    const first = turns.find((t) => t.role === "user");
+    convName.value = (first ? first.text : "Chat").replace(/\s+/g, " ").trim().slice(0, 48);
+  }
+  invoke<string>("save_conversation", { name: convName.value, messages: turns })
+    .then(() => refreshConversations())
+    .catch((e) => console.error("save failed", e));
+}
+
+function refreshConversations() {
+  return invoke<ConvInfo[]>("list_conversations")
+    .then((list) => {
+      conversations.value = list;
+    })
+    .catch((e) => console.error("list failed", e));
+}
+
+function openConversation(c: ConvInfo) {
+  invoke<ConvMsg[]>("load_conversation", { path: c.path })
+    .then((msgs) => {
+      messages.value = msgs.map((m) => ({ id: nextId++, text: m.text, cls: m.role }));
+      convName.value = c.name;
+      panelOpen.value = false;
+    })
+    .catch((e) => console.error("load failed", e));
+}
+
+function newChat() {
+  messages.value = [];
+  convName.value = null;
+  panelOpen.value = false;
+}
+
 onMounted(() => {
+  // Restore the most recent conversation so chats survive restarts.
+  refreshConversations().then(() => {
+    if (conversations.value.length > 0) {
+      openConversation(conversations.value[0]);
+    }
+  });
   invoke<string>("get_hotkey").then((hotkey) => {
     addMsg(`First Mate is online. Summon with ${hotkey}.`, "dim");
   });
@@ -277,6 +335,7 @@ async function submit() {
   } finally {
     isThinking.value = false;
     liveMsgId = -1;
+    persistConversation();
   }
 }
 
@@ -296,9 +355,12 @@ watch(messages, () => {
   });
 }, { deep: true });
 
-// Escape hides the window.
+// Escape closes the panel first, then hides the window.
 window.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") hide();
+  if (e.key === "Escape") {
+    if (panelOpen.value) panelOpen.value = false;
+    else hide();
+  }
 });
 </script>
 
@@ -307,37 +369,61 @@ window.addEventListener("keydown", (e) => {
     <div class="chat">
       <header class="titlebar">
         <span class="title">First Mate</span>
+        <button
+          class="panel-toggle"
+          :title="panelOpen ? 'Hide chats' : 'Show chats'"
+          @click="panelOpen = !panelOpen; refreshConversations()"
+        >&#9776;</button>
         <button class="close" @click="hide">&#10005;</button>
       </header>
-      <DynamicScroller
-        ref="scrollerRef"
-        :items="messages"
-        :min-size="40"
-        key-field="id"
-        class="scroller"
-      >
-        <template v-slot="{ item, active }">
-          <DynamicScrollerItem
-            :item="item"
-            :active="active"
-            :size-dependencies="[item.text]"
+      <div class="body">
+        <div class="main">
+          <DynamicScroller
+            ref="scrollerRef"
+            :items="messages"
+            :min-size="40"
+            key-field="id"
+            class="scroller"
           >
-            <div
-              v-if="item.cls === 'assistant'"
-              class="msg assistant md"
-              v-html="renderMd(item.text)"
-            ></div>
-            <div v-else class="msg" :class="item.cls">{{ item.text }}</div>
-          </DynamicScrollerItem>
-        </template>
-      </DynamicScroller>
-      <div v-if="isThinking" class="msg dim thinking">First Mate {{ spinnerChar }}</div>
-      <div class="input-row" ref="inputRef">
-        <n-input
-          v-model:value="input"
-          placeholder="Type a message…"
-          @keydown.enter.prevent="submit"
-        />
+            <template v-slot="{ item, active }">
+              <DynamicScrollerItem
+                :item="item"
+                :active="active"
+                :size-dependencies="[item.text]"
+              >
+                <div
+                  v-if="item.cls === 'assistant'"
+                  class="msg assistant md"
+                  v-html="renderMd(item.text)"
+                ></div>
+                <div v-else class="msg" :class="item.cls">{{ item.text }}</div>
+              </DynamicScrollerItem>
+            </template>
+          </DynamicScroller>
+          <div v-if="isThinking" class="msg dim thinking">First Mate {{ spinnerChar }}</div>
+          <div class="input-row" ref="inputRef">
+            <n-input
+              v-model:value="input"
+              placeholder="Type a message…"
+              @keydown.enter.prevent="submit"
+            />
+          </div>
+        </div>
+        <aside v-if="panelOpen" class="side">
+          <div class="side-head">
+            <span>Chats</span>
+            <button class="new-chat" @click="newChat">New</button>
+          </div>
+          <ul class="conv-list">
+            <li
+              v-for="c in conversations"
+              :key="c.path"
+              :class="{ active: c.name === convName }"
+              :title="c.name"
+              @click="openConversation(c)"
+            >{{ c.name }}</li>
+          </ul>
+        </aside>
       </div>
     </div>
   </n-config-provider>
