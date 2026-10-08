@@ -209,6 +209,56 @@ body {
   font-family: monospace;
 }
 
+/* Tool report: one bordered panel with identity / effect / metadata
+   sections, mirroring the TUI's boxed tool output. */
+.msg.tool.report {
+  padding: 0;
+  margin: 2px 12px 8px;
+  border: 1px solid #2c2c31;
+  border-radius: 6px;
+  background: #141518;
+  white-space: normal;
+}
+.rb-head {
+  padding: 6px 10px;
+  background: #1c1d21;
+  border-bottom: 1px solid #2c2c31;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.msg.tool.report.failed .rb-head {
+  color: #d03050;
+}
+.rb-body {
+  margin: 0;
+  padding: 6px 10px;
+  color: #c9ced6;
+  font: inherit;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.rb-line {
+  display: block;
+}
+.rb-line.add {
+  color: #7ee787;
+  background: rgba(46, 160, 67, 0.15);
+}
+.rb-line.del {
+  color: #ffa198;
+  background: rgba(248, 81, 73, 0.15);
+}
+.rb-foot {
+  padding: 5px 10px;
+  color: #8a8f98;
+}
+.rb-body + .rb-foot {
+  border-top: 1px solid #2c2c31;
+}
+.rb-foot.pending {
+  font-style: italic;
+}
+
 /* Markdown-rendered assistant output. */
 .msg.md {
   white-space: normal;

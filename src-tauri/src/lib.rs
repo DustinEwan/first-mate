@@ -672,6 +672,10 @@ fn list_skills() -> Vec<SkillInfo> {
 struct ConvMsg {
     role: String,
     text: String,
+    /// Structured facts for tool turns: the UI renders these on resume;
+    /// `text` is the model-facing transcript.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    report: Option<ToolReport>,
 }
 
 #[derive(serde::Serialize)]
@@ -1355,17 +1359,33 @@ impl BgNotifier for AppNotifier {
             },
             1500,
         );
-        let f = fence_for(&body);
-        let mark = if status.starts_with("exited: 0") {
-            "✅"
-        } else {
-            "❌"
+        let report = ToolReport {
+            tool: "run_command".into(),
+            subject: command.split_whitespace().collect::<Vec<_>>().join(" "),
+            detail: None,
+            shell: None,
+            cwd: None,
+            background: Some(true),
+            from_tag: None,
+            ok: status.starts_with("exited: 0"),
+            error: None,
+            status: Some(status.to_string()),
+            pid: Some(pid as u64),
+            wall_ms: 0,
+            tag: None,
+            count: None,
+            unit: None,
+            body: (!body.trim().is_empty()).then_some(ReportBody {
+                kind: "output".into(),
+                text: body,
+            }),
         };
         let _ = self.0.emit(
             "tool_result",
             serde_json::json!({
                 "name": format!("bg {pid}"),
-                "summary": format!("$ {command}\n{f}\n{body}\n{f}\n{mark} {status} · pid {pid}"),
+                "transcript": report.transcript(),
+                "report": &report,
             }),
         );
         log(&format!("BG ANNOUNCE pid {pid}: {status}"));
@@ -2138,10 +2158,165 @@ fn extract_diff_fence(s: &str) -> Option<String> {
     Some(s[start..end].to_string())
 }
 
-/// Identity line: what was asked, in the tool's own notation - a command
-/// line for shell, a path header for files. Shown while the tool runs and
-/// reused as the finished block's header.
-fn tool_identity(name: &str, args: &serde_json::Value) -> String {
+/// What a tool call DID - pure facts, no presentation. The frontend renders
+/// these fields into its report panel; `transcript()` serializes them into
+/// the flat model-facing form persisted to `.chat` and resumed as context.
+/// The UI never renders the transcript; the transcript never sees a glyph
+/// decision made for the UI.
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct ToolReport {
+    tool: String,
+    /// What was acted on: command, path, pid, pattern...
+    subject: String,
+    /// Secondary info in the tool's own notation: read window ("2-4"),
+    /// edit op headers, search root...
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    shell: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    background: Option<bool>,
+    /// Snapshot tag an edit was anchored to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    from_tag: Option<String>,
+    ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    /// Background completion status ("exited: 0", "killed").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pid: Option<u64>,
+    wall_ms: u64,
+    /// Snapshot tag after a successful write/edit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tag: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    count: Option<usize>,
+    /// Unit for `count`: "lines" | "entries" | "bytes".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    unit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    body: Option<ReportBody>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct ReportBody {
+    /// "output" (program output) or "diff" (applied edit lines).
+    kind: String,
+    text: String,
+}
+
+impl ToolReport {
+    /// The model-facing flat form. This is conversation CONTENT (it is what
+    /// a resumed model re-reads), not UI markup.
+    fn transcript(&self) -> String {
+        let mut out = self.headline();
+        if let Some(b) = &self.body {
+            if !b.text.trim().is_empty() {
+                let f = fence_for(&b.text);
+                let lang = if b.kind == "diff" { "diff" } else { "" };
+                out.push_str(&format!("\n{f}{lang}\n{}\n{f}", b.text));
+            }
+        }
+        out.push('\n');
+        out.push_str(&self.footer());
+        out
+    }
+
+    fn headline(&self) -> String {
+        match self.tool.as_str() {
+            "run_command" => {
+                let mut id = format!("$ {}", clip_chars(&self.subject, 160));
+                if let Some(sh) = &self.shell {
+                    if sh != "cmd" {
+                        id.push_str(&format!(" [{sh}]"));
+                    }
+                }
+                if let Some(cwd) = &self.cwd {
+                    id.push_str(&format!(" in {}", base_name(cwd)));
+                }
+                if self.background == Some(true) {
+                    id.push_str(" [bg]");
+                }
+                id
+            }
+            "read_file" => format!(
+                "→ {}{}",
+                base_name(&self.subject),
+                self.detail.as_deref().map(|d| format!(":{d}")).unwrap_or_default()
+            ),
+            "edit_file" => format!(
+                "✎ {} #{} {}",
+                base_name(&self.subject),
+                self.from_tag.clone().unwrap_or_default(),
+                self.detail.clone().unwrap_or_default()
+            ),
+            "write_file" => format!(
+                "✎ {} ({} bytes)",
+                base_name(&self.subject),
+                self.count.unwrap_or(0)
+            ),
+            "list_dir" => format!("▸ {}", self.subject),
+            "search_files" => format!(
+                "⌕ \"{}\" under {}",
+                self.subject,
+                self.detail.clone().unwrap_or_default()
+            ),
+            "list_processes" => "≣ running processes".to_string(),
+            "get_command_output" => format!("◷ output of pid {}", self.subject),
+            "kill_command" => format!("✖ kill pid {}", self.subject),
+            "load_skill" => format!("📖 load_skill {}", self.subject),
+            "read_skill_resource" => format!("📖 {}", self.subject),
+            _ => clip_chars(&format!("{} {}", self.tool, self.detail.clone().unwrap_or_default()), 140),
+        }
+    }
+
+    fn footer(&self) -> String {
+        let mark = if self.ok {
+            "✅".to_string()
+        } else {
+            format!(
+                "❌ {}",
+                clip_chars(self.error.as_deref().unwrap_or("failed"), 120)
+            )
+        };
+        let mut meta: Vec<String> = Vec::new();
+        if let Some(st) = &self.status {
+            meta.push(st.clone());
+        }
+        if self.wall_ms > 0 {
+            meta.push(format!("{:.1}s", self.wall_ms as f64 / 1000.0));
+        }
+        if let Some(tag) = &self.tag {
+            meta.push(format!("#{tag}"));
+        }
+        if let (Some(n), Some(u)) = (&self.count, &self.unit) {
+            meta.push(format!("{n} {u}"));
+        }
+        // The pid identifies WHICH background job finished; for foreground
+        // tools it is already the subject.
+        if let (Some(pid), Some(_)) = (self.pid, &self.status) {
+            meta.push(format!("pid {pid}"));
+        }
+        if meta.is_empty() {
+            mark
+        } else {
+            format!("{mark} {}", meta.join(" · "))
+        }
+    }
+}
+
+/// Extract the facts of a finished tool call from its args and result.
+fn tool_report(
+    name: &str,
+    args: &serde_json::Value,
+    result: &str,
+    wall_ms: u128,
+) -> ToolReport {
+    let ok = !result.starts_with("Error");
     let s = |k: &str| match args.get(k) {
         // Numeric args (pids) stringify; string args pass through unquoted.
         Some(v) => v
@@ -2150,33 +2325,30 @@ fn tool_identity(name: &str, args: &serde_json::Value) -> String {
             .unwrap_or_else(|| v.to_string()),
         None => String::new(),
     };
-    match name {
-        "run_command" => {
-            let cmd = clip_chars(&s("command").split_whitespace().collect::<Vec<_>>().join(" "), 160);
-            let mut id = format!("$ {cmd}");
-            let shell = s("shell");
-            if !shell.is_empty() && shell != "cmd" {
-                id.push_str(&format!(" [{}]", shell));
-            }
-            if let Some(cwd) = args.get("cwd").and_then(|v| v.as_str()) {
-                id.push_str(&format!(" in {}", base_name(cwd)));
-            }
-            if args.get("background").and_then(|v| v.as_bool()) == Some(true) {
-                id.push_str(" [bg]");
-            }
-            id
-        }
+    let opt = |k: &str| {
+        args.get(k)
+            .and_then(|v| v.as_str())
+            .map(|v| v.to_string())
+            .filter(|v| !v.is_empty())
+    };
+    let (subject, detail) = match name {
+        "run_command" => (
+            s("command")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" "),
+            None,
+        ),
         "read_file" => {
-            let mut id = format!("→ {}", base_name(&s("path")));
-            if let Some(off) = args.get("offset").and_then(|v| v.as_u64()) {
+            let detail = args.get("offset").and_then(|v| v.as_u64()).map(|off| {
                 let end = args
                     .get("limit")
                     .and_then(|v| v.as_u64())
                     .map(|l| format!("{}", off + l - 1))
                     .unwrap_or_else(|| "…".into());
-                id.push_str(&format!(":{off}-{end}"));
-            }
-            id
+                format!("{off}-{end}")
+            });
+            (s("path"), detail)
         }
         "edit_file" => {
             let ops = s("ops");
@@ -2184,25 +2356,15 @@ fn tool_identity(name: &str, args: &serde_json::Value) -> String {
                 .lines()
                 .filter(|l| !l.is_empty() && !l.starts_with('+'))
                 .collect();
-            format!(
-                "✎ {} #{} {}",
-                base_name(&s("path")),
-                s("tag"),
-                clip_chars(&heads.join(", "), 90)
-            )
+            (s("path"), Some(clip_chars(&heads.join(", "), 90)))
         }
-        "write_file" => format!(
-            "✎ {} ({} bytes)",
-            base_name(&s("path")),
-            s("content").len()
-        ),
-        "list_dir" => format!("▸ {}", s("path")),
-        "search_files" => format!("⌕ \"{}\" under {}", s("pattern"), s("root")),
-        "list_processes" => "≣ running processes".to_string(),
-        "get_command_output" => format!("◷ output of pid {}", s("pid")),
-        "kill_command" => format!("✖ kill pid {}", s("pid")),
-        "load_skill" => format!("📖 load_skill {}", s("name")),
-        "read_skill_resource" => format!("📖 {}", s("path")),
+        "write_file" => (s("path"), None),
+        "list_dir" => (s("path"), None),
+        "search_files" => (s("pattern"), Some(s("root"))),
+        "list_processes" => (String::new(), None),
+        "get_command_output" | "kill_command" => (s("pid"), None),
+        "load_skill" => (s("name"), None),
+        "read_skill_resource" => (s("path"), None),
         _ => {
             let kv = args
                 .as_object()
@@ -2213,73 +2375,73 @@ fn tool_identity(name: &str, args: &serde_json::Value) -> String {
                         .join(" ")
                 })
                 .unwrap_or_default();
-            clip_chars(&format!("{name} {kv}"), 140)
-        }
-    }
-}
-
-/// The ledger block for a finished tool call: identity header, effect body
-/// (fenced, clipped), metadata footer. This text is what persists to `.chat`
-/// and resumes as context, so it states what HAPPENED, not what was asked.
-fn tool_ledger(name: &str, args: &serde_json::Value, result: &str, wall_ms: u128) -> String {
-    let ok = !result.starts_with("Error");
-    let mut out = tool_identity(name, args);
-    let (body, lang) = if !ok {
-        (clip_lines(result, 6), "")
-    } else {
-        match name {
-            "edit_file" => (extract_diff_fence(result).unwrap_or_default(), "diff"),
-            "run_command" | "get_command_output" => (clip_lines(result, 18), ""),
-            _ => (String::new(), ""),
+            (name.to_string(), Some(kv))
         }
     };
-    if !body.trim().is_empty() {
-        let f = fence_for(&body);
-        out.push_str(&format!("\n{f}{lang}\n{body}\n{f}"));
-    }
-    let mark = if ok {
-        "✅".to_string()
+    let body = if !ok {
+        Some(ReportBody {
+            kind: "output".into(),
+            text: clip_lines(result, 6),
+        })
     } else {
-        format!(
-            "❌ {}",
-            clip_chars(result.strip_prefix("Error: ").unwrap_or(result), 120)
-        )
-    };
-    let mut meta: Vec<String> = Vec::new();
-    if wall_ms > 0 {
-        meta.push(format!("{:.1}s", wall_ms as f64 / 1000.0));
-    }
-    if ok {
         match name {
-            "write_file" | "edit_file" => {
-                if let Some(tag) = result_tag(result) {
-                    meta.push(format!("#{tag}"));
-                }
-            }
-            "read_file" => {
-                let n = result
-                    .lines()
-                    .filter(|l| {
-                        l.split_once(':').is_some_and(|(a, _)| {
-                            !a.is_empty() && a.chars().all(|c| c.is_ascii_digit())
+            "edit_file" => extract_diff_fence(result).map(|text| ReportBody {
+                kind: "diff".into(),
+                text,
+            }),
+            "run_command" | "get_command_output" => Some(ReportBody {
+                kind: "output".into(),
+                text: clip_lines(result, 18),
+            }),
+            _ => None,
+        }
+    };
+    let (count, unit) = if ok {
+        match name {
+            "write_file" => (Some(s("content").len()), Some("bytes")),
+            "read_file" => (
+                Some(
+                    result
+                        .lines()
+                        .filter(|l| {
+                            l.split_once(':').is_some_and(|(a, _)| {
+                                !a.is_empty() && a.chars().all(|c| c.is_ascii_digit())
+                            })
                         })
-                    })
-                    .count();
-                meta.push(format!("{n} lines"));
-            }
-            "list_dir" | "search_files" => {
-                meta.push(format!("{} entries", result.lines().count()));
-            }
-            _ => {}
+                        .count(),
+                ),
+                Some("lines"),
+            ),
+            "list_dir" | "search_files" => (Some(result.lines().count()), Some("entries")),
+            _ => (None, None),
         }
-    }
-    out.push('\n');
-    out.push_str(&if meta.is_empty() {
-        mark
     } else {
-        format!("{mark} {}", meta.join(" · "))
-    });
-    out
+        (None, None)
+    };
+    ToolReport {
+        tool: name.to_string(),
+        subject,
+        detail: detail.filter(|d| !d.is_empty()),
+        shell: opt("shell"),
+        cwd: opt("cwd"),
+        background: (args.get("background").and_then(|v| v.as_bool()) == Some(true))
+            .then_some(true),
+        from_tag: opt("tag"),
+        ok,
+        error: (!ok)
+            .then(|| clip_chars(result.strip_prefix("Error: ").unwrap_or(result), 400)),
+        status: None,
+        pid: args.get("pid").and_then(|v| v.as_u64()).filter(|_| {
+            matches!(name, "get_command_output" | "kill_command")
+        }),
+        wall_ms: wall_ms as u64,
+        tag: (ok && matches!(name, "write_file" | "edit_file"))
+            .then(|| result_tag(result))
+            .flatten(),
+        count,
+        unit: unit.map(str::to_string),
+        body: body.filter(|b| !b.text.trim().is_empty()),
+    }
 }
 
 /// Inline shell programs that duplicate a dedicated tool. Routing applies
@@ -2880,7 +3042,6 @@ async fn chat_via_lmkit(
                     serde_json::json!({
                         "name": &name,
                         "args": &args,
-                        "identity": tool_identity(&name, &args),
                     }),
                 );
                 let t0 = std::time::Instant::now();
@@ -2892,10 +3053,11 @@ async fn chat_via_lmkit(
                     format!("Error: tool '{name}' is not available in this conversation. Its implementation exists but its schema is not disclosed; load the skill whose 'tools:' list enables it, then call it again.")
                 };
                 let ok = !result.starts_with("Error");
-                let ledger = tool_ledger(&name, &args, &result, t0.elapsed().as_millis());
+                let report = tool_report(&name, &args, &result, t0.elapsed().as_millis());
                 let _ = app.emit("tool_result", serde_json::json!({
                     "name": &name,
-                    "summary": ledger,
+                    "transcript": report.transcript(),
+                    "report": &report,
                 }));
                 history.push(ChatMessage::tool(call.id.clone(), result));
                 if name == "load_skill" && ok {
@@ -3177,7 +3339,6 @@ async fn chat_via_openai(
                     serde_json::json!({
                         "name": &name,
                         "args": &args,
-                        "identity": tool_identity(&name, &args),
                     }),
                 );
                 let t0 = std::time::Instant::now();
@@ -3188,10 +3349,11 @@ async fn chat_via_openai(
                 } else {
                     format!("Error: tool '{name}' is not available in this conversation. Its implementation exists but its schema is not disclosed; load the skill whose 'tools:' list enables it, then call it again.")
                 };
-                let ledger = tool_ledger(&name, &args, &result, t0.elapsed().as_millis());
+                let report = tool_report(&name, &args, &result, t0.elapsed().as_millis());
                 let _ = app.emit("tool_result", serde_json::json!({
                     "name": &name,
-                    "summary": ledger,
+                    "transcript": report.transcript(),
+                    "report": &report,
                 }));
                 msgs.push(serde_json::json!({
                     "role": "tool", "tool_call_id": call.id, "content": result
@@ -3393,9 +3555,9 @@ mod tests {
         looks_like_unexecuted_intent, merge_tool_call_delta, needs_shell, parse_command,
         parse_conversation, parse_frontmatter, resolve_conv_path, resolve_open_target,
         resolve_skill_resource, route_to_tool, sanitize_conv_name, serialize_conversation,
-        skill_dir, spawn_background, tool_identity, tool_is_disclosed, tool_ledger, tool_schema,
+        skill_dir, spawn_background, tool_is_disclosed, tool_report, tool_schema,
         trim_dir, truncate_if_over, NoopNotifier, ps_session_exec, ps_session_shutdown, PsRun,
-        CallAcc, ConvMsg, CORE_TOOLS, BgNotifier,
+        CallAcc, ConvMsg, ToolReport, CORE_TOOLS, BgNotifier,
     };
     use std::collections::HashMap;
 
@@ -3682,16 +3844,41 @@ mod tests {
     #[test]
     fn tool_ledger_round_trips_through_conversation_file() {
         let msgs = vec![
-            ConvMsg { role: "user".into(), text: "do it".into() },
-            ConvMsg { role: "tool".into(), text: "🔧 list_dir path=C:\\x -> ok: a, b".into() },
-            ConvMsg { role: "assistant".into(), text: "done".into() },
+            ConvMsg { role: "user".into(), text: "do it".into(), report: None },
+            ConvMsg {
+                role: "tool".into(),
+                text: "→ x\n✅ 0.0s · 2 entries".into(),
+                report: Some(ToolReport {
+                    tool: "list_dir".into(),
+                    subject: "C:\\x".into(),
+                    detail: None,
+                    shell: None,
+                    cwd: None,
+                    background: None,
+                    from_tag: None,
+                    ok: true,
+                    error: None,
+                    status: None,
+                    pid: None,
+                    wall_ms: 0,
+                    tag: None,
+                    count: Some(2),
+                    unit: Some("entries".into()),
+                    body: None,
+                }),
+            },
+            ConvMsg { role: "assistant".into(), text: "done".into(), report: None },
         ];
         let raw = serialize_conversation("demo", &msgs);
         let (name, back) = parse_conversation(&raw);
         assert_eq!(name, "demo");
         assert_eq!(back.len(), 3);
         assert_eq!(back[1].role, "tool");
-        assert!(back[1].text.contains("-> ok:"));
+        assert!(back[1].text.starts_with("→ x"));
+        // Facts survive the round trip: the UI re-renders from them, no parsing.
+        let r = back[1].report.as_ref().unwrap();
+        assert_eq!(r.subject, "C:\\x");
+        assert_eq!(r.count, Some(2));
     }
 
     #[test]
@@ -3718,8 +3905,8 @@ mod tests {
     #[test]
     fn conversation_prelude_is_first_line() {
         let msgs = vec![
-            ConvMsg { role: "user".into(), text: "hi\nthere".into() },
-            ConvMsg { role: "assistant".into(), text: "hello".into() },
+            ConvMsg { role: "user".into(), text: "hi\nthere".into(), report: None },
+            ConvMsg { role: "assistant".into(), text: "hello".into(), report: None },
         ];
         let ser = serialize_conversation("My chat", &msgs);
         // Scanning needs only the first line.
@@ -4472,62 +4659,78 @@ mod tests {
     }
 
     #[test]
-    fn ledger_blocks_state_effect_not_request() {
-        // run_command: command line identity, output body, ✅ + wall footer.
-        let b = tool_ledger(
+    fn tool_reports_carry_facts_and_transcript_not_presentation() {
+        // run_command: facts + model-facing transcript.
+        let r = tool_report(
             "run_command",
             &serde_json::json!({ "command": "echo  hi", "shell": "powershell" }),
             "hi\n",
             1400,
         );
-        assert_eq!(b, "$ echo hi [powershell]\n```\nhi\n```\n✅ 1.4s");
-        // edit_file: path/tag/op-headers identity (never the body), reused
-        // diff fence, new tag in the footer.
+        assert_eq!(r.subject, "echo hi");
+        assert_eq!(r.shell.as_deref(), Some("powershell"));
+        assert_eq!(r.transcript(), "$ echo hi [powershell]\n```\nhi\n```\n✅ 1.4s");
+        // edit_file: op headers + anchor tag as facts, diff body, new tag.
         let edit_result = "edited C:\\x\\notes.md: PUT 3.3 -> 1 line(s)\n```diff\n-for\n+EDITED\n```\n[C:\\x\\notes.md#F926] - line numbers shifted";
-        let b = tool_ledger(
+        let r = tool_report(
             "edit_file",
             &serde_json::json!({ "path": "C:\\x\\notes.md", "tag": "443A", "ops": "PUT 3.=3:\n+EDITED\n" }),
             edit_result,
             12,
         );
+        assert_eq!(r.subject, "C:\\x\\notes.md");
+        assert_eq!(r.from_tag.as_deref(), Some("443A"));
+        assert_eq!(r.tag.as_deref(), Some("F926"));
+        assert_eq!(r.body.as_ref().unwrap().kind, "diff");
         assert_eq!(
-            b,
+            r.transcript(),
             "✎ notes.md #443A PUT 3.=3:\n```diff\n-for\n+EDITED\n```\n✅ 0.0s · #F926"
         );
-        assert!(!b.contains("+EDITED\n+EDITED"), "op body must not be duplicated");
-        // write_file: bytes, never content.
-        let b = tool_ledger(
+        assert!(
+            !r.transcript().contains("+EDITED\n+EDITED"),
+            "op body must not be duplicated"
+        );
+        // write_file: byte count fact, content never in the report.
+        let r = tool_report(
             "write_file",
             &serde_json::json!({ "path": "C:\\x\\d.md", "content": "secret stuff" }),
             "wrote 12 bytes to C:\\x\\d.md\n[C:\\x\\d.md#ABCD]",
             5,
         );
-        assert!(b.starts_with("✎ d.md (12 bytes)") && !b.contains("secret"), "{b}");
-        assert!(b.contains("#ABCD"), "{b}");
-        // read_file: windowed identity, line count footer, no content body.
-        let b = tool_ledger(
+        assert_eq!((r.count, r.unit.as_deref()), (Some(12), Some("bytes")));
+        let t = r.transcript();
+        assert!(t.starts_with("✎ d.md (12 bytes)") && !t.contains("secret"), "{t}");
+        assert!(t.contains("#ABCD"), "{t}");
+        // read_file: window fact, line count, no body.
+        let r = tool_report(
             "read_file",
             &serde_json::json!({ "path": "C:\\x\\d.md", "offset": 2, "limit": 3 }),
             "[C:\\x\\d.md#1111]\n2:a\n3:b\n4:c\n",
             3,
         );
-        assert_eq!(b, "→ d.md:2-4\n✅ 0.0s · 3 lines");
-        // Failure: identity + clipped error, ❌ footer.
-        let b = tool_ledger(
+        assert_eq!(r.detail.as_deref(), Some("2-4"));
+        assert!(r.body.is_none());
+        assert_eq!(r.transcript(), "→ d.md:2-4\n✅ 0.0s · 3 lines");
+        // Failure: error fact, ❌ footer, clipped error body.
+        let r = tool_report(
             "run_command",
             &serde_json::json!({ "command": "dir" }),
             "Error: Blocked: duplicates list_dir",
             1,
         );
+        assert!(!r.ok);
+        assert_eq!(r.error.as_deref(), Some("Blocked: duplicates list_dir"));
+        assert_eq!(r.body.as_ref().unwrap().kind, "output");
+        let t = r.transcript();
         assert!(
-            b.starts_with("$ dir\n")
-                && b.ends_with("❌ Blocked: duplicates list_dir 0.0s"),
-            "{b}"
+            t.starts_with("$ dir\n")
+                && t.ends_with("❌ Blocked: duplicates list_dir 0.0s"),
+            "{t}"
         );
-        // Identity alone (provisional line while the tool runs).
-        assert_eq!(
-            tool_identity("kill_command", &serde_json::json!({ "pid": 42 })),
-            "✖ kill pid 42"
-        );
+        // Numeric args stringify (pid 42, not "\"42\"" and not missing).
+        let r = tool_report("kill_command", &serde_json::json!({ "pid": 42 }), "killed", 0);
+        assert_eq!(r.subject, "42");
+        assert_eq!(r.pid, Some(42));
+        assert_eq!(r.transcript(), "✖ kill pid 42\n✅");
     }
 }

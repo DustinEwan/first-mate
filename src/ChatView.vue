@@ -63,6 +63,28 @@ async function onContentClick(e: MouseEvent) {
 
 const win = getCurrentWindow();
 
+// Structured facts about a tool call, produced by the backend. All glyphs,
+// layout, and wording below are UI presentation; the backend only ships
+// facts (plus a separate model-facing transcript it owns).
+interface ToolReport {
+  tool: string;
+  subject: string;
+  detail?: string;
+  shell?: string;
+  cwd?: string;
+  background?: boolean;
+  from_tag?: string;
+  ok: boolean;
+  error?: string;
+  status?: string;
+  pid?: number;
+  wall_ms: number;
+  tag?: string;
+  count?: number;
+  unit?: string;
+  body?: { kind: string; text: string };
+}
+
 interface Msg {
   id: number;
   text: string;
@@ -71,6 +93,118 @@ interface Msg {
   // its result has landed (pending lines get replaced by the result block).
   toolName?: string;
   done?: boolean;
+  // Structured facts: rendered as sections of one bordered panel.
+  tool?: ToolReport;
+}
+
+const TOOL_GLYPH: Record<string, string> = {
+  run_command: "$",
+  get_command_output: "◷",
+  write_file: "✎",
+  edit_file: "✎",
+  read_file: "→",
+  list_dir: "▸",
+  search_files: "⌕",
+  list_processes: "≣",
+  kill_command: "✖",
+  load_skill: "📖",
+  read_skill_resource: "📖",
+};
+
+function baseName(p: string): string {
+  const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
+  return i >= 0 ? p.slice(i + 1) : p;
+}
+
+function reportIdentity(r: ToolReport): string {
+  const glyph = TOOL_GLYPH[r.tool] ?? "🔧";
+  switch (r.tool) {
+    case "run_command": {
+      let s = `$ ${r.subject}`;
+      if (r.shell) s += ` [${r.shell}]`;
+      if (r.cwd) s += ` in ${baseName(r.cwd)}`;
+      if (r.background) s += " [bg]";
+      return s;
+    }
+    case "get_command_output":
+      return `◷ output of pid ${r.subject}`;
+    case "read_file":
+      return `→ ${baseName(r.subject)}${r.detail ? ":" + r.detail : ""}`;
+    case "edit_file":
+      return `✎ ${baseName(r.subject)}${r.from_tag ? " #" + r.from_tag : ""}${r.detail ? " " + r.detail : ""}`;
+    case "write_file":
+      return `✎ ${baseName(r.subject)}${r.count != null ? ` (${r.count} ${r.unit})` : ""}`;
+    case "list_dir":
+      return `▸ ${r.subject}`;
+    case "search_files":
+      return `⌕ "${r.subject}"${r.detail ? " under " + r.detail : ""}`;
+    case "list_processes":
+      return "≣ running processes";
+    case "kill_command":
+      return `✖ kill pid ${r.subject}`;
+    case "load_skill":
+      return `📖 load_skill ${r.subject}`;
+    case "read_skill_resource":
+      return `📖 ${r.subject}`;
+    default:
+      return `${glyph} ${r.tool}${r.detail ? " " + r.detail : ""}`;
+  }
+}
+
+function reportFooter(r: ToolReport): string {
+  const parts: string[] = [];
+  if (r.status) parts.push(r.status);
+  if (r.wall_ms > 0) parts.push((r.wall_ms / 1000).toFixed(1) + "s");
+  if (r.tag) parts.push("#" + r.tag);
+  // write_file's header already states the byte count; don't repeat it.
+  if (r.count != null && r.unit && r.tool !== "write_file")
+    parts.push(`${r.count} ${r.unit}`);
+  if (r.pid != null && r.status) parts.push("pid " + r.pid);
+  const mark = r.ok ? "✅" : `❌ ${r.error ?? "failed"}`;
+  return parts.length ? `${mark} ${parts.join(" · ")}` : mark;
+}
+
+// Provisional facts from call args, shown while the tool runs. The finished
+// report replaces it wholesale.
+const SUBJECT_ARG: Record<string, string> = {
+  run_command: "command",
+  read_file: "path",
+  write_file: "path",
+  edit_file: "path",
+  list_dir: "path",
+  search_files: "pattern",
+  kill_command: "pid",
+  get_command_output: "pid",
+  load_skill: "name",
+  read_skill_resource: "path",
+};
+
+function pendingReport(name: string, args: Record<string, unknown>): ToolReport {
+  const str = (k: string) => (args[k] == null ? "" : String(args[k]));
+  const r: ToolReport = { tool: name, subject: str(SUBJECT_ARG[name] ?? ""), ok: true, wall_ms: 0 };
+  if (name === "run_command") {
+    r.subject = r.subject.replace(/\s+/g, " ").trim().slice(0, 160);
+    r.shell = str("shell") || undefined;
+    r.cwd = str("cwd") || undefined;
+    r.background = args["background"] === true ? true : undefined;
+  } else if (name === "read_file" && args["offset"] != null) {
+    const off = Number(args["offset"]);
+    const end = args["limit"] != null ? off + Number(args["limit"]) - 1 : "…";
+    r.detail = `${off}-${end}`;
+  } else if (name === "edit_file") {
+    r.from_tag = str("tag") || undefined;
+    const heads = str("ops")
+      .split("\n")
+      .filter((l) => l && !l.startsWith("+"))
+      .join(", ");
+    r.detail = heads.slice(0, 90) || undefined;
+  } else if (name === "write_file") {
+    r.count = new TextEncoder().encode(str("content")).length;
+    r.unit = "bytes";
+  } else if (name === "search_files") {
+    r.detail = str("root") || undefined;
+  }
+  return r;
 }
 
 const messages = ref<Msg[]>([]);
@@ -91,6 +225,7 @@ interface ConvInfo {
 interface ConvMsg {
   role: string;
   text: string;
+  report?: ToolReport;
 }
 const panelOpen = ref(false);
 const conversations = ref<ConvInfo[]>([]);
@@ -118,7 +253,7 @@ function persistConversation() {
   // already inspected, verified, and executed instead of re-doing it.
   const turns = messages.value
     .filter((m) => ["user", "assistant", "tool"].includes(m.cls) && m.text.trim())
-    .map((m) => ({ role: m.cls, text: m.text }));
+    .map((m) => ({ role: m.cls, text: m.text, report: m.done ? m.tool : undefined }));
   if (turns.length === 0) return;
   if (!convName.value) {
     const first = turns.find((t) => t.role === "user");
@@ -140,7 +275,14 @@ function refreshConversations() {
 function openConversation(c: ConvInfo) {
   invoke<ConvMsg[]>("load_conversation", { path: c.path })
     .then((msgs) => {
-      messages.value = msgs.map((m) => ({ id: nextId++, text: m.text, cls: m.role }));
+      messages.value = msgs.map((m) => ({
+        id: nextId++,
+        text: m.text,
+        cls: m.role,
+        ...(m.role === "tool" && m.report
+          ? { tool: m.report, done: true }
+          : {}),
+      }));
       convName.value = c.name;
       panelOpen.value = false;
     })
@@ -182,36 +324,42 @@ onMounted(() => {
   // Focus the input when the window is shown/focused.
   nextTick(() => focusInput());
   listen("tauri://focus", () => focusInput());
-  // Show tool calls in real-time as the agent makes them.
-  listen<{ name: string; args: Record<string, string>; identity?: string }>(
+  // Show tool calls in real-time as the agent makes them: the pending panel
+  // is built from the call args (UI-side provisional facts).
+  listen<{ name: string; args: Record<string, unknown> }>(
     "tool_call",
     (event) => {
-      const { name, args, identity } = event.payload;
-      const fallback = Object.entries(args)
-        .map(([k, v]) => `${k}=${String(v).slice(0, 40)}`)
-        .join(" ");
-      addMsg(`🔧 ${identity ?? `${name} ${fallback}`}`, "tool", { toolName: name });
+      const { name, args } = event.payload;
+      const tool = pendingReport(name, args);
+      addMsg(reportIdentity(tool), "tool", {
+        toolName: name,
+        tool: { ...tool, status: undefined, tag: undefined },
+      });
     },
   );
-  // Replace the pending line with the backend's ledger block:
-  // identity / fenced effect / metadata. The block persists to .chat and
-  // resumes as context, so it states what happened, not what was asked.
-  listen<{ name: string; summary: string }>("tool_result", (event) => {
-    const { name, summary } = event.payload;
-    let matched = false;
-    for (let i = messages.value.length - 1; i >= 0; i--) {
-      const m = messages.value[i];
-      if (m.cls === "tool" && m.toolName === name && !m.done) {
-        messages.value[i] = { ...m, text: `🔧 ${summary}`, done: true };
-        matched = true;
-        break;
+  // Replace the pending panel with the finished report. The transcript (the
+  // backend's model-facing flat form) becomes the persisted text; the UI
+  // renders only the structured facts.
+  listen<{ name: string; transcript: string; report?: ToolReport }>(
+    "tool_result",
+    (event) => {
+      const { name, transcript, report } = event.payload;
+      let matched = false;
+      for (let i = messages.value.length - 1; i >= 0; i--) {
+        const m = messages.value[i];
+        if (m.cls === "tool" && m.toolName === name && !m.done) {
+          messages.value[i] = { ...m, text: transcript, tool: report, done: true };
+          matched = true;
+          break;
+        }
       }
-    }
-    // Unmatched results are async announcements (e.g. a background job that
-    // finished after its turn): they get their own ledger line so the model
-    // resumes with them as context.
-    if (!matched) addMsg(`🔧 ${summary}`, "tool", { toolName: name, done: true });
-  });
+      // Unmatched results are async announcements (e.g. a background job that
+      // finished after its turn): they get their own report so the model
+      // resumes with them as context.
+      if (!matched)
+        addMsg(transcript, "tool", { toolName: name, done: true, tool: report });
+    },
+  );
   // Stream the assistant text in as it arrives, creating the live message on
   // the first chunk.
   listen<{ text: string }>("stream_chunk", (event) => {
@@ -379,12 +527,28 @@ window.addEventListener("keydown", (e) => {
                 :size-dependencies="[item.text]"
               >
                 <div
-                  v-if="item.cls === 'assistant' || item.cls === 'tool'"
-                  class="msg md"
-                  :class="item.cls"
+                  v-if="item.cls === 'assistant'"
+                  class="msg md assistant"
                   @click="onContentClick"
                   v-html="renderMd(item.text)"
                 ></div>
+                <div
+                  v-else-if="item.cls === 'tool' && item.tool"
+                  class="msg tool report"
+                  :class="{ failed: item.done && !item.tool.ok }"
+                >
+                  <div class="rb-head">{{ reportIdentity(item.tool) }}</div>
+                  <pre v-if="item.tool.body" class="rb-body"><span
+                    v-for="(ln, i) in item.tool.body.text.split('\n')"
+                    :key="i"
+                    class="rb-line"
+                    :class="item.tool.body.kind === 'diff' ? (ln.startsWith('+') ? 'add' : ln.startsWith('-') ? 'del' : '') : ''"
+                  >{{ ln }}
+</span></pre>
+                  <div class="rb-foot" :class="{ pending: !item.done }">
+                    {{ item.done ? reportFooter(item.tool) : "running…" }}
+                  </div>
+                </div>
                 <div v-else class="msg" :class="item.cls">{{ item.text }}</div>
               </DynamicScrollerItem>
             </template>
