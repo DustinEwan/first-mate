@@ -1,17 +1,36 @@
 name: Release Build
 
+# Triggered by the Release PR workflow completing on main — that workflow
+# creates the GitHub Release, but releases published via GITHUB_TOKEN do
+# NOT fire `on: release` for other workflows (Actions loop protection), so
+# workflow_run is the reliable hook. workflow_dispatch allows a manual
+# (re)build against the latest release.
+
 on:
-  release:
-    types: [published]
+  workflow_run:
+    workflows: ["Release PR"]
+    types: [completed]
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
   build-windows:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - id: tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag = gh api repos/$env:GITHUB_REPOSITORY/releases/latest --jq .tag_name
+          "tag=$tag" >> $env:GITHUB_OUTPUT
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -28,5 +47,5 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          releaseId: ${{ github.event.release.id }}
+          releaseTag: ${{ steps.tag.outputs.tag }}
           args: --target x64
