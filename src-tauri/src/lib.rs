@@ -283,11 +283,13 @@ fn agent_tools() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "run_command",
-                "description": "Execute a command on the Windows system and return the output. Foreground commands are force-killed after 5 minutes, so interactive or long-running programs (login prompts, servers, watchers) MUST use background:true and are driven via get_command_output / kill_command.",
+                "description": "Execute a command on the Windows system and return the output. shell='powershell' is REQUIRED for any PowerShell containing $vars, quotes, or multiple statements: the command text is written VERBATIM to a scratch script and run with 'powershell -File', so $, ' and \" survive exactly as typed — never route PowerShell through the default cmd form (cmd.exe re-quoting corrupts it). shell='cmd' (default) runs argv directly, or via cmd.exe when the text contains pipes/&&/redirection. Foreground commands are force-killed after 5 minutes; interactive or long-running programs MUST use background:true and are driven via get_command_output / kill_command.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "command": {"type": "string", "description": "The command to execute (e.g. 'winapp ui inspect -a notepad')"},
+                        "command": {"type": "string", "description": "The command to execute (e.g. 'winapp ui inspect -a notepad', or PowerShell statements when shell='powershell')"},
+                        "shell": {"type": "string", "enum": ["cmd", "powershell"], "description": "Interpreter. 'powershell' passes command text as script data (zero re-quoting). Default 'cmd'."},
+                        "cwd": {"type": "string", "description": "Absolute directory to run the command in (optional)."},
                         "background": {"type": "boolean", "description": "Start detached and return a pid immediately instead of waiting for completion"}
                     },
                     "required": ["command"]
@@ -924,19 +926,36 @@ fn line_diff(prev: &str, now: &str) -> String {
     out
 }
 
-/// Truncate output over `max` chars with a hint to narrow the command.
+/// Cap tool output over `max` chars: spill the FULL text to
+/// `~/.firstmate/output/` and return head + pointer + tail. Nothing is
+/// unrecoverably lost — `read_file` the pointer path for any omitted middle.
 fn truncate_if_over(s: String, max: usize) -> String {
-    if s.chars().count() > max {
-        let head: String = s.chars().take(max).collect();
-        let rest = s.chars().count() - max;
-        log(&format!("BUDGET: truncated {} chars", rest));
+    let count = s.chars().count();
+    if count <= max {
+        return s;
+    }
+    let head: String = s.chars().take(max * 3 / 4).collect();
+    let tail: String = s.chars().skip(count - max / 4).collect();
+    let path = fm_out_dir().join(format!(
+        "out-{}-{}.txt",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0)
+    ));
+    let omitted = count - head.chars().count() - tail.chars().count();
+    let pointer = if std::fs::write(&path, &s).is_ok() {
         format!(
-            "{}\n...[truncated {} chars — narrow the command: --depth N, a selector, or pipe to findstr]",
-            head, rest
+            "\n...[{omitted} of {count} chars omitted; FULL output saved: {} — read_file path=\"{}\" offset=<line> for the middle]...\n",
+            path.display(),
+            path.display()
         )
     } else {
-        s
-    }
+        format!("\n...[{omitted} chars truncated; spill write failed]...\n")
+    };
+    log(&format!("BUDGET: spilled {count} chars to {}", path.display()));
+    format!("{head}{pointer}{tail}")
 }
 
 /// Keep tool output from exploding the context. An identical repeat result
@@ -987,6 +1006,45 @@ fn home_dir() -> std::path::PathBuf {
         .or_else(|| std::env::var_os("HOME"))
         .map(std::path::PathBuf::from)
         .unwrap_or_default()
+}
+
+fn fm_dir() -> std::path::PathBuf {
+    home_dir().join(".firstmate")
+}
+
+/// Scratch directory for generated command scripts (created on demand).
+fn fm_tmp_dir() -> std::path::PathBuf {
+    let d = fm_dir().join("tmp");
+    let _ = std::fs::create_dir_all(&d);
+    d
+}
+
+/// Spill directory for full tool output that exceeded the context budget.
+fn fm_out_dir() -> std::path::PathBuf {
+    let d = fm_dir().join("output");
+    let _ = std::fs::create_dir_all(&d);
+    d
+}
+
+/// LRU hygiene: keep only the newest `keep` files in a scratch directory.
+/// Run at startup so a previous session's orphans cannot pile up forever.
+fn trim_dir(dir: &std::path::Path, keep: usize) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut files: Vec<(std::path::PathBuf, std::time::SystemTime)> = entries
+        .flatten()
+        .filter_map(|e| {
+            let m = e.metadata().ok()?.modified().ok()?;
+            Some((e.path(), m))
+        })
+        .filter(|(p, _)| p.is_file())
+        .collect();
+    files.sort_by_key(|(_, m)| *m);
+    let drop_count = files.len().saturating_sub(keep);
+    for (path, _) in files.into_iter().take(drop_count) {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 /// Directories scanned for `<skill>/SKILL.md`: repo `skills/` (cwd, exe dir,
@@ -1146,7 +1204,7 @@ async fn exec_capped(
     cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
-    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    let child = cmd.spawn().map_err(|e| e.to_string())?;
     let pid = child.id().unwrap_or(0);
     match tokio::time::timeout(timeout, child.wait_with_output()).await {
         Ok(Ok(output)) => Ok(output),
@@ -1308,7 +1366,37 @@ async fn execute_tool_inner(name: &str, args: &serde_json::Value) -> Result<Stri
                 .get("background")
                 .and_then(|b| b.as_bool())
                 .unwrap_or(false);
-            let mut cmd = if needs_shell(command) {
+            let shell = args.get("shell").and_then(|s| s.as_str()).unwrap_or("cmd");
+            let mut script_path: Option<std::path::PathBuf> = None;
+            let mut cmd = if shell == "powershell" {
+                // The command is DATA, never a quoted argv fragment: write
+                // it verbatim to a scratch .ps1 (UTF-8 BOM so Windows
+                // PowerShell 5.1 decodes non-ASCII) and run it with -File.
+                // This kills the cmd -> powershell -> Add-Type quote
+                // nesting failure class entirely: zero quoting layers.
+                let script = fm_tmp_dir().join(format!(
+                    "cmd-{}-{}.ps1",
+                    std::process::id(),
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_nanos())
+                        .unwrap_or(0)
+                ));
+                let mut bytes = vec![0xEFu8, 0xBB, 0xBF];
+                bytes.extend_from_slice(command.as_bytes());
+                std::fs::write(&script, &bytes)
+                    .map_err(|e| format!("cannot write scratch script: {e}"))?;
+                log(&format!(
+                    "RUN powershell -File {} ({} bytes of script)",
+                    script.display(),
+                    command.len()
+                ));
+                script_path = Some(script.clone());
+                let mut c = tokio::process::Command::new("powershell.exe");
+                c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]);
+                c.arg(&script);
+                c
+            } else if needs_shell(command) {
                 // Pipes, &&, redirection, cmd built-ins: run via cmd.exe.
                 // /S /C "..." strips only the outermost quotes, so inner
                 // quotes survive (plain /C mangles them). raw_arg avoids
@@ -1332,10 +1420,22 @@ async fn execute_tool_inner(name: &str, args: &serde_json::Value) -> Result<Stri
                 c.args(rest);
                 c
             };
+            if let Some(cwd) = args.get("cwd").and_then(|c| c.as_str()) {
+                if !std::path::Path::new(cwd).is_dir() {
+                    return Err(format!("cwd is not a directory: {cwd}"));
+                }
+                cmd.current_dir(cwd);
+            }
             if background {
+                // The scratch script must outlive the spawn; tmp/ is
+                // LRU-trimmed at startup, so it cannot leak forever.
                 return spawn_background(cmd, command).await;
             }
-            let output = exec_capped(&mut cmd, cmd_timeout()).await?;
+            let output = exec_capped(&mut cmd, cmd_timeout()).await;
+            if let Some(p) = &script_path {
+                let _ = std::fs::remove_file(p);
+            }
+            let output = output?;
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
             if !output.status.success() {
@@ -2081,6 +2181,10 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, list_models, test_llm, chat_with_llm, stop_chat, list_skills, list_conversations, load_conversation, save_conversation, get_system_prompt, open_path])
         .setup(|app| {
+            // Scratch hygiene (P6): drop old generations of generated
+            // scripts and spilled output from previous sessions.
+            trim_dir(&fm_tmp_dir(), 50);
+            trim_dir(&fm_out_dir(), 50);
             // Tray: left-click toggles the console; menu for explicit actions.
             let toggle_item =
                 MenuItem::with_id(app, "toggle", "Show / Hide", true, None::<&str>)?;
@@ -2160,6 +2264,7 @@ mod tests {
         parse_conversation, parse_frontmatter, resolve_conv_path, resolve_open_target,
         resolve_skill_resource,
         sanitize_conv_name, serialize_conversation, skill_dir, spawn_background, tool_is_disclosed,
+        trim_dir, truncate_if_over,
         CallAcc, ConvMsg, CORE_TOOLS,
     };
     use std::collections::HashMap;
@@ -2233,13 +2338,27 @@ mod tests {
     }
 
     #[test]
-    fn oversized_output_is_truncated_with_hint() {
+    fn oversized_output_is_capped_with_spill_pointer() {
         let mut seen = HashMap::new();
-        let huge = "z".repeat(9000);
-        let out = budget_output(&mut seen, "c".into(), huge);
-        assert!(out.contains("truncated 1000 chars"));
-        assert!(out.contains("narrow the command"));
-        assert!(out.chars().count() < 8200);
+        let huge: String = (0..9000usize).map(|i| (b'a' + (i % 26) as u8) as char).collect();
+        let out = budget_output(&mut seen, "c".into(), huge.clone());
+        assert!(out.contains("chars omitted; FULL output saved:"));
+        assert!(out.starts_with('a'));
+        assert!(out.ends_with(&huge[huge.len() - 50..]));
+        assert!(out.chars().count() < 8600);
+        let path = out
+            .lines()
+            .find(|l| l.contains("FULL output saved:"))
+            .unwrap()
+            .split("saved: ")
+            .nth(1)
+            .unwrap()
+            .split(" —")
+            .next()
+            .unwrap()
+            .to_string();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), huge);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
@@ -2642,5 +2761,85 @@ mod tests {
         ));
         assert!(!looks_like_unexecuted_intent(&"Summary line. ".repeat(40)));
         assert!(!looks_like_unexecuted_intent(""));
+    }
+
+    #[test]
+    fn truncate_spills_full_output_behind_a_pointer() {
+        let big: String = (0..500).map(|i| format!("line {i}\n")).collect();
+        let capped = truncate_if_over(big.clone(), 800);
+        assert!(capped.starts_with("line 0\n"));
+        assert!(capped.ends_with("line 499\n"));
+        let line = capped
+            .lines()
+            .find(|l| l.contains("FULL output saved:"))
+            .expect("pointer line");
+        let path = line
+            .split("saved: ")
+            .nth(1)
+            .expect("path")
+            .split(" —")
+            .next()
+            .expect("terminator")
+            .to_string();
+        let full = std::fs::read_to_string(&path).expect("spill file must exist and be complete");
+        assert_eq!(full, big);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn trim_dir_keeps_only_the_newest() {
+        let dir = std::env::temp_dir().join(format!("fm-trim-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(100);
+        for i in 0..5u32 {
+            let p = dir.join(format!("f{i}.txt"));
+            std::fs::write(&p, "x").unwrap();
+            if i < 3 {
+                let f = std::fs::OpenOptions::new().write(true).open(&p).unwrap();
+                f.set_times(std::fs::FileTimes::new().set_modified(old))
+                    .unwrap();
+            }
+        }
+        trim_dir(&dir, 2);
+        assert!(!dir.join("f0.txt").exists() && !dir.join("f2.txt").exists());
+        assert!(dir.join("f3.txt").exists() && dir.join("f4.txt").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn powershell_shell_mode_survives_quote_hell() {
+        // Exactly the payload class that died in the cmd -> powershell ->
+        // Add-Type chain: single-quoted string with an escaped quote and
+        // embedded double quotes, plus $ interpolation. As script DATA
+        // there is no quoting layer left to corrupt it.
+        let cmd = "$name = 'world''s \"best\"'\nWrite-Output \"hello $name\"\n";
+        let out = execute_tool_inner(
+            "run_command",
+            &serde_json::json!({ "command": cmd, "shell": "powershell" }),
+        )
+        .await
+        .expect("powershell -File run");
+        assert!(
+            out.contains("hello world's \"best\""),
+            "got: {out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn cwd_is_validated_and_applied() {
+        let bad = execute_tool_inner(
+            "run_command",
+            &serde_json::json!({ "command": "cd", "cwd": "C:\\no-such-dir-fm" }),
+        )
+        .await;
+        assert!(bad.unwrap_err().contains("cwd is not a directory"));
+        let ok = execute_tool_inner(
+            "run_command",
+            &serde_json::json!({ "command": "cd", "cwd": "C:\\Windows" }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(ok.trim().to_lowercase(), "c:\\windows");
     }
 }
