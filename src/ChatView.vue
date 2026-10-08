@@ -596,7 +596,9 @@ window.addEventListener("keydown", (e) => {
         <aside v-if="panelOpen" class="side">
           <div class="side-head">
             <span>Chats</span>
-            <button class="new-chat" @click="newChat">New</button>
+            <button class="new-chat" title="Start a new conversation (Ctrl+N)" @click="newChat">
+              <span class="plus">+</span> New
+            </button>
           </div>
           <ul class="conv-list">
             <li

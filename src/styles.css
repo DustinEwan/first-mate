@@ -89,18 +89,27 @@ body {
 }
 
 .side-head .new-chat {
-  background: none;
-  border: 1px solid #3c3c41;
-  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: #2080f0;
+  border: 1px solid #2080f0;
+  border-radius: 5px;
   color: #ffffff;
   font-size: 12px;
-  padding: 2px 8px;
+  font-weight: 600;
+  padding: 3px 10px;
   cursor: pointer;
 }
 
+.side-head .new-chat .plus {
+  font-size: 14px;
+  line-height: 1;
+}
+
 .side-head .new-chat:hover {
-  border-color: #2080f0;
-  color: #2080f0;
+  background: #4096ff;
+  border-color: #4096ff;
 }
 
 .conv-list {
