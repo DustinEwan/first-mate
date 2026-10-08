@@ -1,22 +1,10 @@
 # First Mate — Agent Skills Design
 
-First Mate is a Windows control agent. Its behavior text lives in
-**AGENTS.md** (repo root, or `~/.firstmate/AGENTS.md`; a built-in constant
-is the last-resort fallback), and carries only behavioral rules. Every
-capability — including **winapp**, its primary UI automation tool — is
-delivered as a skill and loaded on demand.
-
-First Mate follows the [Agent Skills](https://agentskills.io/) open
-specification for extensible, on-demand capabilities.
-
-
-## Behavior Text (AGENTS.md)
-
-`get_system_prompt()` searches `AGENTS.md` in cwd, `../` (dev layout), the
-exe directory and its parent, then `~/.firstmate/AGENTS.md`; the first hit
-is the system prompt, so behavior is edited as content, not recompiled
-code. The frontend appends the skill advertisement to it at mount.
-
+Every capability First Mate has is delivered as a **skill** and loaded on
+demand, following the [Agent Skills](https://agentskills.io/) open
+specification. This document covers the skill system only: structure,
+discovery, progressive disclosure, and the tool-availability gate. App-level
+behavior (window, tray, links, persistence) lives in the README.
 
 ## Skill Structure
 
@@ -44,57 +32,6 @@ tools: # optional — Rust tools this skill enables when loaded; omit for pure-b
 `agent_tools()`) that are injected into the model's context ONLY after this
 skill is loaded. A skill without `tools:` is pure behavior. A skill cannot
 invent tools: unknown names are skipped.
-
-# WinApp UI Automation
-
-## When to use
-- When the user asks to interact with a Windows application
-- When the user asks to take a screenshot of an app
-- When the user asks to click, type, or navigate in a GUI app
-
-## Commands
-
-### Inspect the UI tree
-```bash
-winapp ui inspect -a <app-name>
-```
-
-### Search for elements
-```bash
-winapp ui search <selector> -a <app-name>
-```
-
-### Invoke (activate) an element
-```bash
-winapp ui invoke <selector> -a <app-name>
-```
-
-### Click an element
-```bash
-winapp ui click <selector> -a <app-name>
-```
-
-### Take a screenshot
-```bash
-winapp ui screenshot -a <app-name>
-```
-
-### Send keyboard input
-```bash
-winapp ui send-keys <keys> -a <app-name>
-```
-
-### Set a value
-```bash
-winapp ui set-value <selector> <value> -a <app-name>
-```
-
-## Workflow
-1. Start with `screenshot` to see the current state
-2. Use `inspect` to find element selectors
-3. Use `invoke`/`click`/`set-value` to interact
-4. Use `screenshot` again to verify the result
-```
 
 ## Progressive Disclosure
 
@@ -146,7 +83,6 @@ read_skill_resource("winapp/references/ui-automation.md")
 
 The agent uses the existing **shell tool** to run commands. The skill instructions tell it what to run. No separate `run_skill_script` tool is needed for CLI-based skills.
 
-
 ## Capability Tiers
 
 ### Core Tools (always in context)
@@ -173,7 +109,6 @@ All capability knowledge lives here, including the primary one:
 - **filesystem**: file/process tool usage and rules (`skills/filesystem/`)
 - **git-repo**: repository inspection and safe operations (`skills/git-repo/`)
 - **User skills**: drop a folder into `~/.firstmate/skills/`
-
 
 ## Implementation
 
@@ -220,21 +155,9 @@ not in the run's active set is refused with an instruction to load the
 skill that enables it. Implementation without disclosure is not a path to
 execution — resumed conversations and hallucinated calls included.
 
-### Conversation persistence (tool ledger)
-
-`.chat` files store user, assistant, AND tool turns. Tool lines carry both
-call and result (`🔧 list_dir path=… -> ok: …`, result capped at 160 chars
-via the `tool_result` event). On resume the ledger rides along as assistant
-context, so a continued conversation knows what was already inspected and
-verified; tool availability still resets to core (self-discovery again).
-
-### External links
-
-All links in assistant output leave the webview through the `open_path`
-command: `http(s)` opens the system browser, `file://` opens Explorer/the
-default app (path must exist; quotes and cmd metacharacters refused). The
-chat window itself never navigates. AGENTS.md tells the model to emit file
-references as `file://` markdown links.
+Resumed conversations reset tool availability to core: the persisted tool
+ledger (see README) tells the model what was already inspected, but every
+capability must be re-discovered through its skill.
 
 ### Example
 
@@ -242,5 +165,4 @@ references as `file://` markdown links.
 
 ## Future Work
 
-- **Multi-step workflow coordination**: Manage `WINAPP_UI_WORKFLOW_ID` for coordinated UI interactions
 - **Skill approval**: Require user approval for certain skill actions (e.g., clicking, typing)

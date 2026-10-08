@@ -342,7 +342,7 @@ window.addEventListener("keydown", (e) => {
   <n-config-provider :theme="darkTheme">
     <div class="chat">
       <header class="titlebar">
-        <span class="title">First Mate</span>
+        <span class="title">&#9927; First Mate</span>
         <button
           class="panel-toggle"
           :title="panelOpen ? 'Hide chats' : 'Show chats'"

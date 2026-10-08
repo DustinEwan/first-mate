@@ -2090,8 +2090,12 @@ pub fn run() {
                 MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&toggle_item, &settings_item, &quit_item])?;
 
+            // The anchor glyph rendered from Segoe UI Emoji (icons/tray.png),
+            // not the default Tauri icon.
+            let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))
+                .unwrap_or_else(|_| app.default_window_icon().unwrap().clone());
             TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
+                .icon(tray_icon)
                 .tooltip("First Mate")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
