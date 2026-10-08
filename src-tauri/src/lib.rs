@@ -1391,6 +1391,38 @@ impl BgNotifier for AppNotifier {
         log(&format!("BG ANNOUNCE pid {pid}: {status}"));
     }
 }
+/// True if a CLI resolves on PATH and exits 0 for `--version`.
+async fn cli_available(name: &str) -> bool {
+    let mut cmd = tokio::process::Command::new(name);
+    // tokio::process::Command has an inherent creation_flags on Windows.
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    cmd.arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await
+        .is_ok_and(|s| s.success())
+}
+
+/// The official non-interactive install for the winapp CLI, used by the
+/// startup bootstrap when the skill's dependency is missing.
+fn winapp_install_cmd() -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new("winget");
+    cmd.args([
+        "install",
+        "Microsoft.WinAppCli",
+        "--source",
+        "winget",
+        "--accept-package-agreements",
+        "--accept-source-agreements",
+        "--disable-interactivity",
+    ]);
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    cmd
+}
+
 
 /// Convenience wrapper (tests / headless): completions are recorded in the
 /// registry but never announced.
@@ -3477,6 +3509,27 @@ pub fn run() {
             // scripts and spilled output from previous sessions.
             trim_dir(&fm_tmp_dir(), 50);
             trim_dir(&fm_out_dir(), 50);
+            // Harness bootstrap: the winapp skill drives the desktop through
+            // the winapp CLI (microsoft/winappCli). If it is missing, install
+            // it in the background via winget; the completion lands in the
+            // ledger as a normal background report, and the skill documents
+            // the same command as the agent-side fallback.
+            {
+                let notifier = std::sync::Arc::new(AppNotifier(app.handle().clone()));
+                tauri::async_runtime::spawn(async move {
+                    if cli_available("winapp").await {
+                        log("BOOTSTRAP: winapp CLI present");
+                        return;
+                    }
+                    log("BOOTSTRAP: winapp CLI missing; installing via winget");
+                    let _ = spawn_background_notify(
+                        notifier,
+                        winapp_install_cmd(),
+                        "winget install Microsoft.WinAppCli",
+                    )
+                    .await;
+                });
+            }
             // Tray: left-click toggles the console; menu for explicit actions.
             let toggle_item =
                 MenuItem::with_id(app, "toggle", "Show / Hide", true, None::<&str>)?;
@@ -3552,10 +3605,12 @@ mod tests {
     use super::{
         budget_output, conv_dir, core_tools, discover_skills, enable_skill_tools, exec_capped,
         execute_tool_inner, execute_tool_notify, extract_screenshot_path, get_system_prompt,
-        looks_like_unexecuted_intent, merge_tool_call_delta, needs_shell, parse_command,
+        cli_available, looks_like_unexecuted_intent, merge_tool_call_delta, needs_shell,
+        parse_command,
         parse_conversation, parse_frontmatter, resolve_conv_path, resolve_open_target,
         resolve_skill_resource, route_to_tool, sanitize_conv_name, serialize_conversation,
         skill_dir, spawn_background, tool_is_disclosed, tool_report, tool_schema,
+        winapp_install_cmd,
         trim_dir, truncate_if_over, NoopNotifier, ps_session_exec, ps_session_shutdown, PsRun,
         CallAcc, ConvMsg, ToolReport, CORE_TOOLS, BgNotifier,
     };
@@ -4732,5 +4787,22 @@ mod tests {
         assert_eq!(r.subject, "42");
         assert_eq!(r.pid, Some(42));
         assert_eq!(r.transcript(), "✖ kill pid 42\n✅");
+    }
+
+    #[tokio::test]
+    async fn bootstrap_detects_missing_cli() {
+        assert!(!cli_available("definitely-not-a-real-cli-xyz").await);
+    }
+
+    #[test]
+    fn winapp_install_is_non_interactive_winget() {
+        let cmd = winapp_install_cmd();
+        let argv: Vec<_> = cmd.as_std().get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert_eq!(argv[0], "install");
+        assert_eq!(argv[1], "Microsoft.WinAppCli");
+        // Fully unattended: no agreements prompts, no interactive source picks.
+        assert!(argv.contains(&"--accept-package-agreements".to_string()));
+        assert!(argv.contains(&"--accept-source-agreements".to_string()));
+        assert!(argv.contains(&"--disable-interactivity".to_string()));
     }
 }

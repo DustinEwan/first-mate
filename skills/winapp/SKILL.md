@@ -109,3 +109,12 @@ On browsers, prefer screenshot over inspect/click: keep `--depth <= 4`, skip
    with `screenshot` and only inspect a scoped subtree if you must.
 2. `focus` the target, then `invoke`/`click`/`set-value`/`send-keys`.
 3. Verify: re-inspect a small subtree (desktop) or screenshot (browser).
+
+## Bootstrap
+The app installs this CLI automatically at startup when `winapp --version`
+fails (background `winget install`, announced in the ledger). If commands
+still report winapp missing, the bootstrap has not finished or failed —
+install it yourself and retry:
+```
+winget install Microsoft.WinAppCli --source winget --accept-package-agreements --accept-source-agreements --disable-interactivity
+```
