@@ -254,13 +254,42 @@ fn agent_tools() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "run_command",
-                "description": "Execute a command on the Windows system and return the output. Use this to run winapp commands and other shell commands. Commands are force-killed after 5 minutes; NEVER run interactive/blocking programs (login prompts, watchers) in the foreground - launch them detached with 'start /b prog > logfile 2>&1' and poll the log.",
+                "description": "Execute a command on the Windows system and return the output. Foreground commands are force-killed after 5 minutes, so interactive or long-running programs (login prompts, servers, watchers) MUST use background:true and are driven via get_command_output / kill_command.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "command": {"type": "string", "description": "The command to execute (e.g. 'winapp ui inspect -a notepad')"}
+                        "command": {"type": "string", "description": "The command to execute (e.g. 'winapp ui inspect -a notepad')"},
+                        "background": {"type": "boolean", "description": "Start detached and return a pid immediately instead of waiting for completion"}
                     },
                     "required": ["command"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_command_output",
+                "description": "Get status and accumulated output of a background command started with run_command background:true. Status is 'running' or 'exited: <code>'. Safe to poll repeatedly.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "pid": {"type": "integer", "description": "The pid returned by run_command background:true"}
+                    },
+                    "required": ["pid"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "kill_command",
+                "description": "Force-kill a background command and its whole process tree (taskkill /F /T).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "pid": {"type": "integer", "description": "The pid to kill"}
+                    },
+                    "required": ["pid"]
                 }
             }
         },
@@ -852,7 +881,11 @@ async fn exec_capped(
     cmd: &mut tokio::process::Command,
     timeout: std::time::Duration,
 ) -> Result<std::process::Output, String> {
-    cmd.kill_on_drop(true);
+    // wait_with_output only captures streams piped at spawn time; the old
+    // Command::output() set this implicitly, spawn() does not.
+    cmd.stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
     let mut child = cmd.spawn().map_err(|e| e.to_string())?;
     let pid = child.id().unwrap_or(0);
     match tokio::time::timeout(timeout, child.wait_with_output()).await {
@@ -877,6 +910,120 @@ async fn exec_capped(
     }
 }
 
+/// A command the agent started with `background: true`. The app owns the
+/// pipes and drains them continuously, so the child can never block on a
+/// full pipe or hold the agent loop hostage; the agent drives the lifecycle
+/// via get_command_output / kill_command.
+struct BgJob {
+    command: String,
+    stdout: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    stderr: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    status: std::sync::Arc<std::sync::Mutex<String>>,
+    started: std::time::Instant,
+}
+
+const MAX_BG_OUTPUT: usize = 256 * 1024;
+const MAX_BG_JOBS: usize = 32;
+
+static BG_REGISTRY: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<u32, BgJob>>,
+> = std::sync::LazyLock::new(Default::default);
+
+fn bg_registry() -> &'static std::sync::Mutex<std::collections::HashMap<u32, BgJob>> {
+    &BG_REGISTRY
+}
+
+/// Drain a pipe into the shared buffer, keeping the tail when it overflows.
+fn pump_bg_output<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
+    mut reader: R,
+    buf: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+) {
+    tokio::spawn(async move {
+        use tokio::io::AsyncReadExt;
+        let mut chunk = [0u8; 8192];
+        loop {
+            match reader.read(&mut chunk).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    let mut b = buf.lock().unwrap();
+                    b.extend_from_slice(&chunk[..n]);
+                    if b.len() > MAX_BG_OUTPUT {
+                        let cut = b.len() - MAX_BG_OUTPUT;
+                        b.drain(..cut);
+                    }
+                }
+            }
+        }
+    });
+}
+
+/// Evict oldest finished jobs first so the registry cannot grow unbounded.
+fn evict_bg_jobs(reg: &mut std::collections::HashMap<u32, BgJob>) {
+    if reg.len() < MAX_BG_JOBS {
+        return;
+    }
+    let mut by_age: Vec<(u32, bool, std::time::Instant)> = reg
+        .iter()
+        .map(|(pid, j)| {
+            let running = j.status.lock().unwrap().starts_with("running");
+            (*pid, running, j.started)
+        })
+        .collect();
+    // Finished and old die first; running jobs survive longest.
+    by_age.sort_by_key(|(_, running, started)| (*running, *started));
+    for (pid, _, _) in by_age.iter().skip(MAX_BG_JOBS - 1) {
+        reg.remove(pid);
+    }
+}
+
+async fn spawn_background(
+    mut cmd: tokio::process::Command,
+    command: &str,
+) -> Result<String, String> {
+    cmd.stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        // The job outlives this function; killing is explicit (kill_command).
+        .kill_on_drop(false);
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    let pid = child.id().ok_or("child has no pid")?;
+    let stdout = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let stderr = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    if let Some(out) = child.stdout.take() {
+        pump_bg_output(out, stdout.clone());
+    }
+    if let Some(err) = child.stderr.take() {
+        pump_bg_output(err, stderr.clone());
+    }
+    let status = std::sync::Arc::new(std::sync::Mutex::new("running".to_string()));
+    {
+        let status = status.clone();
+        tokio::spawn(async move {
+            let s = match child.wait().await {
+                Ok(s) => format!("exited: {}", s.code().unwrap_or(-1)),
+                Err(e) => format!("wait error: {e}"),
+            };
+            *status.lock().unwrap() = s;
+        });
+    }
+    {
+        let mut reg = bg_registry().lock().unwrap();
+        evict_bg_jobs(&mut reg);
+        reg.insert(
+            pid,
+            BgJob {
+                command: command.to_string(),
+                stdout,
+                stderr,
+                status,
+                started: std::time::Instant::now(),
+            },
+        );
+    }
+    Ok(format!(
+        "started background pid {pid}. Poll with get_command_output(pid), stop with kill_command(pid)."
+    ))
+}
+
 /// Execute a tool by name with JSON arguments. Returns the result as a string.
 async fn execute_tool(
     name: &str,
@@ -897,7 +1044,11 @@ async fn execute_tool_inner(name: &str, args: &serde_json::Value) -> Result<Stri
     match name {
         "run_command" => {
             let command = args.get("command").and_then(|c| c.as_str()).unwrap_or("");
-            let output = if needs_shell(command) {
+            let background = args
+                .get("background")
+                .and_then(|b| b.as_bool())
+                .unwrap_or(false);
+            let mut cmd = if needs_shell(command) {
                 // Pipes, &&, redirection, cmd built-ins: run via cmd.exe.
                 // /S /C "..." strips only the outermost quotes, so inner
                 // quotes survive (plain /C mangles them). raw_arg avoids
@@ -907,7 +1058,7 @@ async fn execute_tool_inner(name: &str, args: &serde_json::Value) -> Result<Stri
                 c.raw_arg("/S")
                     .raw_arg("/C")
                     .raw_arg(format!("\"{}\"", command));
-                exec_capped(&mut c, cmd_timeout()).await?
+                c
             } else {
                 // Direct launch: quotes are parsed by us, so multi-word
                 // quoted arguments reach the program intact.
@@ -919,8 +1070,12 @@ async fn execute_tool_inner(name: &str, args: &serde_json::Value) -> Result<Stri
                 log(&format!("RUN direct: {} {:?}", program, rest));
                 let mut c = tokio::process::Command::new(program);
                 c.args(rest);
-                exec_capped(&mut c, cmd_timeout()).await?
+                c
             };
+            if background {
+                return spawn_background(cmd, command).await;
+            }
+            let output = exec_capped(&mut cmd, cmd_timeout()).await?;
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
             if !output.status.success() {
@@ -928,6 +1083,37 @@ async fn execute_tool_inner(name: &str, args: &serde_json::Value) -> Result<Stri
             } else {
                 Ok(stdout)
             }
+        }
+        "get_command_output" => {
+            let pid = args.get("pid").and_then(|p| p.as_u64()).ok_or("pid required")? as u32;
+            let reg = bg_registry().lock().unwrap();
+            let job = reg
+                .get(&pid)
+                .ok_or_else(|| format!("no background job with pid {pid}"))?;
+            let status = job.status.lock().unwrap().clone();
+            let out = String::from_utf8_lossy(&job.stdout.lock().unwrap()).to_string();
+            let err = String::from_utf8_lossy(&job.stderr.lock().unwrap()).to_string();
+            Ok(format!(
+                "pid {pid} [{}] status: {status}, {}s elapsed\n--- stdout ---\n{out}\n--- stderr ---\n{err}",
+                job.command,
+                job.started.elapsed().as_secs()
+            ))
+        }
+        "kill_command" => {
+            let pid = args.get("pid").and_then(|p| p.as_u64()).ok_or("pid required")? as u32;
+            let out = tokio::process::Command::new("taskkill")
+                .args(["/F", "/T", "/PID", &pid.to_string()])
+                .output()
+                .await
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(format!(
+                    "taskkill failed: {}",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ));
+            }
+            log(&format!("KILLED background pid {pid}"));
+            Ok(format!("killed pid {pid} and its process tree"))
         }
         "read_file" => {
             let path = args.get("path").and_then(|c| c.as_str()).unwrap_or("");
@@ -1629,10 +1815,10 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        budget_output, conv_dir, discover_skills, exec_capped, extract_screenshot_path,
-        merge_tool_call_delta, needs_shell, parse_command, parse_conversation,
-        parse_frontmatter, resolve_conv_path, resolve_skill_resource, sanitize_conv_name,
-        serialize_conversation, skill_dir, CallAcc, ConvMsg,
+        budget_output, conv_dir, discover_skills, exec_capped, execute_tool_inner,
+        extract_screenshot_path, merge_tool_call_delta, needs_shell, parse_command,
+        parse_conversation, parse_frontmatter, resolve_conv_path, resolve_skill_resource,
+        sanitize_conv_name, serialize_conversation, skill_dir, spawn_background, CallAcc, ConvMsg,
     };
     use std::collections::HashMap;
 
@@ -1883,14 +2069,113 @@ mod tests {
             assert!(err.contains("timed out"), "{err}");
             assert!(t0.elapsed() < std::time::Duration::from_secs(30));
             // The child must actually be dead, not orphaned holding pipes.
+            // PID-scoped so parallel ping tests can't interfere.
+            let pid: u32 = err
+                .split("killed pid ")
+                .nth(1)
+                .and_then(|s| s.split_whitespace().next())
+                .and_then(|s| s.parse().ok())
+                .expect("timeout error must name the killed pid");
             let out = std::process::Command::new("tasklist")
-                .args(["/FI", "IMAGENAME eq ping.exe", "/FO", "CSV", "/NH"])
+                .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
                 .output()
                 .unwrap();
             assert!(
-                !String::from_utf8_lossy(&out.stdout).contains("ping.exe"),
-                "ping survived the timeout kill"
+                !String::from_utf8_lossy(&out.stdout).contains(&pid.to_string()),
+                "pid {pid} survived the timeout kill"
             );
+        });
+    }
+
+    fn bg_pid(start_msg: &str) -> u32 {
+        start_msg
+            .split_whitespace()
+            .nth(3)
+            .unwrap()
+            .trim_end_matches('.')
+            .parse()
+            .unwrap()
+    }
+
+    #[test]
+    fn background_command_completes_and_output_is_captured() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let mut c = tokio::process::Command::new("ping");
+            c.args(["-n", "3", "127.0.0.1"]);
+            let msg = spawn_background(c, "ping -n 3 127.0.0.1").await.unwrap();
+            let pid = bg_pid(&msg);
+            let mut poll = String::new();
+            for _ in 0..60 {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                poll = execute_tool_inner("get_command_output", &serde_json::json!({"pid": pid}))
+                    .await
+                    .unwrap();
+                if !poll.contains("status: running") {
+                    break;
+                }
+            }
+            assert!(poll.contains("status: exited: 0"), "{poll}");
+            let stdout = poll.split("--- stdout ---").nth(1).unwrap();
+            assert!(!stdout.trim().is_empty(), "background stdout must be captured");
+        });
+    }
+
+    #[test]
+    fn background_command_can_be_killed() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let mut c = tokio::process::Command::new("ping");
+            c.args(["-n", "600", "127.0.0.1"]);
+            let msg = spawn_background(c, "ping -n 600 127.0.0.1").await.unwrap();
+            let pid = bg_pid(&msg);
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            let res = execute_tool_inner("kill_command", &serde_json::json!({"pid": pid}))
+                .await
+                .unwrap();
+            assert!(res.contains("killed"), "{res}");
+            let out = std::process::Command::new("tasklist")
+                .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+                .output()
+                .unwrap();
+            assert!(
+                !String::from_utf8_lossy(&out.stdout).contains(&pid.to_string()),
+                "pid {pid} survived kill_command"
+            );
+        });
+    }
+
+    #[test]
+    fn foreground_command_captures_stdout_both_paths() {
+        // Regression: exec_capped once spawned without piping stdio, so
+        // wait_with_output returned empty output for every success.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            // cmd-shell branch (built-in).
+            let out = execute_tool_inner(
+                "run_command",
+                &serde_json::json!({"command": "echo CAPTURED_FOREGROUND"}),
+            )
+            .await
+            .unwrap();
+            assert!(out.contains("CAPTURED_FOREGROUND"), "shell path lost stdout: {out:?}");
+            // Direct branch (real binary with a quoted argument).
+            let out = execute_tool_inner(
+                "run_command",
+                &serde_json::json!({"command": "tasklist /FI \"IMAGENAME eq svchost.exe\" /NH"}),
+            )
+            .await
+            .unwrap();
+            assert!(out.contains("svchost"), "direct path lost stdout: {out:?}");
         });
     }
 }
