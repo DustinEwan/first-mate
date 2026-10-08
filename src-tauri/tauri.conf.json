@@ -31,6 +31,13 @@
     "active": true,
     "targets": "all",
     "createUpdaterArtifacts": true,
+    "resources": {
+      "../AGENTS.md": "AGENTS.md",
+      "../skills/filesystem/SKILL.md": "skills/filesystem/SKILL.md",
+      "../skills/git-repo/SKILL.md": "skills/git-repo/SKILL.md",
+      "../skills/git-repo/references/recipes.md": "skills/git-repo/references/recipes.md",
+      "../skills/winapp/SKILL.md": "skills/winapp/SKILL.md"
+    },
     "category": "Utility",
     "shortDescription": "Hotkey-summoned desktop assistant",
     "longDescription": "First Mate is a hotkey-summoned desktop assistant: a console window, LLM chat with local models, and a skills system that drives the desktop.",

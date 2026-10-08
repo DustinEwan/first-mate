@@ -110,6 +110,24 @@ All capability knowledge lives here, including the primary one:
 - **git-repo**: repository inspection and safe operations (`skills/git-repo/`)
 - **User skills**: drop a folder into `~/.firstmate/skills/`
 
+## Prompt Content & Layering
+
+The binary ships **no prompt text** — not even a fallback. Prompt content
+is files, layered:
+
+1. **Dev repo layout** (`../src-tauri` exists): repo `AGENTS.md` and repo
+   `skills/` win outright — they are the working copy under test.
+2. **User directory** (`~/.firstmate/`): `AGENTS.md` here OVERRIDES the
+   packaged baseline; `skills/` here overrides packaged skills by name and
+   EXTENDS the set with new folders.
+3. **Packaged baseline**: the installer bundles `AGENTS.md` and every
+   skill's `SKILL.md`/references next to the exe (`bundle.resources` in
+   `tauri.conf.json` — one line per new skill file).
+
+Name clashes resolve first-root-wins, so the ordering above *is* the
+override semantics; no merge logic exists. With no `AGENTS.md` anywhere,
+the agent runs on skill advertisements alone.
+
 ## Implementation
 
 Implemented across the `src-tauri/src/` feature modules (`skills.rs` discovery and
@@ -119,11 +137,9 @@ plus `src/ChatView.vue`:
 
 ### 1. Skill Discovery (Rust)
 
-`skill_roots()` scans, in order: `skills/` (cwd and `../skills`, plus the exe
-directory and its parent for the dev layout), then `~/.firstmate/skills`
-(user-added skills — implemented). `discover_skills()` parses each
-`<skill>/SKILL.md` frontmatter (`name`, `description`); first root wins on
-name clashes.
+`skill_roots()` returns the layering above, highest precedence first;
+`discover_skills()` parses each `<skill>/SKILL.md` frontmatter (`name`,
+`description`), first root winning on name clashes.
 
 ### 2. Advertise (frontend, stage 1)
 
@@ -148,8 +164,10 @@ The agent uses the `run_command` tool as instructed by the skill body.
 start with `core_tools()` only; `enable_skill_tools()` appends a loaded
 skill's `tools:` schemas to the run's active set (both provider loops
 rebuild the request's tool list each turn). The tool loop is uncapped; the
-user stops a run with the stop button (`stop_chat`, checked between turns
-and tool calls).
+user stops a run with the stop button (`stop_chat`): checked between turns
+and tool calls, and it also interrupts a command already running in the
+PowerShell session (the session child is killed; the command may have
+partially run).
 
 ### Dispatch gate
 

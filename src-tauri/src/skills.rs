@@ -1,10 +1,21 @@
 use crate::log::home_dir;
 
-/// AGENTS.md locations: cwd, parent (src-tauri dev layout), exe dir and its
-/// parent, then ~/.firstmate. First hit wins.
+/// AGENTS.md resolution — prompt content is layered, never compiled in:
+/// - dev repo layout (`../src-tauri` present): the working copy wins, it
+///   is the content under test
+/// - installed: `~/.firstmate/AGENTS.md` OVERRIDES the packaged baseline
+///   (repo AGENTS.md, bundled next to the exe)
+/// - baseline fallbacks: cwd and the exe dir / its parent
 fn agents_md_path() -> Option<std::path::PathBuf> {
-    let mut candidates: Vec<std::path::PathBuf> =
-        vec![std::path::PathBuf::from("AGENTS.md"), std::path::PathBuf::from("../AGENTS.md")];
+    let dev = std::path::PathBuf::from("../AGENTS.md");
+    if dev.is_file() && std::path::Path::new("../src-tauri").is_dir() {
+        return Some(dev);
+    }
+    let user = home_dir().join(".firstmate").join("AGENTS.md");
+    if user.is_file() {
+        return Some(user);
+    }
+    let mut candidates = vec![std::path::PathBuf::from("AGENTS.md")];
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             candidates.push(dir.join("AGENTS.md"));
@@ -13,7 +24,6 @@ fn agents_md_path() -> Option<std::path::PathBuf> {
             }
         }
     }
-    candidates.push(home_dir().join(".firstmate").join("AGENTS.md"));
     candidates.into_iter().find(|p| p.is_file())
 }
 
@@ -44,12 +54,22 @@ pub(crate) struct SkillInfo {
     pub(crate) description: String,
 }
 
-/// Directories scanned for `<skill>/SKILL.md`: repo `skills/` (cwd, exe dir,
-/// and the parent of the exe dir for the src-tauri dev layout) plus the
-/// user directory `~/.firstmate/skills`.
+/// Directories scanned for `<skill>/SKILL.md`, highest precedence first.
+/// `discover_skills`/`skill_dir` resolve name clashes first-root-wins, so
+/// this ordering IS the override semantics:
+/// - dev repo layout (`../src-tauri` present): the working copy is the
+///   content under test and wins outright
+/// - `~/.firstmate/skills`: the user directory OVERRIDES packaged skills
+///   by name and EXTENDS the set with new ones
+/// - packaged baseline: `skills/` next to the exe (bundle resource) plus
+///   cwd and exe-parent fallbacks
 fn skill_roots() -> Vec<std::path::PathBuf> {
-    let mut candidates =
-        vec![std::path::PathBuf::from("skills"), std::path::PathBuf::from("../skills")];
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if std::path::Path::new("../src-tauri").is_dir() {
+        candidates.push(std::path::PathBuf::from("../skills"));
+    }
+    candidates.push(home_dir().join(".firstmate").join("skills"));
+    candidates.push(std::path::PathBuf::from("skills"));
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             candidates.push(dir.join("skills"));
@@ -58,7 +78,6 @@ fn skill_roots() -> Vec<std::path::PathBuf> {
             }
         }
     }
-    candidates.push(home_dir().join(".firstmate").join("skills"));
     let mut roots = Vec::new();
     for c in candidates {
         let c = c.canonicalize().unwrap_or(c);
@@ -229,12 +248,41 @@ mod tests {
 
     #[test]
     fn system_prompt_comes_from_agents_md_not_the_binary() {
-        // cargo test runs with cwd = src-tauri: ../AGENTS.md is the repo
-        // file. The binary carries no prompt text at all, so anything
-        // present here necessarily came from the file.
+        // cargo test runs with cwd = src-tauri (dev layout): the prompt is
+        // EXACTLY the repo file — the binary carries no prompt text, so
+        // any deviation means content crept into code.
         let p = get_system_prompt();
-        assert!(p.contains("First Mate"));
+        assert_eq!(p, std::fs::read_to_string("../AGENTS.md").unwrap());
         assert!(p.contains("file://"), "prompt must come from AGENTS.md");
+    }
+
+    #[test]
+    fn skill_root_precedence_is_dev_then_user_then_packaged() {
+        // First-root-wins name resolution makes this ordering the override
+        // contract: in the dev layout the repo working copy must be the
+        // first root, and the user directory must precede any packaged
+        // (exe-dir) root so it can override and extend it.
+        let roots = skill_roots();
+        assert_eq!(
+            roots[0],
+            std::path::PathBuf::from("../skills").canonicalize().unwrap()
+        );
+        let user = home_dir().join(".firstmate").join("skills");
+        if let Ok(user) = user.canonicalize() {
+            if user.is_dir() {
+                let exe_packaged = std::env::current_exe()
+                    .ok()
+                    .and_then(|e| e.parent().map(|d| d.join("skills")));
+                if let Some(pkg) = exe_packaged {
+                    let pkg = pkg.canonicalize().unwrap_or(pkg);
+                    if pkg.is_dir() {
+                        let ui = roots.iter().position(|r| *r == user).unwrap();
+                        let pi = roots.iter().position(|r| *r == pkg).unwrap();
+                        assert!(ui < pi, "user skills must override packaged");
+                    }
+                }
+            }
+        }
     }
 
     #[test]
