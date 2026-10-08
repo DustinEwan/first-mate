@@ -237,7 +237,8 @@ const convName = ref<string | null>(null);
 const tempChat = ref(false);
 
 function focusInput() {
-  const el = inputRef.value?.querySelector("input");
+  const el =
+    inputRef.value?.querySelector("textarea") || inputRef.value?.querySelector("input");
   if (el) el.focus();
 }
 
@@ -435,6 +436,15 @@ watch(isThinking, (thinking) => {
     spinnerInterval = null;
   }
 });
+
+// Enter submits; Shift+Enter inserts a newline (the textarea grows).
+function onInputKey(e: KeyboardEvent) {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+    e.preventDefault();
+    void submit();
+  }
+}
+
 async function submit() {
   const text = input.value.trim();
   if (!text) return;
@@ -606,8 +616,12 @@ window.addEventListener("keydown", (e) => {
           <div class="input-row" ref="inputRef">
             <n-input
               v-model:value="input"
-              placeholder="Type a message…"
-              @keydown.enter.prevent="submit"
+              type="textarea"
+              autosize
+              :placeholder="
+                isThinking ? 'First Mate is working… type to queue' : 'Type a message… (Shift+Enter for newline)'
+              "
+              @keydown="onInputKey"
             />
           </div>
         </div>
