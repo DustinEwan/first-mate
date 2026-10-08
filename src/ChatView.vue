@@ -527,12 +527,17 @@ function scrollToBottom() {
 }
 watch(messages, scrollToBottom, { deep: true });
 
-// Escape closes the wizard or panel first, then hides the window.
+// Window-scoped shortcuts: Escape dismisses (wizard is Skip/Finish only),
+// Ctrl+N starts a conversation, Ctrl+Shift+N a temporary one.
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     if (wizardOpen.value) return; // dismissed only via Skip/Finish
     if (panelOpen.value) panelOpen.value = false;
     else hide();
+  } else if (e.ctrlKey && !e.altKey && e.key.toLowerCase() === "n") {
+    e.preventDefault();
+    if (e.shiftKey) newTempChat();
+    else newChat();
   }
 });
 </script>
