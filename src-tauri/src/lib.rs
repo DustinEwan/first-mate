@@ -54,7 +54,7 @@ fn get_hotkey() -> &'static str {
 }
 
 /// LLM configuration, persisted as part of the app settings.
-#[derive(serde::Serialize, serde::Deserialize, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
 #[serde(default)]
 struct LlmSettings {
     provider: String,
@@ -63,27 +63,10 @@ struct LlmSettings {
     base_url: String,
 }
 
-impl Default for LlmSettings {
-    fn default() -> Self {
-        Self {
-            provider: String::new(),
-            model: String::new(),
-            api_key: String::new(),
-            base_url: String::new(),
-        }
-    }
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
 #[serde(default)]
 struct Settings {
     llm: LlmSettings,
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Self { llm: LlmSettings::default() }
-    }
 }
 
 fn settings_file(app: &tauri::AppHandle) -> tauri::Result<std::path::PathBuf> {
@@ -782,7 +765,7 @@ fn list_conversations() -> Vec<ConvInfo> {
             modified,
         });
     }
-    out.sort_by(|a, b| b.modified.cmp(&a.modified));
+    out.sort_by_key(|c| std::cmp::Reverse(c.modified));
     out
 }
 
@@ -2529,7 +2512,7 @@ fn route_to_tool(command: &str, active: &[serde_json::Value]) -> Option<(&'stati
     // Only program position counts: the first token of any command segment
     // (`git grep` stays legal; `cmd /c "dir"` does not).
     for seg in lower.split([';', '|', '&', '(', '"', '\'']) {
-        let Some(tok) = seg.trim().split_whitespace().next() else {
+        let Some(tok) = seg.split_whitespace().next() else {
             continue;
         };
         let tok = tok.trim_end_matches(".exe");
@@ -2953,6 +2936,22 @@ struct HistoryItem {
 /// OpenAI-compatible endpoints (custom/openai/ollama) use the native client,
 /// which supports image parts so screenshots are actually visible to the
 /// model. lmkit handles Anthropic only (text-only chat).
+/// Everything one chat turn needs, assembled once by the command and moved
+/// into whichever provider path runs.
+struct ChatParams {
+    provider: String,
+    base_url: String,
+    api_key: String,
+    model: String,
+    message: String,
+    prior_history: Vec<HistoryItem>,
+    system_prompt: String,
+}
+
+// The 8 parameters are the IPC contract with the frontend (one JSON field
+// each); collapsing them would change the wire format. Grouping happens in
+// ChatParams below.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 async fn chat_with_llm(
     app: tauri::AppHandle,
@@ -2965,24 +2964,33 @@ async fn chat_with_llm(
     system_prompt: String,
 ) -> Result<String, String> {
     CHAT_STOP.store(false, std::sync::atomic::Ordering::SeqCst);
-    if provider == "anthropic" {
-        chat_via_lmkit(app, provider, base_url, api_key, model, message, prior_history, system_prompt).await
+    let params = ChatParams {
+        provider,
+        base_url,
+        api_key,
+        model,
+        message,
+        prior_history,
+        system_prompt,
+    };
+    if params.provider == "anthropic" {
+        chat_via_lmkit(app, params).await
     } else {
-        chat_via_openai(app, provider, base_url, api_key, model, message, prior_history, system_prompt).await
+        chat_via_openai(app, params).await
     }
 }
 
 /// lmkit-backed chat (text-only; used for Anthropic).
-async fn chat_via_lmkit(
-    app: tauri::AppHandle,
-    provider: String,
-    base_url: String,
-    api_key: String,
-    model: String,
-    message: String,
-    prior_history: Vec<HistoryItem>,
-    system_prompt: String,
-) -> Result<String, String> {
+async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, String> {
+    let ChatParams {
+        provider,
+        base_url,
+        api_key,
+        model,
+        message,
+        prior_history,
+        system_prompt,
+    } = p;
     use futures_util::StreamExt;
     use lmkit::{
         create_chat_provider, merge_tool_call_deltas, ChatEvent, ChatMessage,
@@ -3237,16 +3245,16 @@ fn extract_screenshot_path(result: &str) -> Option<String> {
 
 /// Native OpenAI-compatible chat: streaming, tool calls, and image parts so
 /// screenshots the agent captures are attached and actually seen.
-async fn chat_via_openai(
-    app: tauri::AppHandle,
-    provider: String,
-    base_url: String,
-    api_key: String,
-    model: String,
-    message: String,
-    prior_history: Vec<HistoryItem>,
-    system_prompt: String,
-) -> Result<String, String> {
+async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String, String> {
+    let ChatParams {
+        provider,
+        base_url,
+        api_key,
+        model,
+        message,
+        prior_history,
+        system_prompt,
+    } = p;
     use base64::Engine;
     use futures_util::StreamExt;
 
@@ -3508,7 +3516,7 @@ fn toggle_window(app: &tauri::AppHandle) {
         _ => {
             // Dock to the top edge of the monitor, horizontally centered.
             if let Ok(Some(monitor)) = window.current_monitor() {
-                let win_size = window.outer_size().unwrap_or_else(|_| monitor.size().clone());
+                let win_size = window.outer_size().unwrap_or_else(|_| *monitor.size());
                 let x = monitor.position().x + ((monitor.size().width as i64 - win_size.width as i64) / 2) as i32;
                 let _ = window.set_position(PhysicalPosition::new(x, monitor.position().y));
             }
