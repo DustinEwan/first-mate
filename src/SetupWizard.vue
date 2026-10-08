@@ -343,6 +343,10 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 16px;
 }
+.wizard-body .n-alert + .install-row,
+.wizard-body .n-alert + .n-alert {
+  margin-top: 16px;
+}
 .wizard-foot {
   display: flex;
   justify-content: space-between;
