@@ -26,7 +26,14 @@ skills/
 ---
 name: winapp
 description: Inspect and interact with running Windows applications via winapp CLI. Use for UI automation, screenshots, clicking, and app control.
+tools: # optional — Rust tools this skill enables when loaded; omit for pure-behavior skills
 ---
+```
+
+`tools:` is a comma-separated list of Rust-implemented tools (see
+`agent_tools()`) that are injected into the model's context ONLY after this
+skill is loaded. A skill without `tools:` is pure behavior. A skill cannot
+invent tools: unknown names are skipped.
 
 # WinApp UI Automation
 
@@ -81,14 +88,20 @@ winapp ui set-value <selector> <value> -a <app-name>
 
 ## Progressive Disclosure
 
-Four stages, minimizing context usage:
+Five stages, minimizing context usage:
 
 | Stage | Tokens | Trigger |
 |-------|--------|---------|
 | 1. Advertise | ~100/skill | Automatic — injected into system prompt at startup |
 | 2. Load | <5,000 | Agent calls `load_skill("<name>")` when task matches |
+| 2b. Enable tools | ~150/tool | Same call: the skill's `tools:` schemas join the request, for the rest of the run |
 | 3. Read resources | as needed | Agent calls `read_skill_resource("<path>")` |
 | 4. Run scripts | as needed | Agent uses shell tool to execute commands |
+
+Before any skill is loaded, the request carries only the core tools
+(`CORE_TOOLS`): `run_command`, `get_command_output`, `kill_command`,
+`load_skill`, `read_skill_resource`. Tool *implementation* always lives in
+Rust; tool *availability* is a skill decision.
 
 ### Stage 1: Advertise
 
@@ -126,20 +139,28 @@ The agent uses the existing **shell tool** to run commands. The skill instructio
 
 ## Capability Tiers
 
-### Direct Tools (always in tool list)
+### Core Tools (always in context)
 
-- **Filesystem**: `read_file`, `write_file`, `list_dir`, `search_files`
-- **System**: `run_command`, `list_processes`
+- **Command**: `run_command`, `get_command_output`, `kill_command`
 - **Skills**: `load_skill`, `read_skill_resource`
 
-These are simple, generic primitives; they need no progressive disclosure.
+The interpreter itself: enough to run anything and load anything.
+
+### Skill-Enabled Tools (in context only after their skill loads)
+
+- **filesystem skill** enables: `read_file`, `write_file`, `list_dir`,
+  `search_files`, `list_processes`
+
+Implemented in Rust from startup; invisible to the model until the skill's
+`tools:` enables them.
 
 ### Skills (loaded on demand)
 
 All capability knowledge lives here, including the primary one:
 
 - **winapp**: Windows UI automation — commands, rules, and measured latency
-  costs (`skills/winapp/`)
+  costs (`skills/winapp/`) — pure behavior, drives `run_command`
+- **filesystem**: file/process tool usage and rules (`skills/filesystem/`)
 - **git-repo**: repository inspection and safe operations (`skills/git-repo/`)
 - **User skills**: drop a folder into `~/.firstmate/skills/`
 
@@ -173,12 +194,14 @@ directory (canonicalize + prefix check).
 
 The agent uses the `run_command` tool as instructed by the skill body.
 
-### Direct tools
+### Tool registry and disclosure
 
-`run_command`, `read_file`, `write_file`, `list_dir`, `search_files`
-(capped recursive name search), `list_processes` — all in `agent_tools()`.
-The tool loop is uncapped; the user stops a run with the stop button
-(`stop_chat`, checked between turns and tool calls).
+`agent_tools()` is the full registry of Rust-implemented tools. Requests
+start with `core_tools()` only; `enable_skill_tools()` appends a loaded
+skill's `tools:` schemas to the run's active set (both provider loops
+rebuild the request's tool list each turn). The tool loop is uncapped; the
+user stops a run with the stop button (`stop_chat`, checked between turns
+and tool calls).
 
 ### Example
 

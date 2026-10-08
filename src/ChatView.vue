@@ -149,7 +149,8 @@ onMounted(() => {
       `\n\n## Skills (loaded on demand)\nAvailable skills:\n${list}\n` +
       `When a task matches a skill's domain, call load_skill("<name>") to get its ` +
       `full instructions before acting; read reference files with ` +
-      `read_skill_resource("<skill>/<relative/path>").`;
+      `read_skill_resource("<skill>/<relative/path>"). Loading a skill may also ` +
+      `enable additional tools for the rest of the conversation.`;
   });
   // Focus the input when the window is shown/focused.
   nextTick(() => focusInput());

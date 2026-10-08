@@ -419,6 +419,81 @@ fn agent_tools() -> serde_json::Value {
     ])
 }
 
+/// The only tool schemas injected into context before any skill is loaded:
+/// command execution plus the skill machinery itself. Everything else is
+/// implemented here in Rust but stays OUT of the model's context until a
+/// skill's frontmatter `tools:` list enables it (see `enable_skill_tools`).
+const CORE_TOOLS: &[&str] = &[
+    "run_command",
+    "get_command_output",
+    "kill_command",
+    "load_skill",
+    "read_skill_resource",
+];
+
+fn tool_schema(name: &str) -> Option<serde_json::Value> {
+    agent_tools()
+        .as_array()
+        .and_then(|all| {
+            all.iter()
+                .find(|t| t.pointer("/function/name").and_then(|n| n.as_str()) == Some(name))
+                .cloned()
+        })
+}
+
+fn core_tools() -> Vec<serde_json::Value> {
+    CORE_TOOLS.iter().filter_map(|n| tool_schema(n)).collect()
+}
+
+/// Append the tool schemas a skill's frontmatter `tools:` enables that are
+/// not already in `active`. Returns the names added (empty = pure-behavior
+/// skill). Unknown names are skipped: the skill cannot invent tools.
+fn enable_skill_tools(active: &mut Vec<serde_json::Value>, skill_name: &str) -> Vec<String> {
+    let Some(dir) = skill_dir(skill_name) else {
+        return Vec::new();
+    };
+    let Ok(md) = std::fs::read_to_string(dir.join("SKILL.md")) else {
+        return Vec::new();
+    };
+    let (_, _, tools, _) = parse_frontmatter(&md);
+    let mut added = Vec::new();
+    for t in tools {
+        if active.iter().any(|v| v.pointer("/function/name").and_then(|n| n.as_str()) == Some(t.as_str())) {
+            continue;
+        }
+        if let Some(schema) = tool_schema(&t) {
+            active.push(schema);
+            added.push(t);
+        }
+    }
+    added
+}
+
+/// Convert OpenAI-format tool schemas to lmkit types.
+fn to_tool_defs(values: &[serde_json::Value]) -> Vec<lmkit::ToolDefinition> {
+    use lmkit::{FunctionDefinition, ToolDefinition};
+    values
+        .iter()
+        .map(|t| {
+            let func = t.get("function").expect("tool has a function");
+            let name = func
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("")
+                .to_string();
+            let parameters = func
+                .get("parameters")
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
+            let function = match func.get("description").and_then(|d| d.as_str()) {
+                Some(desc) => FunctionDefinition::with_description(name, desc, parameters),
+                None => FunctionDefinition::new(name, parameters),
+            };
+            ToolDefinition { function }
+        })
+        .collect()
+}
+
 /// Skills advertised to the frontend for system-prompt injection (stage 1
 /// of progressive disclosure, docs/SKILLS.md).
 #[tauri::command]
@@ -754,7 +829,8 @@ fn budget_output(seen: &mut HashMap<String, String>, key: String, result: String
 }
 
 /// A skill advertised to the model: name + description from SKILL.md
-/// frontmatter (Agent Skills spec, see docs/SKILLS.md).
+/// frontmatter (Agent Skills spec, see docs/SKILLS.md). Tool availability
+/// is not advertised — it is revealed when the skill is loaded.
 #[derive(serde::Serialize)]
 struct SkillInfo {
     name: String,
@@ -793,29 +869,39 @@ fn skill_roots() -> Vec<std::path::PathBuf> {
     roots
 }
 
-/// Parse `---` frontmatter. Returns (name, description, body-without-frontmatter).
-fn parse_frontmatter(md: &str) -> (Option<String>, Option<String>, String) {
+/// Parse `---` frontmatter. Returns (name, description, tools, body).
+/// `tools:` is a comma-separated list of Rust-implemented tools the skill
+/// enables when loaded; skills without it are pure behavior.
+fn parse_frontmatter(md: &str) -> (Option<String>, Option<String>, Vec<String>, String) {
+    let empty_tools = Vec::new();
     let Some(rest) = md
         .strip_prefix("---")
         .and_then(|r| r.strip_prefix('\n'))
         .or_else(|| md.strip_prefix("---\r\n"))
     else {
-        return (None, None, md.to_string());
+        return (None, None, empty_tools, md.to_string());
     };
     let Some(end) = rest.find("\n---") else {
-        return (None, None, md.to_string());
+        return (None, None, empty_tools, md.to_string());
     };
     let mut name = None;
     let mut description = None;
+    let mut tools = Vec::new();
     for line in rest[..end].lines() {
         if let Some(v) = line.strip_prefix("name:") {
             name = Some(v.trim().to_string());
         } else if let Some(v) = line.strip_prefix("description:") {
             description = Some(v.trim().to_string());
+        } else if let Some(v) = line.strip_prefix("tools:") {
+            tools = v
+                .split(',')
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect();
         }
     }
     let body = rest[end + 4..].trim_start_matches(['\r', '\n']).to_string();
-    (name, description, body)
+    (name, description, tools, body)
 }
 
 /// All skills found under the roots, first root winning on name clashes.
@@ -830,7 +916,7 @@ fn discover_skills() -> Vec<SkillInfo> {
                 continue;
             };
             let dir_name = entry.file_name().to_string_lossy().to_string();
-            let (name, description, _) = parse_frontmatter(&md);
+            let (name, description, _, _) = parse_frontmatter(&md);
             let name = name.unwrap_or(dir_name);
             if !skills.iter().any(|s| s.name == name) {
                 skills.push(SkillInfo {
@@ -858,7 +944,7 @@ fn skill_dir(name: &str) -> Option<std::path::PathBuf> {
                 continue;
             };
             let dir_name = entry.file_name().to_string_lossy().to_string();
-            let (fm_name, _, _) = parse_frontmatter(&md);
+            let (fm_name, ..) = parse_frontmatter(&md);
             if fm_name.as_deref() == Some(name) || dir_name == name {
                 return Some(path);
             }
@@ -1201,8 +1287,15 @@ async fn execute_tool_inner(name: &str, args: &serde_json::Value) -> Result<Stri
             let md = tokio::fs::read_to_string(dir.join("SKILL.md"))
                 .await
                 .map_err(|e| e.to_string())?;
-            let (_, _, body) = parse_frontmatter(&md);
-            Ok(body)
+            let (_, _, tools, body) = parse_frontmatter(&md);
+            if tools.is_empty() {
+                Ok(body)
+            } else {
+                Ok(format!(
+                    "{body}\n\n[Tools now enabled for the rest of this conversation: {}]",
+                    tools.join(", ")
+                ))
+            }
         }
         "read_skill_resource" => {
             let path = args.get("path").and_then(|c| c.as_str()).unwrap_or("");
@@ -1326,29 +1419,9 @@ async fn chat_via_lmkit(
     let config = ProviderConfig::with_base_url(provider_enum, api_key, format!("{base}/v1"), model);
     let llm = create_chat_provider(&config).map_err(|e| e.to_string())?;
 
-    // Convert the tools JSON to lmkit types.
-    let tools: Vec<ToolDefinition> = agent_tools()
-        .as_array()
-        .expect("agent_tools returns an array")
-        .iter()
-        .map(|t| {
-            let func = t.get("function").expect("tool has a function");
-            let name = func
-                .get("name")
-                .and_then(|n| n.as_str())
-                .unwrap_or("")
-                .to_string();
-            let parameters = func
-                .get("parameters")
-                .cloned()
-                .unwrap_or(serde_json::json!({}));
-            let function = match func.get("description").and_then(|d| d.as_str()) {
-                Some(desc) => FunctionDefinition::with_description(name, desc, parameters),
-                None => FunctionDefinition::new(name, parameters),
-            };
-            ToolDefinition { function }
-        })
-        .collect();
+    // Active tool schemas: core only until a skill's `tools:` enables more
+    // (tool availability is skill-driven; see docs/SKILLS.md).
+    let mut active: Vec<serde_json::Value> = core_tools();
 
     // Build the conversation history: system prompt, prior turns, new message.
     let mut history: Vec<ChatMessage> = vec![ChatMessage::system(system_prompt)];
@@ -1372,6 +1445,8 @@ async fn chat_via_lmkit(
             let _ = app.emit("stream_done", serde_json::json!({}));
             return Ok("(stopped)".to_string());
         }
+        // Rebuilt each turn: loading a skill mid-run grows the visible set.
+        let tools: Vec<ToolDefinition> = to_tool_defs(&active);
         log(&format!("TURN {}: history_msgs={} tools={}", turn, history.len(), tools.len()));
         let request = ChatRequest {
             messages: history.clone(),
@@ -1447,7 +1522,19 @@ async fn chat_via_lmkit(
                 let result = execute_tool(&name, &args, &mut seen)
                     .await
                     .unwrap_or_else(|e| format!("Error: {e}"));
+                let ok = !result.starts_with("Error");
                 history.push(ChatMessage::tool(call.id.clone(), result));
+                if name == "load_skill" && ok {
+                    let skill = args.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                    let added = enable_skill_tools(&mut active, skill);
+                    if !added.is_empty() {
+                        log(&format!(
+                            "TOOLS ENABLED by skill {skill}: {} (active={})",
+                            added.join(", "),
+                            active.len()
+                        ));
+                    }
+                }
             }
             log(&format!(
                 "TURN {} TOOL TURN: {} calls, history_msgs={}",
@@ -1577,7 +1664,8 @@ async fn chat_via_openai(
     }
     msgs.push(serde_json::json!({ "role": "user", "content": message }));
 
-    let tools = agent_tools();
+    // Core tools only; skills' `tools:` lists grow this set mid-run.
+    let mut tools: Vec<serde_json::Value> = core_tools();
     let mut seen: HashMap<String, String> = HashMap::new();
     let client = reqwest::Client::new();
     let mut turn = 0;
@@ -1596,9 +1684,10 @@ async fn chat_via_openai(
         });
         let body_json = serde_json::to_string(&body).map_err(|e| e.to_string())?;
         log(&format!(
-            "TURN {} REQUEST: len={} head={:?}",
+            "TURN {} REQUEST: len={} tools={} head={:?}",
             turn,
             body_json.len(),
+            tools.len(),
             body_json.chars().take(300).collect::<String>()
         ));
         let mut req = client.post(&url).header("Content-Type", "application/json");
@@ -1737,6 +1826,17 @@ async fn chat_via_openai(
                             log(&format!("VISION: attached {} bytes from {}", bytes.len(), path));
                         }
                         Err(e) => log(&format!("VISION: cannot read {path}: {e}")),
+                    }
+                }
+                if name == "load_skill" && !result.starts_with("Error") {
+                    let skill = args.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                    let added = enable_skill_tools(&mut tools, skill);
+                    if !added.is_empty() {
+                        log(&format!(
+                            "TOOLS ENABLED by skill {skill}: {} (active={})",
+                            added.join(", "),
+                            tools.len()
+                        ));
                     }
                 }
             }
@@ -1889,11 +1989,11 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        budget_output, conv_dir, discover_skills, exec_capped, execute_tool_inner,
-        extract_screenshot_path, looks_like_unexecuted_intent, merge_tool_call_delta,
-        needs_shell, parse_command, parse_conversation, parse_frontmatter, resolve_conv_path,
-        resolve_skill_resource, sanitize_conv_name, serialize_conversation, skill_dir,
-        spawn_background, CallAcc, ConvMsg,
+        budget_output, conv_dir, core_tools, discover_skills, enable_skill_tools, exec_capped,
+        execute_tool_inner, extract_screenshot_path, looks_like_unexecuted_intent,
+        merge_tool_call_delta, needs_shell, parse_command, parse_conversation, parse_frontmatter,
+        resolve_conv_path, resolve_skill_resource, sanitize_conv_name, serialize_conversation,
+        skill_dir, spawn_background, CallAcc, ConvMsg, CORE_TOOLS,
     };
     use std::collections::HashMap;
 
@@ -2056,14 +2156,16 @@ mod tests {
 
     #[test]
     fn frontmatter_splits_metadata_from_body() {
-        let md = "---\nname: demo\ndescription: A demo skill.\n---\n\n# Body\nDo things.\n";
-        let (name, desc, body) = parse_frontmatter(md);
+        let md = "---\nname: demo\ndescription: A demo skill.\ntools: read_file, list_dir\n---\n\n# Body\nDo things.\n";
+        let (name, desc, tools, body) = parse_frontmatter(md);
         assert_eq!(name.as_deref(), Some("demo"));
         assert_eq!(desc.as_deref(), Some("A demo skill."));
+        assert_eq!(tools, vec!["read_file".to_string(), "list_dir".to_string()]);
         assert_eq!(body, "# Body\nDo things.\n");
         // No frontmatter: body passes through untouched.
-        let (n2, d2, b2) = parse_frontmatter("plain text");
+        let (n2, d2, t2, b2) = parse_frontmatter("plain text");
         assert!(n2.is_none() && d2.is_none());
+        assert!(t2.is_empty());
         assert_eq!(b2, "plain text");
     }
 
@@ -2075,7 +2177,7 @@ mod tests {
         assert!(git.description.contains("git repositories"));
         let dir = skill_dir("git-repo").expect("skill dir");
         let md = std::fs::read_to_string(dir.join("SKILL.md")).unwrap();
-        let (_, _, body) = parse_frontmatter(&md);
+        let (.., body) = parse_frontmatter(&md);
         assert!(body.starts_with("# Git Repos"));
         assert!(!body.contains("description:"));
     }
@@ -2083,7 +2185,8 @@ mod tests {
     #[test]
     fn winapp_skill_is_discoverable_with_cost_guidance() {
         // winapp is a skill, not prompt-hardcoded: discovery must find it and
-        // the body must carry the measured latency guidance.
+        // the body must carry the measured latency guidance. It is pure
+        // behavior: it enables no tools (it drives run_command).
         let skills = discover_skills();
         let win = skills
             .iter()
@@ -2092,9 +2195,39 @@ mod tests {
         assert!(win.description.contains("winapp CLI"), "{}", win.description);
         let dir = skill_dir("winapp").expect("winapp skill dir");
         let md = std::fs::read_to_string(dir.join("SKILL.md")).unwrap();
-        let (_, _, body) = parse_frontmatter(&md);
+        let (_, _, tools, body) = parse_frontmatter(&md);
         assert!(body.contains("# WinApp UI Automation"));
         assert!(body.contains("measured on this machine"));
+        assert!(tools.is_empty(), "winapp must not enable tools");
+    }
+
+    #[test]
+    fn fs_tools_hidden_until_filesystem_skill_enables_them() {
+        // Tool availability is skill-driven: the core context carries only
+        // command+skill primitives; the filesystem skill's frontmatter
+        // enables the fs tools; unknown names can't invent tools.
+        let core = core_tools();
+        let core_names: Vec<&str> = core
+            .iter()
+            .map(|t| t.pointer("/function/name").and_then(|n| n.as_str()).unwrap())
+            .collect();
+        assert_eq!(core_names.len(), CORE_TOOLS.len());
+        for hidden in ["read_file", "write_file", "list_dir", "search_files", "list_processes"] {
+            assert!(!core_names.contains(&hidden), "{hidden} must not be in core");
+        }
+        let fs_skill = skill_dir("filesystem").expect("filesystem skill dir");
+        let md = std::fs::read_to_string(fs_skill.join("SKILL.md")).unwrap();
+        let (_, _, declared, _) = parse_frontmatter(&md);
+        assert_eq!(declared.len(), 5, "filesystem skill declares 5 tools");
+        let mut active = core.clone();
+        let added = enable_skill_tools(&mut active, "filesystem");
+        assert_eq!(added.len(), 5);
+        assert_eq!(active.len(), core.len() + 5);
+        // Idempotent: loading twice adds nothing.
+        assert!(enable_skill_tools(&mut active, "filesystem").is_empty());
+        // Pure-behavior skill enables nothing; unknown skill enables nothing.
+        assert!(enable_skill_tools(&mut active, "winapp").is_empty());
+        assert!(enable_skill_tools(&mut active, "no-such-skill").is_empty());
     }
 
     #[test]
