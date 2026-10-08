@@ -24,6 +24,7 @@ mod route;
 mod settings;
 mod skills;
 mod tooldefs;
+mod update;
 mod window;
 
 use crate::conversations::{delete_conversation, list_conversations, load_conversation, save_conversation};
@@ -40,6 +41,8 @@ use crate::window::{open_settings, open_settings_inner, toggle_window};
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, list_models, list_providers, test_llm, chat_with_llm, stop_chat, list_skills, list_conversations, load_conversation, delete_conversation, save_conversation, get_system_prompt, open_path, bootstrap_status, install_winapp, open_settings])
         .setup(|app| {
             // Scratch hygiene (P6): drop old generations of generated
@@ -65,7 +68,11 @@ pub fn run() {
                 MenuItem::with_id(app, "setup", "Setup Wizard", true, None::<&str>)?;
             let quit_item =
                 MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&toggle_item, &setup_item, &settings_item, &quit_item])?;
+            // Disabled until the background check finds an update; then it is
+            // enabled and renamed to "Update to X" (see update.rs).
+            let update_item = MenuItem::with_id(app, "update", "Update…", false, None::<&str>)?;
+            app.manage(update::UpdateItem(update_item.clone()));
+            let menu = Menu::with_items(app, &[&toggle_item, &setup_item, &settings_item, &update_item, &quit_item])?;
 
             // The anchor glyph rendered from Segoe UI Emoji (icons/tray.png),
             // not the default Tauri icon.
@@ -76,15 +83,21 @@ pub fn run() {
                 .tooltip("First Mate")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "toggle" => toggle_window(app),
-                    "setup" => {
-                        toggle_window(app);
-                        let _ = app.emit("open_setup", ());
+                .on_menu_event(|app, event| {
+                    if event.id.as_ref() == "update" {
+                        update::handle_menu_click(app);
+                        return;
                     }
-                    "settings" => open_settings_inner(app),
-                    "quit" => app.exit(0),
-                    _ => {}
+                    match event.id.as_ref() {
+                        "toggle" => toggle_window(app),
+                        "setup" => {
+                            toggle_window(app);
+                            let _ = app.emit("open_setup", ());
+                        }
+                        "settings" => open_settings_inner(app),
+                        "quit" => app.exit(0),
+                        _ => {}
+                    }
                 })
                 .on_tray_icon_event({
                     // A single tray click can emit more than one event; debounce so a
@@ -106,6 +119,9 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+
+            // Self-update: check GitHub Releases shortly after launch.
+            update::spawn_check(app.handle());
 
             // Global hotkey toggles the console from anywhere.
             app.global_shortcut()

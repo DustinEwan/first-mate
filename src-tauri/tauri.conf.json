@@ -1,7 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "First Mate",
-  "version": "0.1.0",
   "identifier": "com.dusti.firstmate",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -31,6 +30,13 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
+    "category": "Utility",
+    "shortDescription": "Hotkey-summoned desktop assistant",
+    "longDescription": "First Mate is a hotkey-summoned desktop assistant: a console window, LLM chat with local models, and a skills system that drives the desktop.",
+    "copyright": "Copyright © 2026 Dustin Ewan",
+    "license": "Apache-2.0",
+    "licenseFile": "../LICENSE",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -38,5 +44,11 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDlBREI4MUY2MDA5QjA1MjgKUldRb0Jac0E5b0hibWh4c2JqRFFtNDU1QWlVSEtlLzJzUWxsTkpzVUt2WGxPWWdYU1FxZFNlZUEK",
+      "endpoints": ["https://github.com/DustinEwan/first-mate/releases/latest/download/latest.json"]
+    }
   }
 }

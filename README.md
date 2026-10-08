@@ -98,6 +98,21 @@ feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert, `!` for breaking.
 cd src-tauri && cargo-vs.bat test
 ```
 
+## Releasing
+
+Releases are automatic: merge Conventional Commit PRs to `main`, and
+[release-please](https://github.com/googleapis/release-please) opens a release
+PR that bumps `package.json` and `src-tauri/Cargo.toml` (single source of
+truth — `tauri.conf.json` carries no version). Merging it publishes a GitHub
+Release; the `Release Build` workflow then builds the Windows bundles on the
+pipeline, signs them with the updater minisign key, and uploads the
+installers plus `latest.json`. The app checks that endpoint on launch and
+offers an in-tray one-click update.
+
+Authenticode is not configured (SmartScreen shows "unknown publisher" once
+per version). Free option: apply to SignPath Foundation for OSS code
+signing; paid: Azure Artifact Signing.
+
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE).
