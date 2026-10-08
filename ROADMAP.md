@@ -5,8 +5,10 @@ window. Everything below serves that: the right agent for the job, skills
 that compound, and the trust layer that makes it safe to point an agent at
 a machine full of personal data.
 
-Owner priorities are §1–4; §5 is the competitive scan (what Copilot ships,
-what users actually praise) and §6 the features we pulled from it.
+Owner priorities are §1–4. §5 reads Copilot's track record for the
+_usefulness_ underneath its features — the jobs users actually hire for,
+inferred from what gets praised vs punished — and §6 derives First Mate
+capabilities from those jobs, not from Microsoft's mechanisms.
 
 ## 1. Agent Profiles
 
@@ -17,7 +19,7 @@ task.
 **Design sketch.**
 
 - A profile = `{name, system_prompt, model binding, skill allowlist,
-harness policy}` stored under `~/.firstmate/profiles/*.toml`; the
+  harness policy}` stored under `~/.firstmate/profiles/*.toml`; the
   existing per-conversation system prompt resolution
   (`skills::get_system_prompt`) becomes profile-scoped.
 - Profile switcher in the console header + `use profile <name>` as a
@@ -114,56 +116,73 @@ or financial data. Local models need none of this — so the feature is
 **Dependency:** profile model bindings (§1) decide when this runs; item 3
 decides what's worth protecting on disk instead.
 
-## 5. Competitive scan — Copilot on Windows, and what users reward
+## 5. The Copilot lesson: usefulness, not features
 
-What Microsoft ships (2025–2026) and the observed reception:
+Microsoft's 2025–2026 AI features are mechanisms; their reception tells us
+which _jobs_ underneath them are real. Users can't articulate the job —
+they praise or punish the packaging — so the job is inferred from the
+reaction pattern. Four jobs survive the evidence:
 
-| Feature                                      | What it is                                                                                                                    | User signal                                                                                                                                                                                                              |
-| -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Recall                                       | Snapshot timeline + semantic "when did I see X"                                                                               | Loud backlash, but **actual users rave** — "first truly great and useful AI productivity tool" (r/Windows11); WIRED: useful with privacy trade-offs. Lesson: the _capability_ is loved; the _default posture_ was hated. |
-| Recall security redesign                     | Windows Hello-gated, encrypted, filtered snapshots                                                                            | The groaning follows _unencrypted-by-default_ storage, not the feature. Validates item 3's design class.                                                                                                                 |
-| Click to Do                                  | Select anything on screen → summarize/copy/search/save actions                                                                | Mixed; loved as an accessibility surface (screen-reader supported), meh as "AI party trick." Lesson: actions on _selections_ beat actions on _screenshots_.                                                              |
-| Copilot Actions + Agent Workspace (Oct 2025) | Agents do multi-step tasks (files, emails, docs) inside a **sandboxed workspace, low-privilege agent account, scoped access** | The security model IS the pitch. Lesson: agentic ambition without containment reads as reckless.                                                                                                                         |
-| Voice Access                                 | Full voice control of the PC                                                                                                  | **Most positive sentiment of any Windows AI feature** ("oh my god windows voice access is incredible"); built for motor impairment, adopted by everyone.                                                                 |
-| Live Captions / Hey Copilot                  | Translation, voice wake                                                                                                       | Well liked, low controversy.                                                                                                                                                                                             |
+| Job (what the user is actually hiring for)                                                                                       | Evidence from reception                                                                                                                                                                             | What it rules in / out                                                                                                   |
+| -------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| **"Don't make me lose what I already saw/knew."** Recovery of lost context — the thing I read, the fix I did, the decision I made last month. | Recall: constant backlash yet devoted actual users ("first truly great and useful AI productivity tool"). The backlash tracked the _plaintext-by-default posture_, not the recovery value — the redesigned Hello-gated version kept the praise and shed some of the fear. | The job is real and worth serving. It does NOT imply an ambient recorder; that's one costly way to serve it.                |
+| **"Use what's already in front of me."** The current selection/window should be the argument to the next action, without copy-paste rituals. | Click to Do: mixed as a spectacle, genuinely valued as an accessibility surface. The chat-app packaging (leave your app, paste into a panel) ate most of the value.                                    | The job is real; the friction of the delivery is the failure mode. A globally hotkeyed assistant already avoids that tax.   |
+| **"Take this chore off my hands — I'll approve the plan."** Offloading repeatable multi-step drudgery while keeping control of the leash. | Copilot Actions: adoption discourse is almost entirely about the containment model (workspace, low-privilege account, scoped access) — because _trust is the purchase_, not the demo. Nobody brags about one-shot agent tricks. | Delegation with explicit, bounded trust is the product. Unbounded autonomy reads as reckless and sells nothing.            |
+| **"Capture my intent at the speed of thought."** Low-friction expression for requests too long to type.                          | Voice Access: the most uniformly positive sentiment of any Windows AI feature, adopted far beyond its accessibility audience. Nobody wants voice _control_ when in flow — they want voice _input_.    | Voice as an input modality; hands-free OS operation is someone else's product.                                             |
 
-Synthesis: users reward (a) _memory/search over their own machine_,
-(b) _voice_, (c) _actions scoped to what's in front of them_, and punish
-(d) plaintext risk, (e) unbounded agents. Items 1–4 already answer (d);
-§6 picks up (a)–(c).
+The punishment signal is just as clear: plaintext-at-rest storage and
+unbounded blast radius are the only things users consistently hate. Items
+§3–4 and the trust tiers below are that answer, so the four jobs above can
+be pursued without importing the liability.
 
-## 6. Research-derived roadmap entries
+## 6. Derived capabilities
 
-**Later — "Here" (Click to Do, First Mate's way).** Hotkey on any app's
-selection (or a screen region) → route to the active profile: summarize,
-translate, explain, "file this", "draft reply". Selection-first (the
-praised half of Click to Do), region-capture behind explicit consent.
-Needs: a vision-capable profile model; UIA selection capture (the winapp
-harness already speaks UIA).
+Each entry states the job first; the mechanism is ours to choose.
 
-**Later — Voice input.** Push-to-talk on the summon hotkey → local STT
-(whisper.cpp or Windows Speech recognition API) → console. Voice Access's
-sentiment says the demand is real; local STT keeps it inside the item-3/4
-trust boundary. (Full voice _control_ of the PC is explicitly out of
-scope — Voice Access already owns that, well.)
+**Next — Harness trust tiers.** _(job: bounded delegation)_ Delegation is
+only sellable as graded trust. Today the exec harness runs at full user
+privilege; tiers: 0 read-only, 1 workspace-scoped writes, 2 destructive
+with per-call confirm, 3 anything sent out-of-band. Profile defaults pick
+the tier; `route.rs` already gates program disclosure — this extends the
+same seam. Precondition for everything else below, and for §2's
+self-authored skills running unattended.
 
-**Later — Session memory ("when did I…?").** Semantic index over the
-user's _own_ First Mate conversations and spilled outputs — Recall's
-loved half, applied to data we already own, sealed under item 3. Avoids
-screen-constant capture entirely: no ambient recorder, same benefit.
+**Later — Continuity.** _(job: don't lose what I knew)_ Not a searchable
+archive for humans — the _agent_ resurfaces relevant history at the
+moment of relevance ("you restructured these logs in March — same
+failure?"). First Mate already owns the raw material: every conversation,
+every spilled output, every skill execution. Index them (embeddings over
+sealed data, §3) and let the active profile query its own past. Zero
+ambient capture: the recorder mechanism was Recall's most expensive and
+least loved choice; we serve the same job from work product we already
+have.
 
-**Next — Harness trust tiers.** Copilot Actions' containment as the
-model for our exec harness (today: full user privileges):
-tier 0 read-only, tier 1 workspace-scoped writes, tier 2 destructive with
-per-call confirm, tier 3 out-of-band (sending anything external). Profile
-defaults pick the tier; `route.rs` already gates program disclosure —
-this extends the same seam. This is the precondition for letting §2's
-self-authored skills run unattended.
+**Later — Focus transfer.** _(job: use what's in front of me)_ The active
+selection, clipboard, or window becomes an implicit argument to the
+summoned command — summarize, translate, "file this", "draft reply" — and
+the result lands back in the source app, not in a panel the user has to
+visit. Our hotkey-console already deletes the app-switch tax that sank
+Click to Do's feel; what's missing is UIA selection capture (the winapp
+harness speaks UIA) and write-back affordances.
+
+**Later — Voice input.** _(job: capture intent at speed of thought)_
+Hold the summon hotkey → talk → release → transcribed request in the
+console. Local STT only (whisper.cpp or the Windows Speech API) so voice
+never crosses the §3/§4 boundary. Input-only: full voice control of the
+OS belongs to Voice Access, which does it well.
+
+**Later — Scheduled delegation.** _(job: take this chore off my hands)_
+The end-state of bounded delegation: an approved skill bound to a trigger
+(schedule, file arrival, window title) runs under its tier and reports
+into the console. The approval artifact is the §2 skill itself — which is
+why self-authored skills must ship with review, versioning, and tier
+binding before automation exists.
 
 ## Non-goals
 
-- Ambient screen capture (Recall-style recorder) — item 3's threat model
-  plus user sentiment says no; session memory (§6) covers the benefit.
+- Ambient screen capture (Recall-style recorder) — the continuity job
+  (§6) is served from our own work product; the recorder mechanism brings
+  §3's threat model for free.
 - Full voice control of the OS — Voice Access does it, accessibility
   first.
 - Being a coding harness — the console stays a task runner; deep coding
