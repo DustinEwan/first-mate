@@ -3,7 +3,7 @@
 // via Naive UI's n-steps. Shown when no model is configured; reopenable
 // from the tray ("Setup Wizard").
 import { invoke } from "@tauri-apps/api/core";
-import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
   NAlert,
   NButton,
@@ -45,6 +45,7 @@ interface ProviderSpec {
   base: string;
   keyHint: string;
   keyOptional: boolean;
+  isLocal: boolean;
 }
 
 // The roster lives in the backend (providers.json); the UI renders it verbatim.
@@ -67,6 +68,12 @@ function onProviderChange(id: string) {
   baseUrl.value = spec.base;
   keyPlaceholder.value = spec.keyHint || "not required";
 }
+
+// Hosted endpoints are fixed by the roster; only user-owned ones (local
+// engines, custom URLs) expose the Base URL field.
+const showBaseUrl = computed(
+  () => providerSpecs.value.find((p) => p.id === provider.value)?.isLocal ?? false,
+);
 
 function modelOptions() {
   const opts = models.value.map((m) => ({ label: m, value: m }));
@@ -211,7 +218,7 @@ onBeforeUnmount(() => {
                 @update:value="onProviderChange"
               />
             </n-form-item>
-            <n-form-item label="Base URL">
+            <n-form-item v-if="showBaseUrl" label="Base URL">
               <n-input v-model:value="baseUrl" placeholder="e.g. http://localhost:11434" />
             </n-form-item>
             <n-form-item label="API key">

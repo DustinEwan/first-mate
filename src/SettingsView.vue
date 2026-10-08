@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import {
   NConfigProvider,
   NForm,
@@ -35,6 +35,7 @@ interface ProviderSpec {
   base: string;
   keyHint: string;
   keyOptional: boolean;
+  isLocal: boolean;
 }
 
 // The roster lives in the backend (providers.json); the UI renders it verbatim.
@@ -57,6 +58,12 @@ function onProviderChange(id: string) {
   baseUrl.value = spec.base;
   keyPlaceholder.value = spec.keyHint || "not required";
 }
+
+// Hosted endpoints are fixed by the roster; only user-owned ones (local
+// engines, custom URLs) expose the Base URL field.
+const showBaseUrl = computed(
+  () => providerSpecs.value.find((p) => p.id === provider.value)?.isLocal ?? false,
+);
 
 // Include the current model in the options even if it's not in the discovered list.
 function modelOptions() {
@@ -148,7 +155,7 @@ function closeWindow() {
               @update:value="onProviderChange"
             />
           </n-form-item>
-          <n-form-item label="Base URL">
+          <n-form-item v-if="showBaseUrl" label="Base URL">
             <n-input v-model:value="baseUrl" placeholder="e.g. http://localhost:11434" />
           </n-form-item>
           <n-form-item label="API key">

@@ -6,7 +6,8 @@
     "auth": "none",
     "base": "http://localhost:11434",
     "keyHint": "",
-    "keyOptional": true
+    "keyOptional": true,
+    "isLocal": true
   },
   {
     "id": "lm-studio",
@@ -15,7 +16,8 @@
     "auth": "none",
     "base": "http://localhost:1234/v1",
     "keyHint": "",
-    "keyOptional": true
+    "keyOptional": true,
+    "isLocal": true
   },
   {
     "id": "llama-cpp",
@@ -24,7 +26,8 @@
     "auth": "none",
     "base": "http://localhost:8080/v1",
     "keyHint": "",
-    "keyOptional": true
+    "keyOptional": true,
+    "isLocal": true
   },
   {
     "id": "openai",
@@ -209,6 +212,7 @@
     "auth": "bearer",
     "base": "",
     "keyHint": "...",
-    "keyOptional": true
+    "keyOptional": true,
+    "isLocal": true
   }
 ]

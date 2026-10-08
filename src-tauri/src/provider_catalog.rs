@@ -47,6 +47,10 @@ pub(crate) struct Spec {
     /// True when an empty key is valid (local engines).
     #[serde(default)]
     pub key_optional: bool,
+    /// True when the endpoint is user-owned (local engine or custom URL):
+    /// the UI shows the Base URL field only for these rows.
+    #[serde(default)]
+    pub is_local: bool,
 }
 
 fn rows() -> &'static Vec<Spec> {
@@ -102,6 +106,17 @@ mod tests {
                 "{} base must be a URL or empty",
                 s.id
             );
+        }
+        // Local rows own their endpoint: the UI only shows Base URL for
+        // them, so each must carry a default (custom is the user's entry).
+        for id in ["ollama", "lm-studio", "llama-cpp", "custom"] {
+            let s = lookup(id).unwrap_or_else(|| panic!("{id} missing from roster"));
+            assert!(s.is_local, "{id} must be marked isLocal");
+        }
+        for s in catalog() {
+            if s.is_local && s.id != "custom" {
+                assert!(!s.base.is_empty(), "{} is local but has no default base", s.id);
+            }
         }
         // The three protocol families the app routes must all be present.
         for api in [Api::Openai, Api::Anthropic, Api::Gemini] {
