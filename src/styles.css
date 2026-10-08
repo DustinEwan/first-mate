@@ -213,7 +213,7 @@ body {
    sections, mirroring the TUI's boxed tool output. */
 .msg.tool.report {
   padding: 0;
-  margin: 2px 12px 8px;
+  margin: 4px 12px 12px;
   border: 1px solid #2c2c31;
   border-radius: 6px;
   background: #141518;
