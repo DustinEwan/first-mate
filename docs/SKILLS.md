@@ -94,8 +94,8 @@ The interpreter itself: enough to run anything and load anything.
 
 ### Skill-Enabled Tools (in context only after their skill loads)
 
-- **filesystem skill** enables: `read_file`, `write_file`, `list_dir`,
-  `search_files`, `list_processes`
+- **filesystem skill** enables: `read_file`, `edit_file`, `write_file`,
+  `list_dir`, `search_files`, `list_processes`
 
 Implemented in Rust from startup; invisible to the model until the skill's
 `tools:` enables them.

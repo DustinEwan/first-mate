@@ -3149,7 +3149,7 @@ mod tests {
         skill_dir, spawn_background, tool_is_disclosed, tool_schema, trim_dir, truncate_if_over,
         NoopNotifier,
         ps_session_exec, ps_session_shutdown, PsRun,
-        CallAcc, ConvMsg, CORE_TOOLS,
+        CallAcc, ConvMsg, CORE_TOOLS, BgNotifier,
     };
     use std::collections::HashMap;
 
@@ -4055,5 +4055,168 @@ mod tests {
         .unwrap_err();
         assert!(err.contains("changed"), "{err}");
         std::fs::remove_file(&p).ok();
+    }
+
+    /// Records completion announcements so the test can observe what the
+    /// production path would emit as a `tool_result` event.
+    #[derive(Default)]
+    struct Recorder(std::sync::Mutex<Vec<(u32, String, String)>>);
+
+    impl BgNotifier for Recorder {
+        fn announce(&self, pid: u32, _cmd: &str, status: &str, out: &str, _err: &str) {
+            self.0.lock().unwrap().push((pid, status.to_string(), out.to_string()));
+        }
+    }
+
+    /// One replay of a full agent session against the real machine: skill
+    /// load enables tools -> persistent PowerShell session keeps state and
+    /// cwd -> interceptor refuses duplicated shell -> read/edit/write guard
+    /// chain -> slow command auto-backgrounds -> completion is announced.
+    #[tokio::test]
+    async fn composite_agent_session_replay() {
+        let dir = std::env::temp_dir().join(format!("fm-e2e-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dpath = dir.to_string_lossy().to_string();
+        let fpath = dir.join("notes.md").to_string_lossy().to_string();
+
+        // Stage 2: loading the skill discloses its tools to this run.
+        let mut active = core_tools();
+        assert_eq!(enable_skill_tools(&mut active, "filesystem").len(), 6);
+        let rec = std::sync::Arc::new(Recorder::default());
+        let n: std::sync::Arc<dyn BgNotifier> = rec.clone();
+        let call = |name: &str, args: serde_json::Value| {
+            let n = n.clone();
+            let name = name.to_string();
+            let tools: &Vec<serde_json::Value> = &active;
+            async move { execute_tool_notify(n, tools, &name, &args).await }
+        };
+
+        // Persistent session: state survives between calls, cwd sticks.
+        call(
+            "run_command",
+            serde_json::json!({ "command": "$x = 21 * 2", "shell": "powershell", "cwd": &dpath }),
+        )
+        .await
+        .unwrap();
+        let r = call(
+            "run_command",
+            serde_json::json!({
+                "command": "echo \"x=$x pwd=$((Get-Location).Path)\"", "shell": "powershell"
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(r.contains("x=42") && r.to_lowercase().contains("fm-e2e"), "{r}");
+
+        // Interceptor: the fs tools are disclosed, so `dir` is refused.
+        let err = call("run_command", serde_json::json!({ "command": "dir" }))
+            .await
+            .unwrap_err();
+        assert!(err.contains("Blocked") && err.contains("list_dir"), "{err}");
+
+        // Create -> read -> edit -> guarded overwrite.
+        let w = call(
+            "write_file",
+            serde_json::json!({ "path": &fpath, "content": "# Notes\nline two\nline three\n" }),
+        )
+        .await
+        .unwrap();
+        assert!(w.contains("wrote 28 bytes"), "{w}");
+        let r = call("read_file", serde_json::json!({ "path": &fpath }))
+            .await
+            .unwrap();
+        assert!(r.contains("2:line two"), "{r}");
+        let t = tag_of(&r);
+        let e = call(
+            "edit_file",
+            serde_json::json!({ "path": &fpath, "tag": &t, "ops": "PUT 2.=2:\n+line TWO\n" }),
+        )
+        .await
+        .unwrap();
+        assert!(e.contains("PUT 2.2"), "{e}");
+        assert_eq!(
+            std::fs::read_to_string(&fpath).unwrap(),
+            "# Notes\nline TWO\nline three\n"
+        );
+        // Stale tag (the pre-edit one) cannot clobber the file.
+        let err = call(
+            "write_file",
+            serde_json::json!({ "path": &fpath, "content": "gone\n", "tag": &t }),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("changed") || err.contains("read_file"), "{err}");
+        assert!(std::fs::read_to_string(&fpath).unwrap().contains("line TWO"));
+
+        // Slow foreground command: adopted into the background, never polled.
+        std::env::set_var("FIRSTMATE_AUTO_BG_SECS", "1");
+        let r = call(
+            "run_command",
+            serde_json::json!({ "command": "ping -n 30 127.0.0.1" }),
+        )
+        .await
+        .unwrap();
+        std::env::remove_var("FIRSTMATE_AUTO_BG_SECS");
+        assert!(r.contains("moved to background") && r.contains("do NOT poll"), "{r}");
+        let pid: u32 = r
+            .split("pid ")
+            .nth(1)
+            .unwrap()
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<String>()
+            .parse()
+            .unwrap();
+        let out = call("get_command_output", serde_json::json!({ "pid": pid }))
+            .await
+            .unwrap();
+        assert!(out.contains("running"), "{out}");
+        call("kill_command", serde_json::json!({ "pid": pid }))
+            .await
+            .unwrap();
+        // Even a killed job announces - the model learns it stopped.
+        let mut kill_noted = false;
+        for _ in 0..80 {
+            if !rec.0.lock().unwrap().is_empty() {
+                kill_noted = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+        assert!(kill_noted, "killed job must announce its exit");
+        rec.0.lock().unwrap().clear();
+
+        // background:true job -> completion lands in the notifier.
+        let r = call(
+            "run_command",
+            serde_json::json!({ "command": "ping -n 2 127.0.0.1", "background": true }),
+        )
+        .await
+        .unwrap();
+        assert!(r.contains("pid"), "{r}");
+        let mut announced = None;
+        for _ in 0..80 {
+            if let Some(x) = rec.0.lock().unwrap().first() {
+                announced = Some(x.clone());
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+        let (apid, status, out) = announced.expect("completion must be announced");
+        let bpid: u32 = r
+            .split("pid ")
+            .nth(1)
+            .unwrap()
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<String>()
+            .parse()
+            .unwrap();
+        assert_eq!(apid, bpid);
+        assert!(status.starts_with("exited: 0"), "{status}");
+        assert!(out.contains("TTL="), "{out}");
+
+        ps_session_shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
