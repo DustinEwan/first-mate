@@ -1,10 +1,11 @@
 # First Mate — Agent Skills Design
 
-## Overview
+First Mate is a Windows control agent. Its base system prompt carries only
+behavioral rules; every capability — including **winapp**, its primary UI
+automation tool — is delivered as a skill and loaded on demand.
 
-First Mate is a Windows control agent. Its primary capability is **winapp** — inspecting and interacting with running Windows applications. This is first-class: always available, always in the system prompt.
-
-First Mate also supports the [Agent Skills](https://agentskills.io/) open specification for extensible, on-demand capabilities.
+First Mate follows the [Agent Skills](https://agentskills.io/) open
+specification for extensible, on-demand capabilities.
 
 
 ## Skill Structure
@@ -125,20 +126,22 @@ The agent uses the existing **shell tool** to run commands. The skill instructio
 
 ## Capability Tiers
 
-### First-Class (always in system prompt)
-
-- **winapp**: Windows UI automation — the primary purpose of this agent. Its instructions are always available; no loading needed.
-
 ### Direct Tools (always in tool list)
 
 - **Filesystem**: `read_file`, `write_file`, `list_dir`, `search_files`
 - **System**: `run_command`, `list_processes`
+- **Skills**: `load_skill`, `read_skill_resource`
 
-These are simple, frequently used, and don't need progressive disclosure.
+These are simple, generic primitives; they need no progressive disclosure.
 
 ### Skills (loaded on demand)
 
-- **Future skills**: Domain-specific workflows, user-added capabilities
+All capability knowledge lives here, including the primary one:
+
+- **winapp**: Windows UI automation — commands, rules, and measured latency
+  costs (`skills/winapp/`)
+- **git-repo**: repository inspection and safe operations (`skills/git-repo/`)
+- **User skills**: drop a folder into `~/.firstmate/skills/`
 
 
 ## Implementation
@@ -174,7 +177,8 @@ The agent uses the `run_command` tool as instructed by the skill body.
 
 `run_command`, `read_file`, `write_file`, `list_dir`, `search_files`
 (capped recursive name search), `list_processes` — all in `agent_tools()`.
-A `MAX_TURNS` cap stops non-converging tool loops.
+The tool loop is uncapped; the user stops a run with the stop button
+(`stop_chat`, checked between turns and tool calls).
 
 ### Example
 

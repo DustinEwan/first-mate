@@ -2081,6 +2081,23 @@ mod tests {
     }
 
     #[test]
+    fn winapp_skill_is_discoverable_with_cost_guidance() {
+        // winapp is a skill, not prompt-hardcoded: discovery must find it and
+        // the body must carry the measured latency guidance.
+        let skills = discover_skills();
+        let win = skills
+            .iter()
+            .find(|s| s.name == "winapp")
+            .expect("winapp skill");
+        assert!(win.description.contains("winapp CLI"), "{}", win.description);
+        let dir = skill_dir("winapp").expect("winapp skill dir");
+        let md = std::fs::read_to_string(dir.join("SKILL.md")).unwrap();
+        let (_, _, body) = parse_frontmatter(&md);
+        assert!(body.contains("# WinApp UI Automation"));
+        assert!(body.contains("measured on this machine"));
+    }
+
+    #[test]
     fn skill_resource_resolution_is_locked_down() {
         // Traversal and malformed shapes fail before any filesystem access.
         assert!(resolve_skill_resource("git-repo/../secrets.txt").is_err());
