@@ -31,6 +31,22 @@ fn stop_chat() {
     }
 }
 
+/// A text-only turn that is a declared intent rather than a final answer:
+/// short and action-declaring ("Let me check X", or ending mid-thought).
+/// Small models do this when they mean to call a tool but emit prose
+/// instead; the loop nudges once per run so the declared action executes.
+fn looks_like_unexecuted_intent(text: &str) -> bool {
+    let t = text.trim();
+    if t.is_empty() || t.chars().count() > 400 {
+        return false;
+    }
+    let lower = t.to_lowercase();
+    let declares = ["let me", "i'll ", "i will ", "now let", "i'm going to", "let's "]
+        .iter()
+        .any(|p| lower.starts_with(p) || lower.contains(&format!(". {p}")));
+    declares || t.ends_with(':') || t.ends_with('…') || t.ends_with("...")
+}
+
 /// Expose the summon hotkey to the frontend so the UI always shows the real binding.
 #[tauri::command]
 fn get_hotkey() -> &'static str {
@@ -1349,6 +1365,7 @@ async fn chat_via_lmkit(
     // Per-run memory of tool results for output budgeting (dedupe/truncate).
     let mut seen: HashMap<String, String> = HashMap::new();
     let mut turn = 0;
+    let mut nudged = false;
     loop {
         if chat_stop_requested() {
             log(&format!("CHAT STOPPED after {turn} turns"));
@@ -1436,6 +1453,29 @@ async fn chat_via_lmkit(
                 "TURN {} TOOL TURN: {} calls, history_msgs={}",
                 turn, calls.len(), history.len()
             ));
+            turn += 1;
+            continue;
+        }
+
+        // Text-only intent without a tool call: nudge once so "Let me
+        // verify X" is actually followed by the verification.
+        if !nudged && calls.is_empty() && looks_like_unexecuted_intent(&text) {
+            nudged = true;
+            log(&format!("INTENT NUDGE: turn {turn} declared action without a tool call: {text:?}"));
+            history.push(ChatMessage {
+                role: Role::Assistant,
+                content: Some(text.clone()),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            });
+            history.push(ChatMessage {
+                role: Role::User,
+                content: Some("(continue — execute that now with a tool call)".into()),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            });
             turn += 1;
             continue;
         }
@@ -1541,6 +1581,7 @@ async fn chat_via_openai(
     let mut seen: HashMap<String, String> = HashMap::new();
     let client = reqwest::Client::new();
     let mut turn = 0;
+    let mut nudged = false;
     loop {
         if chat_stop_requested() {
             log(&format!("CHAT STOPPED after {turn} turns"));
@@ -1709,6 +1750,19 @@ async fn chat_via_openai(
             continue;
         }
 
+        // Text-only intent without a tool call: nudge once (see lmkit path).
+        if !nudged && looks_like_unexecuted_intent(&text) {
+            nudged = true;
+            log(&format!("INTENT NUDGE: turn {turn} declared action without a tool call: {text:?}"));
+            msgs.push(serde_json::json!({"role": "assistant", "content": text}));
+            msgs.push(serde_json::json!({
+                "role": "user",
+                "content": "(continue — execute that now with a tool call)"
+            }));
+            turn += 1;
+            continue;
+        }
+
         let _ = app.emit("stream_done", serde_json::json!({}));
         return Ok(text);
     }
@@ -1836,9 +1890,10 @@ pub fn run() {
 mod tests {
     use super::{
         budget_output, conv_dir, discover_skills, exec_capped, execute_tool_inner,
-        extract_screenshot_path, merge_tool_call_delta, needs_shell, parse_command,
-        parse_conversation, parse_frontmatter, resolve_conv_path, resolve_skill_resource,
-        sanitize_conv_name, serialize_conversation, skill_dir, spawn_background, CallAcc, ConvMsg,
+        extract_screenshot_path, looks_like_unexecuted_intent, merge_tool_call_delta,
+        needs_shell, parse_command, parse_conversation, parse_frontmatter, resolve_conv_path,
+        resolve_skill_resource, sanitize_conv_name, serialize_conversation, skill_dir,
+        spawn_background, CallAcc, ConvMsg,
     };
     use std::collections::HashMap;
 
@@ -2197,5 +2252,21 @@ mod tests {
             .unwrap();
             assert!(out.contains("svchost"), "direct path lost stdout: {out:?}");
         });
+    }
+
+    #[test]
+    fn intent_detection_separates_declared_action_from_final_answer() {
+        // Both real transcript cases that ended a run with no tool call.
+        assert!(looks_like_unexecuted_intent("Let me verify the sign-in state."));
+        assert!(looks_like_unexecuted_intent(
+            "Right — browser session ≠ CLI auth. Those are separate, so `gh` is still unauthenticated. Let me set up the device flow; since your browser session is now signed in, I should be able to complete the authorization myself."
+        ));
+        assert!(looks_like_unexecuted_intent("First, a quick check:"));
+        // Real final answers must end the run without a nudge.
+        assert!(!looks_like_unexecuted_intent(
+            "Done. Git 2.52 and gh 2.91 are installed and on PATH."
+        ));
+        assert!(!looks_like_unexecuted_intent(&"Summary line. ".repeat(40)));
+        assert!(!looks_like_unexecuted_intent(""));
     }
 }

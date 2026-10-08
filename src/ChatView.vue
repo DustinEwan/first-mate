@@ -184,6 +184,9 @@ onMounted(() => {
 
 const SYSTEM_PROMPT = `You are First Mate, a Windows control agent. You can inspect and interact with running Windows applications using the winapp CLI.
 
+## Rules
+- When you decide to take an action, call the tool in the SAME turn. NEVER end your reply with only a declaration of intent ("Let me check X", "I'll verify Y") — prose alone executes nothing and the run ends there.
+
 ## Available Tools
 - run_command: Execute a command on the Windows system. Use this to run winapp commands.
 - read_file: Read a file from the Windows filesystem.
@@ -304,11 +307,14 @@ async function submit() {
     return;
   }
 
-  // Send prior turns so the agent remembers earlier messages. The message
-  // just added is the current one, so drop it from the history.
+  // Send prior turns so the agent remembers recent context. The message
+  // just added is the current one, so drop it from the history. Windowed:
+  // an unbounded history bloats every request (760KB observed) and, worse,
+  // conditions small models into narrating without ever calling tools.
   const priorHistory = messages.value
     .filter((m) => (m.cls === "user" || m.cls === "assistant") && m.text.trim())
     .slice(0, -1)
+    .slice(-30)
     .map((m) => ({ role: m.cls, content: m.text }));
 
   isThinking.value = true;
