@@ -112,7 +112,10 @@ All capability knowledge lives here, including the primary one:
 
 ## Implementation
 
-Implemented in `src-tauri/src/lib.rs` + `src/ChatView.vue`:
+Implemented across the `src-tauri/src/` feature modules (`skills.rs` discovery and
+loading, `tooldefs.rs` schemas and disclosure, `route.rs` interception,
+`execute.rs` dispatch, `psrep.rs` the PowerShell session, `lib.rs` IPC wiring)
+plus `src/ChatView.vue`:
 
 ### 1. Skill Discovery (Rust)
 

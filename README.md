@@ -39,7 +39,16 @@ borderless and always-on-top.
 ## Layout
 
 ```
-src-tauri/src/lib.rs      Rust backend: chat loops, tools, skills, tray, persistence
+src-tauri/src/            Rust backend, one feature module per concern:
+  lib.rs                    app wiring: plugins, IPC table, tray, hotkey
+  llm.rs                    chat loops (lmkit + OpenAI-compatible), stop button
+  execute.rs route.rs       tool dispatch, shell-dup interception
+  exec.rs psrep.rs          command runner, background jobs, PowerShell session
+  tooldefs.rs skills.rs     tool schemas + disclosure, skill discovery
+  report.rs fileedit.rs     tool facts for the report panel, edit ops + diffs
+  conversations.rs log.rs settings.rs window.rs modelapi.rs openpath.rs
+  harness.rs                persistence, logging, settings, windows, model
+                            listing, path opening, winapp CLI bootstrap
 src/ChatView.vue          chat window (virtualized message list, markdown)
 settings.html             settings window (provider, model, API key, base URL)
 skills/                   winapp, filesystem, git-repo
