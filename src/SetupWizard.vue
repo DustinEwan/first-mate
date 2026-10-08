@@ -234,7 +234,7 @@ onBeforeUnmount(() => {
                 @update:value="onProviderChange"
               />
             </n-form-item>
-            <n-form-item v-if="currentSpec && !currentSpec.isLocal">
+            <n-form-item v-if="currentSpec && !currentSpec.isLocal" :show-label="false">
               <n-checkbox v-model:checked="proxy" @update:checked="onProxyChange">Proxy</n-checkbox>
             </n-form-item>
             <n-form-item v-if="showBaseUrl" label="Base URL">
