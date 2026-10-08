@@ -293,6 +293,9 @@ watch(isThinking, (thinking) => {
 async function submit() {
   const text = input.value.trim();
   if (!text) return;
+  // One active agent run at a time; Enter while running must not start a
+  // second concurrent loop.
+  if (isThinking.value) return;
   addMsg(text, "user");
   input.value = "";
 
@@ -341,6 +344,12 @@ async function submit() {
   }
 }
 
+
+// Ask the running agent loop to stop; it returns "(stopped)" at the next
+// turn/tool boundary.
+function stopRun() {
+  invoke("stop_chat").catch((e) => console.error("stop failed", e));
+}
 
 function hide() {
   console.log("hide() called");
@@ -402,7 +411,12 @@ window.addEventListener("keydown", (e) => {
               </DynamicScrollerItem>
             </template>
           </DynamicScroller>
-          <div v-if="isThinking" class="msg dim thinking">First Mate {{ spinnerChar }}</div>
+          <div
+            v-if="isThinking"
+            class="msg dim thinking stoppable"
+            title="Click to stop the agent"
+            @click="stopRun"
+          >First Mate {{ spinnerChar }} — click to stop</div>
           <div class="input-row" ref="inputRef">
             <n-input
               v-model:value="input"

@@ -139,6 +139,15 @@ body {
   height: 100vh;
 }
 
+/* The thinking line doubles as the stop control while the agent runs. */
+.thinking.stoppable {
+  cursor: pointer;
+}
+
+.thinking.stoppable:hover {
+  color: #d03050;
+}
+
 
 .scroller {
   flex: 1;

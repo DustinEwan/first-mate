@@ -14,9 +14,22 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 /// Summon hotkey. Change here; it's registered once in `run`.
 const HOTKEY: &str = "Super+Alt+Space";
 
-/// Hard stop for the tool loop: a model that keeps calling tools forever is
-/// a broken run, not a working one.
-const MAX_TURNS: u32 = 8;
+/// User interrupt for the running agent loop. The tool loop is uncapped
+/// (real work takes many turns), so the stop button is the brake: checked
+/// between turns and between tool calls.
+static CHAT_STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn chat_stop_requested() -> bool {
+    CHAT_STOP.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+#[tauri::command]
+fn stop_chat() {
+    if !chat_stop_requested() {
+        CHAT_STOP.store(true, std::sync::atomic::Ordering::SeqCst);
+        log("STOP REQUESTED");
+    }
+}
 
 /// Expose the summon hotkey to the frontend so the UI always shows the real binding.
 #[tauri::command]
@@ -1247,6 +1260,7 @@ async fn chat_with_llm(
     prior_history: Vec<HistoryItem>,
     system_prompt: String,
 ) -> Result<String, String> {
+    CHAT_STOP.store(false, std::sync::atomic::Ordering::SeqCst);
     if provider == "anthropic" {
         chat_via_lmkit(app, provider, base_url, api_key, model, message, prior_history, system_prompt).await
     } else {
@@ -1336,6 +1350,11 @@ async fn chat_via_lmkit(
     let mut seen: HashMap<String, String> = HashMap::new();
     let mut turn = 0;
     loop {
+        if chat_stop_requested() {
+            log(&format!("CHAT STOPPED after {turn} turns"));
+            let _ = app.emit("stream_done", serde_json::json!({}));
+            return Ok("(stopped)".to_string());
+        }
         log(&format!("TURN {}: history_msgs={} tools={}", turn, history.len(), tools.len()));
         let request = ChatRequest {
             messages: history.clone(),
@@ -1398,6 +1417,11 @@ async fn chat_via_lmkit(
                 name: None,
             });
             for call in &calls {
+                if chat_stop_requested() {
+                    log(&format!("CHAT STOPPED mid-turn after {turn} turns"));
+                    let _ = app.emit("stream_done", serde_json::json!({}));
+                    return Ok("(stopped)".to_string());
+                }
                 let name = call.function.name.clone();
                 let args: serde_json::Value =
                     serde_json::from_str(&call.function.arguments)
@@ -1413,16 +1437,6 @@ async fn chat_via_lmkit(
                 turn, calls.len(), history.len()
             ));
             turn += 1;
-            if turn >= MAX_TURNS {
-                log(&format!("TURN CAP: stopping at {MAX_TURNS} turns — model not converging"));
-                let _ = app.emit("stream_done", serde_json::json!({}));
-                // `text` already streamed; return only the remainder the
-                // frontend has not seen (it shows the return value when the
-                // last stream_reset left nothing live).
-                return Ok(format!(
-                    "(stopped after {MAX_TURNS} tool turns without converging — try rephrasing the task)"
-                ));
-            }
             continue;
         }
 
@@ -1528,6 +1542,11 @@ async fn chat_via_openai(
     let client = reqwest::Client::new();
     let mut turn = 0;
     loop {
+        if chat_stop_requested() {
+            log(&format!("CHAT STOPPED after {turn} turns"));
+            let _ = app.emit("stream_done", serde_json::json!({}));
+            return Ok("(stopped)".to_string());
+        }
         let body = serde_json::json!({
             "model": model,
             "messages": msgs,
@@ -1641,6 +1660,11 @@ async fn chat_via_openai(
                 "tool_calls": tcs,
             }));
             for call in &calls {
+                if chat_stop_requested() {
+                    log(&format!("CHAT STOPPED mid-turn after {turn} turns"));
+                    let _ = app.emit("stream_done", serde_json::json!({}));
+                    return Ok("(stopped)".to_string());
+                }
                 let name = call.name.clone();
                 let args: serde_json::Value =
                     serde_json::from_str(&call.args).unwrap_or(serde_json::json!({}));
@@ -1682,14 +1706,6 @@ async fn chat_via_openai(
                 msgs.len()
             ));
             turn += 1;
-            if turn >= MAX_TURNS {
-                log(&format!("TURN CAP: stopping at {MAX_TURNS} turns — model not converging"));
-                let _ = app.emit("stream_done", serde_json::json!({}));
-                // Remainder only: `text` already streamed (see lmkit path).
-                return Ok(format!(
-                    "(stopped after {MAX_TURNS} tool turns without converging — try rephrasing the task)"
-                ));
-            }
             continue;
         }
 
@@ -1748,7 +1764,7 @@ fn open_settings(app: &tauri::AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, list_models, test_llm, chat_with_llm, list_skills, list_conversations, load_conversation, save_conversation])
+        .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, list_models, test_llm, chat_with_llm, stop_chat, list_skills, list_conversations, load_conversation, save_conversation])
         .setup(|app| {
             // Tray: left-click toggles the console; menu for explicit actions.
             let toggle_item =
