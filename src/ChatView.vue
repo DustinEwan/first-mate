@@ -67,6 +67,10 @@ interface Msg {
   id: number;
   text: string;
   cls: string;
+  // Tool ledger bookkeeping: which tool the line belongs to, and whether
+  // its result has landed (pending lines get replaced by the result block).
+  toolName?: string;
+  done?: boolean;
 }
 
 const messages = ref<Msg[]>([]);
@@ -105,8 +109,8 @@ interface LlmSettings {
 }
 let llmSettings: LlmSettings | null = null;
 
-function addMsg(text: string, cls = "") {
-  messages.value.push({ id: nextId++, text, cls });
+function addMsg(text: string, cls = "", extra: Partial<Msg> = {}) {
+  messages.value.push({ id: nextId++, text, cls, ...extra });
 }
 
 function persistConversation() {
@@ -179,23 +183,26 @@ onMounted(() => {
   nextTick(() => focusInput());
   listen("tauri://focus", () => focusInput());
   // Show tool calls in real-time as the agent makes them.
-  listen<{ name: string; args: Record<string, string> }>("tool_call", (event) => {
-    const { name, args } = event.payload;
-    const argStr = Object.entries(args)
-      .map(([k, v]) => `${k}=${v}`)
-      .join(" ");
-    addMsg(`🔧 ${name} ${argStr}`, "tool");
-  });
-  // Annotate the tool line with its result: the ledger that persists to
-  // .chat (and resumes as context) says what happened, not just what ran.
+  listen<{ name: string; args: Record<string, string>; identity?: string }>(
+    "tool_call",
+    (event) => {
+      const { name, args, identity } = event.payload;
+      const fallback = Object.entries(args)
+        .map(([k, v]) => `${k}=${String(v).slice(0, 40)}`)
+        .join(" ");
+      addMsg(`🔧 ${identity ?? `${name} ${fallback}`}`, "tool", { toolName: name });
+    },
+  );
+  // Replace the pending line with the backend's ledger block:
+  // identity / fenced effect / metadata. The block persists to .chat and
+  // resumes as context, so it states what happened, not what was asked.
   listen<{ name: string; summary: string }>("tool_result", (event) => {
     const { name, summary } = event.payload;
-    const one = summary.replace(/\s+/g, " ").trim();
     let matched = false;
     for (let i = messages.value.length - 1; i >= 0; i--) {
       const m = messages.value[i];
-      if (m.cls === "tool" && m.text.startsWith(`🔧 ${name} `) && !m.text.includes(" -> ")) {
-        messages.value[i] = { ...m, text: `${m.text} -> ${one}` };
+      if (m.cls === "tool" && m.toolName === name && !m.done) {
+        messages.value[i] = { ...m, text: `🔧 ${summary}`, done: true };
         matched = true;
         break;
       }
@@ -203,7 +210,7 @@ onMounted(() => {
     // Unmatched results are async announcements (e.g. a background job that
     // finished after its turn): they get their own ledger line so the model
     // resumes with them as context.
-    if (!matched) addMsg(`🔧 ${name} -> ${one}`, "tool");
+    if (!matched) addMsg(`🔧 ${summary}`, "tool", { toolName: name, done: true });
   });
   // Stream the assistant text in as it arrives, creating the live message on
   // the first chunk.
@@ -372,8 +379,9 @@ window.addEventListener("keydown", (e) => {
                 :size-dependencies="[item.text]"
               >
                 <div
-                  v-if="item.cls === 'assistant'"
-                  class="msg assistant md"
+                  v-if="item.cls === 'assistant' || item.cls === 'tool'"
+                  class="msg md"
+                  :class="item.cls"
                   @click="onContentClick"
                   v-html="renderMd(item.text)"
                 ></div>
