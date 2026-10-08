@@ -71,8 +71,20 @@ build-fe.bat           # production frontend bundle into dist/
 linker is found; run it from `src-tauri/`. The debug binary is
 `src-tauri/target/debug/firstmate.exe`.
 
-## Tests
+## Quality gates
 
+```
+npm run check          # eslint (--max-warnings 0) + prettier + clippy -D warnings
+git config core.hooksPath .githooks   # once per clone: Conventional Commits hook
+```
+
+Rust builds deny warnings workspace-wide (`[lints]` in `src-tauri/Cargo.toml`);
+the frontend build fails on any lint error or formatting drift. Commit
+messages must be Conventional Commits — `<type>(<scope>): <subject>`, types
+feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert, `!` for breaking.
+
+## Tests
+ 
 ```
 cd src-tauri && cargo-vs.bat test
 ```
