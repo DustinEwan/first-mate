@@ -20,11 +20,14 @@ borderless and always-on-top.
 
 ## How it works
 
-- **Behavior** comes from `AGENTS.md` — searched in cwd, `../` (dev layout),
-  the exe directory and its parent, then `~/.firstmate/AGENTS.md`. Edit
-  behavior as content, not code.
-- **Capabilities** are skills in `skills/` (plus user skills in
-  `~/.firstmate/skills/`). Only five core tools are in context at start
+- **Behavior** comes from `AGENTS.md`, layered: dev repo layout wins outright
+  (working copy under test), then `~/.firstmate/AGENTS.md` — which OVERRIDES
+  the packaged baseline — then the packaged copy next to the exe (bundled by
+  the installer). The binary ships no prompt text. Edit behavior as content,
+  not code.
+- **Capabilities** are skills in `skills/`, layered the same way: user skills
+  in `~/.firstmate/skills/` override packaged ones by name and extend the
+  set. Only five core tools are in context at start
   (`run_command`, `get_command_output`, `kill_command`, `load_skill`,
   `read_skill_resource`); each skill's `tools:` frontmatter unlocks more when
   the model loads it. A tool that isn't disclosed is refused at dispatch.
@@ -53,7 +56,7 @@ src/ChatView.vue          chat window (virtualized message list, markdown)
 settings.html             settings window (provider, model, API key, base URL)
 skills/                   winapp, filesystem, git-repo
 docs/SKILLS.md            skill system design
-AGENTS.md                 system prompt (behavior rules for the model)
+AGENTS.md                 system prompt (behavior rules for the model; packaged by the installer, user-overridable)
 ```
 
 ## Configuration
