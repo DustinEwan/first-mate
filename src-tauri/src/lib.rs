@@ -1853,17 +1853,48 @@ async fn ps_session_shutdown() {
     }
 }
 
+/// Inline shell programs that duplicate a dedicated tool. Routing applies
+/// ONLY when the target tool is disclosed in this conversation — an
+/// undisclosed tool is not an alternative the model may use, so the shell
+/// command passes through untouched. Returns (tool, why).
+fn route_to_tool(command: &str, active: &[serde_json::Value]) -> Option<(&'static str, &'static str)> {
+    let lower = command.to_lowercase();
+    // Only program position counts: the first token of any command segment
+    // (`git grep` stays legal; `cmd /c "dir"` does not).
+    for seg in lower.split([';', '|', '&', '(', '"', '\'']) {
+        let Some(tok) = seg.trim().split_whitespace().next() else {
+            continue;
+        };
+        let tok = tok.trim_end_matches(".exe");
+        let (tool, why): (&'static str, &'static str) = match tok {
+            "get-childitem" | "dir" | "ls" => ("list_dir", "enumerating directories"),
+            "get-content" | "type" | "cat" | "more" => {
+                ("read_file", "reading files with ranges and line numbers")
+            }
+            "select-string" | "findstr" => ("search_files", "searching file contents"),
+            "get-process" | "tasklist" => ("list_processes", "listing processes"),
+            "set-content" | "out-file" => ("write_file", "writing files directly"),
+            _ => continue,
+        };
+        if tool_is_disclosed(active, tool) {
+            return Some((tool, why));
+        }
+    }
+    None
+}
+
 /// Execute a tool by name with JSON arguments. Returns the result as a
 /// string. `app` enables background-job completion announcements.
 async fn execute_tool(
     app: &tauri::AppHandle,
+    active: &[serde_json::Value],
     name: &str,
     args: &serde_json::Value,
     seen: &mut HashMap<String, String>,
 ) -> Result<String, String> {
     log(&format!("TOOL CALL: {} args={}", name, args));
     let notifier = std::sync::Arc::new(AppNotifier(app.clone()));
-    let result = execute_tool_notify(notifier, name, args).await;
+    let result = execute_tool_notify(notifier, active, name, args).await;
     let summary = match &result {
         Ok(s) => format!("OK len={}", s.len()),
         Err(e) => format!("ERR {}", e.chars().take(200).collect::<String>()),
@@ -1876,17 +1907,26 @@ async fn execute_tool(
 /// but never announced.
 #[cfg_attr(not(test), allow(dead_code))]
 async fn execute_tool_inner(name: &str, args: &serde_json::Value) -> Result<String, String> {
-    execute_tool_notify(std::sync::Arc::new(NoopNotifier), name, args).await
+    let core = core_tools();
+    execute_tool_notify(std::sync::Arc::new(NoopNotifier), &core, name, args).await
 }
 
 async fn execute_tool_notify(
     notifier: std::sync::Arc<dyn BgNotifier>,
+    active: &[serde_json::Value],
     name: &str,
     args: &serde_json::Value,
 ) -> Result<String, String> {
     match name {
         "run_command" => {
             let command = args.get("command").and_then(|c| c.as_str()).unwrap_or("");
+            if let Some((tool, why)) = route_to_tool(command, active) {
+                return Err(format!(
+                    "Blocked: `{command}` duplicates the {tool} tool, which is already available \
+                     in this conversation. Call {tool} instead ({why}: structured output, no shell \
+                     quoting, no truncation)."
+                ));
+            }
             let background = args
                 .get("background")
                 .and_then(|b| b.as_bool())
@@ -2310,7 +2350,7 @@ async fn chat_via_lmkit(
                         .unwrap_or(serde_json::json!({}));
                 let _ = app.emit("tool_call", serde_json::json!({ "name": &name, "args": &args }));
                 let result = if tool_is_disclosed(&active, &name) {
-                    execute_tool(&app, &name, &args, &mut seen)
+                    execute_tool(&app, &active, &name, &args, &mut seen)
                         .await
                         .unwrap_or_else(|e| format!("Error: {e}"))
                 } else {
@@ -2598,7 +2638,7 @@ async fn chat_via_openai(
                     serde_json::from_str(&call.args).unwrap_or(serde_json::json!({}));
                 let _ = app.emit("tool_call", serde_json::json!({ "name": &name, "args": &args }));
                 let result = if tool_is_disclosed(&tools, &name) {
-                    execute_tool(&app, &name, &args, &mut seen)
+                    execute_tool(&app, &tools, &name, &args, &mut seen)
                         .await
                         .unwrap_or_else(|e| format!("Error: {e}"))
                 } else {
@@ -2804,12 +2844,12 @@ pub fn run() {
 mod tests {
     use super::{
         budget_output, conv_dir, core_tools, discover_skills, enable_skill_tools, exec_capped,
-        execute_tool_inner, extract_screenshot_path, get_system_prompt,
+        execute_tool_inner, execute_tool_notify, extract_screenshot_path, get_system_prompt,
         looks_like_unexecuted_intent, merge_tool_call_delta, needs_shell, parse_command,
         parse_conversation, parse_frontmatter, resolve_conv_path, resolve_open_target,
-        resolve_skill_resource,
-        sanitize_conv_name, serialize_conversation, skill_dir, spawn_background, tool_is_disclosed,
-        trim_dir, truncate_if_over,
+        resolve_skill_resource, route_to_tool, sanitize_conv_name, serialize_conversation,
+        skill_dir, spawn_background, tool_is_disclosed, tool_schema, trim_dir, truncate_if_over,
+        NoopNotifier,
         ps_session_exec, ps_session_shutdown, PsRun,
         CallAcc, ConvMsg, CORE_TOOLS,
     };
@@ -3488,5 +3528,50 @@ mod tests {
         execute_tool_inner("kill_command", &serde_json::json!({ "pid": pid }))
             .await
             .unwrap();
+    }
+
+    #[test]
+    fn interceptor_routes_only_disclosed_tools() {
+        let fs = ["list_dir", "read_file", "search_files", "list_processes", "write_file"]
+            .iter()
+            .filter_map(|n| tool_schema(n))
+            .collect::<Vec<_>>();
+        let core: Vec<serde_json::Value> = Vec::new();
+        // Program position, disclosed -> route.
+        assert_eq!(route_to_tool("dir C:\\repos", &fs).map(|(t, _)| t), Some("list_dir"));
+        assert_eq!(
+            route_to_tool("powershell -Command \"Get-ChildItem\" | more", &fs).map(|(t, _)| t),
+            Some("list_dir")
+        );
+        assert_eq!(route_to_tool("type notes.txt", &fs).map(|(t, _)| t), Some("read_file"));
+        assert_eq!(route_to_tool("FINDSTR foo *.rs", &fs).map(|(t, _)| t), Some("search_files"));
+        // Undisclosed -> pass through untouched.
+        assert_eq!(route_to_tool("dir C:\\repos", &core), None);
+        // Non-program position stays legal.
+        assert_eq!(route_to_tool("git grep list_dir", &fs), None);
+        assert_eq!(route_to_tool("echo dir", &fs), None);
+        assert_eq!(route_to_tool("cargo run", &fs), None);
+    }
+
+    #[tokio::test]
+    async fn run_command_blocks_dup_when_tool_disclosed() {
+        let fs = ["list_dir"]
+            .iter()
+            .filter_map(|n| tool_schema(n))
+            .collect::<Vec<_>>();
+        let err = execute_tool_notify(
+            std::sync::Arc::new(NoopNotifier),
+            &fs,
+            "run_command",
+            &serde_json::json!({ "command": "dir" }),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("Blocked") && err.contains("list_dir"), "{err}");
+        // With only core tools disclosed, the same command runs normally.
+        let ok = execute_tool_inner("run_command", &serde_json::json!({ "command": "echo dir" }))
+            .await
+            .unwrap();
+        assert!(ok.contains("dir"), "{ok}");
     }
 }
