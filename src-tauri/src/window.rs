@@ -37,17 +37,21 @@ pub(crate) fn toggle_window(app: &tauri::AppHandle) {
     }
 }
 
-/// Open (or focus) the settings window. Created on first use. Also callable
-/// from the frontend (chat console gear).
-#[tauri::command]
-pub(crate) fn open_settings(app: tauri::AppHandle) {
+/// Open (or focus) the settings window. Created on first use.
+///
+/// The command wrapper MUST be async: sync commands execute on the main
+/// thread, and building a WebviewWindow from there deadlocks the event
+/// loop. The async form runs on the tokio runtime, which proxies window
+/// creation correctly. The tray handler (already on the main thread)
+/// calls the inner function directly.
+pub(crate) fn open_settings_inner(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("settings") {
         let _ = window.show();
         let _ = window.set_focus();
         return;
     }
     let built = tauri::WebviewWindow::builder(
-        &app,
+        app,
         "settings",
         tauri::WebviewUrl::App("settings.html".into()),
     )
@@ -63,4 +67,11 @@ pub(crate) fn open_settings(app: tauri::AppHandle) {
         }
         Err(e) => eprintln!("failed to open settings window: {e}"),
     }
+}
+
+/// Frontend entry (chat console gear). Async by necessity — see
+/// `open_settings_inner`.
+#[tauri::command]
+pub(crate) async fn open_settings(app: tauri::AppHandle) {
+    open_settings_inner(&app);
 }

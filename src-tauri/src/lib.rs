@@ -34,7 +34,7 @@ use crate::modelapi::{list_models, list_providers, test_llm};
 use crate::openpath::open_path;
 use crate::settings::{HOTKEY, get_hotkey, get_settings, save_settings};
 use crate::skills::{get_system_prompt, list_skills};
-use crate::window::{open_settings, set_main_icon, toggle_window};
+use crate::window::{open_settings, open_settings_inner, set_main_icon, toggle_window};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -84,7 +84,7 @@ pub fn run() {
                         toggle_window(app);
                         let _ = app.emit("open_setup", ());
                     }
-                    "settings" => open_settings(app.clone()),
+                    "settings" => open_settings_inner(app),
                     "quit" => app.exit(0),
                     _ => {}
                 })
