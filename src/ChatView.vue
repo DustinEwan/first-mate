@@ -511,6 +511,10 @@ function hide() {
     .catch((e) => console.error("hide error", e));
 }
 
+function openSettings() {
+  invoke("open_settings").catch((e) => console.error("open settings failed", e));
+}
+
 // Auto-scroll to bottom when new messages arrive. DynamicScroller measures
 // item sizes asynchronously, so right after a bulk load (opening a
 // conversation) scrollHeight still reflects estimates: jump to the last
@@ -561,17 +565,12 @@ window.addEventListener("keydown", (e) => {
         >
           &#9776;
         </button>
+        <button class="settings-gear" title="Settings" @click="openSettings">&#9881;</button>
         <button class="close" @click="hide">&#10005;</button>
       </header>
       <div class="body">
         <div class="main">
-          <DynamicScroller
-            ref="scrollerRef"
-            :items="messages"
-            :min-size="40"
-            key-field="id"
-            class="scroller"
-          >
+          <DynamicScroller ref="scrollerRef" :items="messages" key-field="id" class="scroller">
             <template #default="{ item, active }">
               <DynamicScrollerItem :item="item" :active="active" :size-dependencies="[item.text]">
                 <!-- Safe by construction: renderMd() = marked -> DOMPurify.sanitize. -->

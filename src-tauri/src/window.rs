@@ -1,5 +1,21 @@
 use tauri::{Manager, PhysicalPosition};
 
+/// The anchor glyph (icons/window.png, 256px) — same artwork as the tray.
+/// Windows without an explicit icon inherit the exe's embedded icon.ico,
+/// which used to be the Tauri default; both windows set this instead so
+/// taskbar buttons show the anchor.
+pub(crate) fn anchor_icon() -> tauri::image::Image<'static> {
+    tauri::image::Image::from_bytes(include_bytes!("../icons/window.png"))
+        .expect("icons/window.png must be a valid PNG")
+}
+
+/// Set the anchor on the main window (called from setup).
+pub(crate) fn set_main_icon(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.set_icon(anchor_icon());
+    }
+}
+
 pub(crate) fn toggle_window(app: &tauri::AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
@@ -21,15 +37,17 @@ pub(crate) fn toggle_window(app: &tauri::AppHandle) {
     }
 }
 
-/// Open (or focus) the settings window. Created on first use.
-pub(crate) fn open_settings(app: &tauri::AppHandle) {
+/// Open (or focus) the settings window. Created on first use. Also callable
+/// from the frontend (chat console gear).
+#[tauri::command]
+pub(crate) fn open_settings(app: tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("settings") {
         let _ = window.show();
         let _ = window.set_focus();
         return;
     }
-    match tauri::WebviewWindow::builder(
-        app,
+    let built = tauri::WebviewWindow::builder(
+        &app,
         "settings",
         tauri::WebviewUrl::App("settings.html".into()),
     )
@@ -37,8 +55,9 @@ pub(crate) fn open_settings(app: &tauri::AppHandle) {
     .inner_size(480.0, 600.0)
     .decorations(false)
     .shadow(true)
-    .build()
-    {
+    .icon(anchor_icon())
+    .and_then(|b| b.build());
+    match built {
         Ok(window) => {
             let _ = window.set_focus();
         }

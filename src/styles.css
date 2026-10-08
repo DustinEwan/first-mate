@@ -67,6 +67,20 @@ body {
   color: #ffffff;
 }
 
+.titlebar .settings-gear {
+  -webkit-app-region: no-drag;
+  background: none;
+  border: none;
+  color: #8a8f98;
+  font-size: 14px;
+  padding: 0 8px;
+  cursor: pointer;
+}
+
+.titlebar .settings-gear:hover {
+  color: #ffffff;
+}
+
 /* Chat + expandable side panel */
 .body {
   flex: 1;
