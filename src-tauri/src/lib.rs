@@ -328,11 +328,13 @@ fn agent_tools() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "read_file",
-                "description": "Read a file from the Windows filesystem and return its contents.",
+                "description": "Read a text file with 1-based line numbers. Output starts with a `[path#TAG]` snapshot header; edit_file and write_file require that TAG to prove you saw the current content. Supports offset (start line) and limit (line count, default 2000). Binary files are refused.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "path": {"type": "string", "description": "The file path to read"}
+                        "path": {"type": "string", "description": "The file path to read"},
+                        "offset": {"type": "integer", "description": "1-based first line to return"},
+                        "limit": {"type": "integer", "description": "Maximum lines to return (default 2000)"}
                     },
                     "required": ["path"]
                 }
@@ -1195,6 +1197,7 @@ fn cmd_timeout() -> std::time::Duration {
 /// Spawn with a deadline. On timeout the direct child dies (kill_on_drop),
 /// the process tree is swept, and an actionable error is returned - a tool
 /// call must always come back so the agent loop can never wedge.
+#[cfg_attr(not(test), allow(dead_code))]
 async fn exec_capped(
     cmd: &mut tokio::process::Command,
     timeout: std::time::Duration,
@@ -1348,6 +1351,7 @@ impl BgNotifier for AppNotifier {
 
 /// Convenience wrapper (tests / headless): completions are recorded in the
 /// registry but never announced.
+#[cfg_attr(not(test), allow(dead_code))]
 async fn spawn_background(
     cmd: tokio::process::Command,
     command: &str,
@@ -1853,6 +1857,45 @@ async fn ps_session_shutdown() {
     }
 }
 
+/// Content hash of a file snapshot (FNV-1a, 4 hex chars). `read_file`
+/// stamps it on its output; `edit_file`/`write_file` demand it back, so an
+/// edit anchored to stale line numbers is rejected instead of silently
+/// corrupting the file.
+fn snapshot_tag(bytes: &[u8]) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in bytes {
+        h = (h ^ *b as u64).wrapping_mul(0x1000_0000_01b3);
+    }
+    format!("{:04X}", ((h >> 32) as u32 & 0xFFFF) as u16)
+}
+
+/// Last tag the model actually SAW per path (process-wide: one user, one
+/// app). Guards edits against files that changed since the model's read.
+static SNAPSHOT_TAGS: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<String, String>>,
+> = std::sync::OnceLock::new();
+
+fn snapshot_tags() -> &'static std::sync::Mutex<std::collections::HashMap<String, String>> {
+    SNAPSHOT_TAGS.get_or_init(Default::default)
+}
+
+fn record_snapshot(path: &str, tag: &str) {
+    snapshot_tags()
+        .lock()
+        .unwrap()
+        .insert(path.to_lowercase(), tag.to_string());
+}
+
+/// The tag the model last saw for `path`, if it ever read it.
+#[allow(dead_code)] // consumed by edit_file/write_file guards
+fn seen_snapshot(path: &str) -> Option<String> {
+    snapshot_tags()
+        .lock()
+        .unwrap()
+        .get(&path.to_lowercase())
+        .cloned()
+}
+
 /// Inline shell programs that duplicate a dedicated tool. Routing applies
 /// ONLY when the target tool is disclosed in this conversation — an
 /// undisclosed tool is not an alternative the model may use, so the shell
@@ -2062,7 +2105,46 @@ async fn execute_tool_notify(
         }
         "read_file" => {
             let path = args.get("path").and_then(|c| c.as_str()).unwrap_or("");
-            tokio::fs::read_to_string(path).await.map_err(|e| e.to_string())
+            let bytes = tokio::fs::read(path).await.map_err(|e| format!("read {path}: {e}"))?;
+            if bytes.iter().take(8192).any(|b| *b == 0) {
+                return Err(format!(
+                    "{path} is binary (NUL byte in first 8 KiB); read_file refuses. \
+                     Use run_command for binary inspection."
+                ));
+            }
+            let tag = snapshot_tag(&bytes);
+            record_snapshot(path, &tag);
+            let text = String::from_utf8_lossy(&bytes);
+            let lines: Vec<&str> = text.split('\n').collect();
+            let total = lines.len();
+            // 1-based inclusive start; default whole file up to 2000 lines.
+            let start = args
+                .get("offset")
+                .and_then(|v| v.as_u64())
+                .map(|v| v.max(1) as usize)
+                .unwrap_or(1);
+            if start > total {
+                return Err(format!(
+                    "offset {start} is past the end of {path} ({total} lines)"
+                ));
+            }
+            let count = args
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .map(|v| v.max(1) as usize)
+                .unwrap_or(2000);
+            let end = start.saturating_add(count).saturating_sub(1).min(total);
+            let mut out = format!("[{path}#{tag}]\n");
+            for (i, line) in lines[start - 1..end].iter().enumerate() {
+                out.push_str(&format!("{}:{}\n", start + i, line));
+            }
+            if end < total {
+                out.push_str(&format!(
+                    "[showing lines {start}-{end} of {total}; use offset {} to continue]",
+                    end + 1
+                ));
+            }
+            Ok(out)
         }
         "write_file" => {
             let path = args.get("path").and_then(|c| c.as_str()).unwrap_or("");
@@ -3573,5 +3655,60 @@ mod tests {
             .await
             .unwrap();
         assert!(ok.contains("dir"), "{ok}");
+    }
+    fn temp_path(name: &str) -> String {
+        std::env::temp_dir()
+            .join(format!("fm-test-{}-{name}", std::process::id()))
+            .to_string_lossy()
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn read_file_stamps_tag_and_line_numbers() {
+        let p = temp_path("read1.txt");
+        std::fs::write(&p, "alpha\nbravo\ncharlie\ndelta\n").unwrap();
+        let out = execute_tool_inner("read_file", &serde_json::json!({ "path": &p }))
+            .await
+            .unwrap();
+        let tag = out.lines().next().unwrap();
+        assert!(tag.starts_with('[') && tag.contains("#") && tag.ends_with(']'), "{tag}");
+        assert!(out.contains("1:alpha") && out.contains("4:delta"), "{out}");
+        // Windowed read with continuation pointer.
+        let win = execute_tool_inner(
+            "read_file",
+            &serde_json::json!({ "path": &p, "offset": 2, "limit": 2 }),
+        )
+        .await
+        .unwrap();
+        assert!(win.contains("2:bravo") && win.contains("3:charlie"), "{win}");
+        assert!(!win.contains("1:alpha") && !win.contains("4:delta"), "{win}");
+        assert!(win.contains("use offset 4 to continue"), "{win}");
+        // Same content -> same tag; edited content -> different tag.
+        let again = execute_tool_inner("read_file", &serde_json::json!({ "path": &p }))
+            .await
+            .unwrap();
+        assert_eq!(again.lines().next().unwrap(), tag);
+        std::fs::write(&p, "alpha\nbravo!\ncharlie\ndelta\n").unwrap();
+        let after = execute_tool_inner("read_file", &serde_json::json!({ "path": &p }))
+            .await
+            .unwrap();
+        assert_ne!(after.lines().next().unwrap(), tag);
+        // Stale offset is an error, not an empty read.
+        let err = execute_tool_inner("read_file", &serde_json::json!({ "path": &p, "offset": 99 }))
+            .await
+            .unwrap_err();
+        assert!(err.contains("past the end"), "{err}");
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[tokio::test]
+    async fn read_file_refuses_binary() {
+        let p = temp_path("binary.bin");
+        std::fs::write(&p, [0x48u8, 0, 0x69, 0]).unwrap();
+        let err = execute_tool_inner("read_file", &serde_json::json!({ "path": &p }))
+            .await
+            .unwrap_err();
+        assert!(err.contains("binary"), "{err}");
+        std::fs::remove_file(&p).ok();
     }
 }
