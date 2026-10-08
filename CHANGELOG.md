@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.1.2](https://github.com/DustinEwan/first-mate/compare/firstmate-v0.1.1...firstmate-v0.1.2) (2026-10-08)
+
+
+### Features
+
+* **content:** installer packages prompts; user dir overrides packaged ([c95b2a5](https://github.com/DustinEwan/first-mate/commit/c95b2a518a89543e26bf7db4a48e9a84f7401986))
+
+
+### Bug Fixes
+
+* **exec:** stop must reach a wedged PS session; sentinel cannot be clobbered ([dabce84](https://github.com/DustinEwan/first-mate/commit/dabce849fd06574563c132169da7ca2d0d49e92f))
+* **prompt:** act through the OS, not around it; keep prompt content out of the binary ([333865c](https://github.com/DustinEwan/first-mate/commit/333865c8d4bd2009d00402c31f38cc038f4d2074))
+* **prompt:** First Mate is a user at the desk, not a headless script ([ca11b62](https://github.com/DustinEwan/first-mate/commit/ca11b62787fc78ad99c45664469b7cd49a72973f))
+* **prompt:** PowerShell session guidance from the wedged-session rollout ([90532b9](https://github.com/DustinEwan/first-mate/commit/90532b9a30776007a51acdc42507552786bcf91b))
+* **prompt:** ship zero hardcoded prompt text; generalize OS-surface rule ([554600d](https://github.com/DustinEwan/first-mate/commit/554600dfd9ab0cd42de4ba2e52081953a48fcfc5))
+
 ## [0.1.1](https://github.com/DustinEwan/first-mate/compare/firstmate-v0.1.0...firstmate-v0.1.1) (2026-10-08)
 
 
