@@ -111,10 +111,11 @@ On browsers, prefer screenshot over inspect/click: keep `--depth <= 4`, skip
 3. Verify: re-inspect a small subtree (desktop) or screenshot (browser).
 
 ## Bootstrap
-The app installs this CLI automatically at startup when `winapp --version`
-fails (background `winget install`, announced in the ledger). If commands
-still report winapp missing, the bootstrap has not finished or failed —
-install it yourself and retry:
+The app only DETECTS this CLI at startup (`winapp --version`) — it never
+installs anything without the user asking; the Setup wizard offers the
+winget command below on the user's behalf. If commands report winapp
+missing, it is simply not installed — point the user at Setup → Install
+winapp CLI, and run the command yourself only after the user agrees:
 ```
 winget install Microsoft.WinAppCli --source winget --accept-package-agreements --accept-source-agreements --disable-interactivity
 ```

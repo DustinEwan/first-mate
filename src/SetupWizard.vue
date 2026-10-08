@@ -3,7 +3,7 @@
 // via Naive UI's n-steps. Shown when no model is configured; reopenable
 // from the tray ("Setup Wizard").
 import { invoke } from "@tauri-apps/api/core";
-import { onBeforeUnmount, onMounted, ref } from "vue";
+import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
   NAlert,
   NButton,
@@ -61,12 +61,26 @@ async function refreshModels() {
       baseUrl: baseUrl.value,
       apiKey: apiKey.value,
     });
+    // Populate the dropdown with something: preselect the first discovery
+    // so the step is complete on arrival; the user may override.
+    if (!model.value && models.value.length > 0) {
+      model.value = models.value[0];
+    }
     modelStatus.value =
       models.value.length > 0 ? `${models.value.length} models found` : "no models found";
   } catch (e) {
     modelStatus.value = `Error: ${e}`;
   }
 }
+
+// Auto-detect: once provider + base URL are both present, discover models
+// shortly after typing settles (debounced so mid-URL keystrokes don't fire).
+let detectTimer: ReturnType<typeof setTimeout> | null = null;
+watch([provider, baseUrl], ([p, u]) => {
+  if (detectTimer) clearTimeout(detectTimer);
+  if (!p || !u) return;
+  detectTimer = setTimeout(refreshModels, 700);
+});
 
 async function testModel() {
   modelStatus.value = "Testing connection…";
@@ -109,6 +123,12 @@ async function checkHarness() {
   boot.value = await invoke<BootstrapStatus>("bootstrap_status");
 }
 
+function openDocs() {
+  invoke("open_path", {
+    target: "https://learn.microsoft.com/windows/apps/dev-tools/winapp-cli/",
+  });
+}
+
 async function installWinapp() {
   installing.value = true;
   try {
@@ -141,6 +161,7 @@ onMounted(async () => {
   baseUrl.value = s.llm.base_url;
   apiKey.value = s.llm.api_key;
   model.value = s.llm.model;
+  if (provider.value && baseUrl.value) refreshModels();
 });
 
 onBeforeUnmount(() => {
@@ -181,12 +202,12 @@ onBeforeUnmount(() => {
               <n-input v-model:value="apiKey" type="password" show-password-on="click" placeholder="sk-..." />
             </n-form-item>
             <n-form-item label="Model">
-              <n-space align="center" :wrap="false">
+              <div class="model-row">
                 <n-select v-model:value="model" :options="modelOptions()" placeholder="— none —" clearable />
                 <n-button size="small" secondary :disabled="provider === ''" @click="refreshModels">
                   &#8635; refresh
                 </n-button>
-              </n-space>
+              </div>
             </n-form-item>
           </n-form>
           <div v-if="modelStatus" class="status">{{ modelStatus }}</div>
@@ -194,47 +215,46 @@ onBeforeUnmount(() => {
 
         <div v-else-if="step === 3" class="wizard-body">
           <p>
-            Desktop automation runs through the <b>winapp</b> CLI
-            (microsoft/winappCli). First Mate checks it on every start and
-            installs it automatically when missing.
+            Desktop automation runs through the <b>winapp</b> CLI — Microsoft's
+            official tool for inspecting and driving Windows apps. First Mate
+            checks for it on every start but never installs anything without
+            asking.
           </p>
-          <n-alert
-            v-if="boot === null"
-            type="default"
-            :bordered="false"
-          >Checking harness…</n-alert>
+          <n-alert v-if="boot === null" type="default" :bordered="false">Checking harness…</n-alert>
           <n-alert v-else-if="boot.winapp" type="success" :bordered="false">
             winapp {{ boot.winapp }} is installed — UI automation is ready.
           </n-alert>
           <template v-else>
             <n-alert type="warning" :bordered="false">
-              winapp CLI not found.
+              The winapp CLI is not installed, so First Mate can't drive
+              desktop apps yet.
             </n-alert>
             <n-alert v-if="!boot.winget" type="error" :bordered="false">
-              winget is unavailable, so automatic install can't run. Install
-              the winapp CLI manually, then reopen this wizard.
+              winget is unavailable on this machine, so First Mate can't
+              install it. Install the winapp CLI manually, then reopen this
+              wizard.
             </n-alert>
-            <n-button
-              v-else
-              type="primary"
-              :loading="installing"
-              :disabled="installing"
-              @click="installWinapp"
-            >
-              {{ installing ? "Installing (watch the ledger)…" : "Install winapp CLI now" }}
-            </n-button>
+            <div v-else class="install-row">
+              <n-button type="primary" :loading="installing" :disabled="installing" @click="installWinapp">
+                {{ installing ? "Installing…" : "Install winapp CLI" }}
+              </n-button>
+              <n-button text tag="a" @click="openDocs">What am I installing?</n-button>
+            </div>
+            <p v-if="installing" class="dim">
+              Installing via winget — this pane updates when it lands.
+            </p>
           </template>
         </div>
 
         <div v-else class="wizard-body">
           <h2>You're set</h2>
           <p>
-            Model <b>{{ model }}</b> is saved and the harness is
-            {{ boot?.winapp ? "ready" : "still installing" }}.
+            First Mate can now run commands, edit files, and drive your
+            desktop apps using <b>{{ model }}</b>.
           </p>
           <p>
-            Press <b>{{ hotkey }}</b> anytime, ask for anything, and watch the
-            tool ledger for exactly what was done.
+            Summon it with <b>{{ hotkey }}</b> and just ask — "screenshot the
+            browser", "commit my changes", "what's eating my CPU".
           </p>
         </div>
 
@@ -307,6 +327,21 @@ onBeforeUnmount(() => {
   color: #8a8f98;
   font-size: 13px;
   margin-top: 4px;
+}
+.model-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  align-items: center;
+}
+.model-row .n-select {
+  flex: 1;
+  min-width: 0;
+}
+.install-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
 }
 .wizard-foot {
   display: flex;

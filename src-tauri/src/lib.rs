@@ -1439,8 +1439,8 @@ async fn install_winapp(app: tauri::AppHandle) -> Result<String, String> {
     .await
 }
 
-/// The official non-interactive install for the winapp CLI, used by the
-/// startup bootstrap when the skill's dependency is missing.
+/// The official non-interactive install for the winapp CLI, run only when
+/// the user clicks Install in the Setup wizard (or explicitly asks the agent).
 fn winapp_install_cmd() -> tokio::process::Command {
     let mut cmd = tokio::process::Command::new("winget");
     cmd.args([
@@ -3543,27 +3543,16 @@ pub fn run() {
             // scripts and spilled output from previous sessions.
             trim_dir(&fm_tmp_dir(), 50);
             trim_dir(&fm_out_dir(), 50);
-            // Harness bootstrap: the winapp skill drives the desktop through
-            // the winapp CLI (microsoft/winappCli). If it is missing, install
-            // it in the background via winget; the completion lands in the
-            // ledger as a normal background report, and the skill documents
-            // the same command as the agent-side fallback.
-            {
-                let notifier = std::sync::Arc::new(AppNotifier(app.handle().clone()));
-                tauri::async_runtime::spawn(async move {
-                    if cli_available("winapp").await {
-                        log("BOOTSTRAP: winapp CLI present");
-                        return;
-                    }
-                    log("BOOTSTRAP: winapp CLI missing; installing via winget");
-                    let _ = spawn_background_notify(
-                        notifier,
-                        winapp_install_cmd(),
-                        "winget install Microsoft.WinAppCli",
-                    )
-                    .await;
-                });
-            }
+            // Harness probe: the winapp skill drives the desktop through the
+            // winapp CLI (microsoft/winappCli). We DETECT only - installing
+            // software is the user's decision, made in the Setup wizard,
+            // which offers the same unattended winget command on demand.
+            tauri::async_runtime::spawn(async {
+                match cli_version("winapp").await {
+                    Some(v) => log(&format!("BOOTSTRAP: winapp CLI present ({v})")),
+                    None => log("BOOTSTRAP: winapp CLI missing; offer install in Setup wizard"),
+                }
+            });
             // Tray: left-click toggles the console; menu for explicit actions.
             let toggle_item =
                 MenuItem::with_id(app, "toggle", "Show / Hide", true, None::<&str>)?;
