@@ -1416,8 +1416,11 @@ async fn chat_via_lmkit(
             if turn >= MAX_TURNS {
                 log(&format!("TURN CAP: stopping at {MAX_TURNS} turns — model not converging"));
                 let _ = app.emit("stream_done", serde_json::json!({}));
+                // `text` already streamed; return only the remainder the
+                // frontend has not seen (it shows the return value when the
+                // last stream_reset left nothing live).
                 return Ok(format!(
-                    "{text}\n(stopped after {MAX_TURNS} tool turns without converging — try rephrasing the task)"
+                    "(stopped after {MAX_TURNS} tool turns without converging — try rephrasing the task)"
                 ));
             }
             continue;
@@ -1682,8 +1685,9 @@ async fn chat_via_openai(
             if turn >= MAX_TURNS {
                 log(&format!("TURN CAP: stopping at {MAX_TURNS} turns — model not converging"));
                 let _ = app.emit("stream_done", serde_json::json!({}));
+                // Remainder only: `text` already streamed (see lmkit path).
                 return Ok(format!(
-                    "{text}\n(stopped after {MAX_TURNS} tool turns without converging — try rephrasing the task)"
+                    "(stopped after {MAX_TURNS} tool turns without converging — try rephrasing the task)"
                 ));
             }
             continue;

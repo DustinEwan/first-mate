@@ -312,7 +312,7 @@ async function submit() {
   liveMsgId = -1;
 
   try {
-    await invoke<string>("chat_with_llm", {
+    const final = await invoke<string>("chat_with_llm", {
       provider: llmSettings.provider,
       baseUrl: llmSettings.base_url,
       apiKey: llmSettings.api_key,
@@ -321,10 +321,12 @@ async function submit() {
       priorHistory,
       systemPrompt: SYSTEM_PROMPT + skillsAds.value,
     });
-    // If no text ever streamed in (e.g. the model returned nothing), show the
-    // final reply as a fallback.
+    // The return value is the unstreamed remainder (e.g. the turn-cap note
+    // after a tool turn reset the live message). Only when nothing at all
+    // came back is the reply truly empty.
     if (liveMsgId < 0) {
-      addMsg("(no response)", "dim");
+      if (final.trim()) addMsg(final, "assistant");
+      else addMsg("(no response)", "dim");
     }
   } catch (e) {
     const msg = typeof e === "string" ? e : (e && e.message) ? e.message : String(e);
