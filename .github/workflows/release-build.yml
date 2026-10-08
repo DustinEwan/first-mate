@@ -23,12 +23,15 @@ jobs:
        github.event.workflow_run.head_branch == 'main')
     runs-on: windows-latest
     # checkout@v4 isolates git config (GIT_CONFIG_GLOBAL), so the runner's
-    # system-level core.autocrlf=true must be overridden via GIT_CONFIG_COUNT
-    # env, or the checkout is CRLF and prettier (endOfLine: lf) fails.
+    # system-level core.autocrlf/core.eol must be overridden via
+    # GIT_CONFIG_COUNT env, or the checkout is CRLF and prettier
+    # (endOfLine: lf) fails on every file.
     env:
-      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_COUNT: "2"
       GIT_CONFIG_KEY_0: core.autocrlf
       GIT_CONFIG_VALUE_0: "false"
+      GIT_CONFIG_KEY_1: core.eol
+      GIT_CONFIG_VALUE_1: lf
     steps:
       - uses: actions/checkout@v4
       - id: tag
