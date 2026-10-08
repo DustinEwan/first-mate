@@ -56,6 +56,13 @@ body {
   overflow: auto;
 }
 
+/* The scroller's item views are absolutely positioned, so they shrink-wrap
+   their content; force full width so centered tables/math can center. */
+.scroller .vue-recycle-scroller__item-view {
+  width: 100%;
+  box-sizing: border-box;
+}
+
 /* Scrollbar styling to match theme */
 .scroller::-webkit-scrollbar {
   width: 8px;
@@ -157,8 +164,8 @@ body {
 }
 .msg.md table {
   border-collapse: collapse;
-  margin: 0 0 8px;
-  /* Wide tables scroll instead of clipping at the window edge. */
+  margin: 0 auto 8px;
+  /* Centered block that scrolls instead of clipping when too wide. */
   display: block;
   width: fit-content;
   max-width: 100%;
@@ -187,12 +194,18 @@ body {
 .msg.md .katex {
   font-size: 1.06em;
 }
-/* Wide display math scrolls instead of clipping at the window edge. */
+/* Centered display math; wide formulas scroll instead of clipping. */
 .msg.md .katex-display {
+  display: block;
+  text-align: center;
   overflow-x: auto;
   overflow-y: hidden;
   margin: 4px 0 8px;
   padding: 2px 0;
+}
+.msg.md .katex-display > .katex {
+  display: inline-block;
+  text-align: initial;
 }
 
 .input-row {
