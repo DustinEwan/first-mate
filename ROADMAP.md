@@ -100,10 +100,16 @@ or financial data. Local models need none of this — so the feature is
 **Design sketch.**
 
 - A redaction pass over every outbound request when
-  `provider.kind != local`: detect → tokenize → send. Tier 1
-  (deterministic, always on): regex + checksum detectors for secrets
-  (API-key shapes, JWTs), cards (Luhn), phone/email, Windows paths
-  under `Users\<name>`; reversible placeholders `⟦EMAIL_1⟧`.
+  `provider.kind != local`: detect → tokenize → send; reversible
+  placeholders `⟦EMAIL_1⟧`.
+- **Detection layer 1 — shape + checksum (deterministic, always on).**
+  Financial identifiers carry built-in math, so they are exactly
+  detectable, not guessed: cards (Luhn + BIN network prefixes), IBAN
+  (ISO 13616 per-country length table + mod-97), ABA routing (mod-10
+  weights 3-7-1), SWIFT/BIC (ISO 9362 format), SSN (position-dependent
+  validity), crypto addresses (base58/bech32 checksums), secrets
+  (API-key shapes, JWTs), email/phone, Windows paths under
+  `Users\<name>`.
 - The token map is **session-scoped** — the model echoes tokens across
   turns — and lives in memory only: never persisted, never sent.
 - Detokenize happens at three harness boundaries, never in the model:
@@ -120,9 +126,29 @@ or financial data. Local models need none of this — so the feature is
   override); an action **sends** a real value out-of-band (web search,
   email) — that is the trust-tier-3 confirm gate at the
   leaving-the-machine boundary, not a redaction bug.
-- Tier 2 (configurable per profile): user-defined patterns ("my
-  employer", account numbers) and an optional small local NER model via
-  the existing ollama binding.
+- **Detection layer 2 — entity registry (closed set).** The hard cases
+  (US account numbers: no standard, no checksum, 8–17 digits,
+  shape-indistinguishable from order IDs) don't need open-world
+  detection — the valuable targets are _the user's own_ values, a tiny
+  closed set. Seed in profile settings (accounts, addresses, employer);
+  auto-grow from layer-1/3 hits after one-time user confirmation;
+  exact-match anywhere, any format, thereafter. Registry stored sealed
+  (§3).
+- **Detection layer 3 — provenance.** Content from marked origins is
+  sensitive regardless of shape: file reads under declared sensitive
+  paths, UIA fields named/auto-id'd "Account No." (the winapp harness
+  already reads UIA), online-banking browser origins, password-manager
+  clipboard (never allowed). A number from the bank's own web app needs
+  no checksum to be known.
+- **Detection layers 4–5 — context + local model net.** Trigger-word
+  proximity ("acct", "routing", "balance") + digit-length windows
+  firing only in combination; then an optional small local NER/LLM pass
+  (ollama binding) for shapeless entities (names, employer, health) —
+  local so the scan itself can't leak.
+- **Bias rule:** over-redact outbound to cloud — detokenize restores
+  display and actions, so a false positive costs a token the user never
+  sees; a false negative is the leak. Per-class toggles + disclose-once
+  guard against over-redaction degrading model task quality.
 - Chat-log truth is a privacy-level choice (§5): L1 stores _redacted_
   text (minimize on-disk truth); L2+ stores sealed truth (§3) so the
   console can reveal on demand.
@@ -227,13 +253,16 @@ story stays coherent.
 ### Phase A — Cloud redaction (§4)
 
 - [ ] Provider registry: resolve `kind = local | remote` per model — single trigger source
-- [ ] `redact.rs` Tier 1 detectors: API-key shapes/JWT, Luhn cards, email/phone, `%USERPROFILE%` paths → `⟦CLASS_N⟧` tokens
+- [ ] `redact.rs` layer 1: Luhn+BIN cards, IBAN mod-97, ABA mod-10, SWIFT, SSN validity, crypto checksums, API-key shapes/JWT, email/phone, `%USERPROFILE%` paths → `⟦CLASS_N⟧` tokens
 - [ ] Session-scoped token map; stream-safe detokenize (placeholder boundaries across SSE chunks)
 - [ ] Detokenize boundaries: display, tool/action execute, tool-output inbound redaction
 - [ ] Mangled-token repair pass (fuzzy match on `⟦…⟧` shapes)
+- [ ] Entity registry: profile-seeded values + confirm-on-grow from layer-1/3 hits, sealed under §3
+- [ ] Provenance marks: sensitive-path reads, UIA field names, banking origins, password-manager clipboard deny
+- [ ] Per-class toggles + disclose-once override
 - [ ] "Redacted N items" chip → class breakdown, never values
 - [ ] Tests: round-trip fidelity, code blocks untouched, map never persisted
-- **Accept:** a cloud turn with fake card + JWT + email leaves the machine tokenized and renders correctly on return
+- **Accept:** a cloud turn with fake card + JWT + email + a registry-seeded checksum-less account number leaves the machine tokenized and renders correctly on return
 
 ### Phase B — Agent profiles (§1)
 
