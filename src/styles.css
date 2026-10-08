@@ -210,10 +210,15 @@ body {
 }
 
 /* Tool report: one bordered panel with identity / effect / metadata
-   sections, mirroring the TUI's boxed tool output. */
+   sections, mirroring the TUI's boxed tool output. Spacing lives as
+   padding on the wrapper: the virtual scroller positions items by the
+   measured height of this root element, and margins would be excluded
+   from that measurement (stacked panels would touch). */
+.rb-wrap {
+  padding: 4px 12px 12px;
+}
 .msg.tool.report {
   padding: 0;
-  margin: 4px 12px 12px;
   border: 1px solid #2c2c31;
   border-radius: 6px;
   background: #141518;

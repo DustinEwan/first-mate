@@ -532,21 +532,22 @@ window.addEventListener("keydown", (e) => {
                   @click="onContentClick"
                   v-html="renderMd(item.text)"
                 ></div>
-                <div
-                  v-else-if="item.cls === 'tool' && item.tool"
-                  class="msg tool report"
-                  :class="{ failed: item.done && !item.tool.ok }"
-                >
-                  <div class="rb-head">{{ reportIdentity(item.tool) }}</div>
-                  <pre v-if="item.tool.body" class="rb-body"><span
-                    v-for="(ln, i) in item.tool.body.text.split('\n')"
-                    :key="i"
-                    class="rb-line"
-                    :class="item.tool.body.kind === 'diff' ? (ln.startsWith('+') ? 'add' : ln.startsWith('-') ? 'del' : '') : ''"
-                  >{{ ln }}
+                <div v-else-if="item.cls === 'tool' && item.tool" class="rb-wrap">
+                  <div
+                    class="msg tool report"
+                    :class="{ failed: item.done && !item.tool.ok }"
+                  >
+                    <div class="rb-head">{{ reportIdentity(item.tool) }}</div>
+                    <pre v-if="item.tool.body" class="rb-body"><span
+                      v-for="(ln, i) in item.tool.body.text.split('\n')"
+                      :key="i"
+                      class="rb-line"
+                      :class="item.tool.body.kind === 'diff' ? (ln.startsWith('+') ? 'add' : ln.startsWith('-') ? 'del' : '') : ''"
+                    >{{ ln }}
 </span></pre>
-                  <div class="rb-foot" :class="{ pending: !item.done }">
-                    {{ item.done ? reportFooter(item.tool) : "running…" }}
+                    <div class="rb-foot" :class="{ pending: !item.done }">
+                      {{ item.done ? reportFooter(item.tool) : "running…" }}
+                    </div>
                   </div>
                 </div>
                 <div v-else class="msg" :class="item.cls">{{ item.text }}</div>
