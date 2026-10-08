@@ -6,6 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
   NAlert,
+  NCheckbox,
   NButton,
   NConfigProvider,
   NForm,
@@ -52,13 +53,18 @@ interface ProviderSpec {
 const providerSpecs = ref<ProviderSpec[]>([]);
 const providerOptions = ref([{ label: "— none —", value: "" }]);
 const keyPlaceholder = ref("sk-...");
-invoke<ProviderSpec[]>("list_providers").then((ps) => {
+// Hosted providers hide Base URL unless the user opts into a proxy endpoint.
+const proxy = ref(false);
+const providersReady = invoke<ProviderSpec[]>("list_providers").then((ps) => {
   providerSpecs.value = ps;
   providerOptions.value = [
     ...providerOptions.value,
     ...ps.map((p) => ({ label: p.label, value: p.id })),
   ];
+  return ps;
 });
+
+const currentSpec = computed(() => providerSpecs.value.find((p) => p.id === provider.value));
 
 // Picking a provider prefills its endpoint (the watch below then auto-
 // discovers models) and its key hint. Select-only: restored settings stay.
@@ -67,12 +73,19 @@ function onProviderChange(id: string) {
   if (!spec) return;
   baseUrl.value = spec.base;
   keyPlaceholder.value = spec.keyHint || "not required";
+  proxy.value = false;
+}
+
+// Un-proxing restores the roster default so a stale proxy URL can't linger
+// in the value that gets saved.
+function onProxyChange(checked: boolean) {
+  if (!checked && currentSpec.value) baseUrl.value = currentSpec.value.base;
 }
 
 // Hosted endpoints are fixed by the roster; only user-owned ones (local
-// engines, custom URLs) expose the Base URL field.
+// engines, custom URLs) or an explicit proxy override expose Base URL.
 const showBaseUrl = computed(
-  () => providerSpecs.value.find((p) => p.id === provider.value)?.isLocal ?? false,
+  () => !!currentSpec.value && (currentSpec.value.isLocal || proxy.value),
 );
 
 function modelOptions() {
@@ -172,11 +185,14 @@ async function nextFromModel() {
 
 onMounted(async () => {
   hotkey.value = await invoke<string>("get_hotkey");
-  const s = await invoke<{ llm: LlmSettings }>("get_settings");
+  const [ps, s] = await Promise.all([providersReady, invoke<{ llm: LlmSettings }>("get_settings")]);
   provider.value = s.llm.provider;
   baseUrl.value = s.llm.base_url;
   apiKey.value = s.llm.api_key;
   model.value = s.llm.model;
+  // A hosted row saved with a non-default endpoint was proxied.
+  const spec = ps.find((p) => p.id === s.llm.provider);
+  proxy.value = !!spec && !spec.isLocal && s.llm.base_url !== "" && s.llm.base_url !== spec.base;
   if (provider.value && baseUrl.value) refreshModels();
 });
 
@@ -217,6 +233,9 @@ onBeforeUnmount(() => {
                 :options="providerOptions"
                 @update:value="onProviderChange"
               />
+            </n-form-item>
+            <n-form-item v-if="currentSpec && !currentSpec.isLocal">
+              <n-checkbox v-model:checked="proxy" @update:checked="onProxyChange">Proxy</n-checkbox>
             </n-form-item>
             <n-form-item v-if="showBaseUrl" label="Base URL">
               <n-input v-model:value="baseUrl" placeholder="e.g. http://localhost:11434" />

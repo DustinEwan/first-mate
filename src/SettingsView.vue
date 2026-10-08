@@ -9,6 +9,7 @@ import {
   NSelect,
   NInput,
   NButton,
+  NCheckbox,
   NSpace,
   darkTheme,
 } from "naive-ui";
@@ -42,13 +43,13 @@ interface ProviderSpec {
 const providerSpecs = ref<ProviderSpec[]>([]);
 const providerOptions = ref([{ label: "— none —", value: "" }]);
 const keyPlaceholder = ref("sk-...");
-invoke<ProviderSpec[]>("list_providers").then((ps) => {
-  providerSpecs.value = ps;
-  providerOptions.value = [
-    ...providerOptions.value,
-    ...ps.map((p) => ({ label: p.label, value: p.id })),
-  ];
-});
+// Hosted providers hide Base URL unless the user opts into a proxy endpoint.
+const proxy = ref(false);
+
+const currentSpec = computed(() => providerSpecs.value.find((p) => p.id === provider.value));
+const showBaseUrl = computed(
+  () => !!currentSpec.value && (currentSpec.value.isLocal || proxy.value),
+);
 
 // Prefill endpoint + key hint when the user picks a provider. Fired only by
 // the select, so loading saved settings never clobbers a custom base URL.
@@ -57,13 +58,14 @@ function onProviderChange(id: string) {
   if (!spec) return;
   baseUrl.value = spec.base;
   keyPlaceholder.value = spec.keyHint || "not required";
+  proxy.value = false;
 }
 
-// Hosted endpoints are fixed by the roster; only user-owned ones (local
-// engines, custom URLs) expose the Base URL field.
-const showBaseUrl = computed(
-  () => providerSpecs.value.find((p) => p.id === provider.value)?.isLocal ?? false,
-);
+// Un-proxing restores the roster default so a stale proxy URL can't linger
+// in the value that gets saved.
+function onProxyChange(checked: boolean) {
+  if (!checked && currentSpec.value) baseUrl.value = currentSpec.value.base;
+}
 
 // Include the current model in the options even if it's not in the discovered list.
 function modelOptions() {
@@ -74,12 +76,24 @@ function modelOptions() {
   return opts;
 }
 
-// Load the saved settings into the form.
-invoke<{ llm: LlmSettings }>("get_settings").then((s) => {
+// Load the saved settings into the form. Providers load first so the proxy
+// state can be inferred: a hosted row saved with a non-default endpoint was
+// configured through the proxy checkbox.
+Promise.all([
+  invoke<ProviderSpec[]>("list_providers"),
+  invoke<{ llm: LlmSettings }>("get_settings"),
+]).then(([ps, s]) => {
+  providerSpecs.value = ps;
+  providerOptions.value = [
+    ...providerOptions.value,
+    ...ps.map((p) => ({ label: p.label, value: p.id })),
+  ];
   provider.value = s.llm.provider;
   baseUrl.value = s.llm.base_url;
   apiKey.value = s.llm.api_key;
   model.value = s.llm.model;
+  const spec = ps.find((p) => p.id === s.llm.provider);
+  proxy.value = !!spec && !spec.isLocal && s.llm.base_url !== "" && s.llm.base_url !== spec.base;
 });
 
 async function refreshModels() {
@@ -154,6 +168,9 @@ function closeWindow() {
               :options="providerOptions"
               @update:value="onProviderChange"
             />
+          </n-form-item>
+          <n-form-item v-if="currentSpec && !currentSpec.isLocal">
+            <n-checkbox v-model:checked="proxy" @update:checked="onProxyChange">Proxy</n-checkbox>
           </n-form-item>
           <n-form-item v-if="showBaseUrl" label="Base URL">
             <n-input v-model:value="baseUrl" placeholder="e.g. http://localhost:11434" />
