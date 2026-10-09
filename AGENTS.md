@@ -18,8 +18,8 @@ behavior. Most work in this repo is writing content rather than writing code.
   as an Agent Skills folder. `SKILL.md` frontmatter stays spec-pure: `name` and
   `description` only, and the reference validator must pass. Skill content never
   names a tool, because tools belong to the client. The skill-to-tool mapping is
-  Rust policy in `skill_required()`. A gated tool is refused at dispatch until its
-  skill is loaded. `src-tauri/tests/packaging.rs` enforces packaging.
+  Rust policy in `skill_required()`. The dispatch gate refuses a gated tool
+  until its skill is loaded. `src-tauri/tests/packaging.rs` enforces packaging.
 - **The user's machine is the user's.** The product runs without elevation by
   default. Administrator reach exists only behind explicit user consent, and the
   user can revoke that consent. Every surface the agent drives is a surface the
@@ -66,16 +66,15 @@ behavior. Most work in this repo is writing content rather than writing code.
   - A concrete noun replaces an abstract noun where both fit.
   - A sentence names its referent instead of a pronoun. A pronoun that would
     force the reader to reopen a file or a diff forces a rewrite.
-  - A fragment is allowed only in a table cell, a bullet label, or a heading. A
-    fragment never carries a causal claim on its own.
+  - A writer may use a fragment only in a table cell, a bullet label, or a
+    heading. A writer never states a cause in a fragment alone.
   - Explanation runs in this order: conclusion, then evidence, then what
     changes as a result.
   - Mechanism replaces conclusion. Each explanation names the cause, the
     constraint, and the observable result.
   - Writing is concrete: the exact file, symbol, API, state field, edge case,
     and the check that proves the claim.
-  - A writer replaces idiomatic shorthand with the mechanism that shorthand
-    stood for.
+  - A writer writes the mechanism instead of the idiom.
   - A writer deletes ceremony, hedging, filler, and marketing. A writer never
     deletes the subject, the word "because", or a clause that limits a claim.
   - The deletions in checks 1 to 3 apply to docs and prompts, not to comments
