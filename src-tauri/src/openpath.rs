@@ -1,9 +1,9 @@
 use crate::log::log;
 
-/// Open a URL or filesystem path in the user's default handler. This is the
-/// ONLY path by which anything leaves the webview. http and https open the
-/// browser. `file://` opens the default app for the file type. Every other
-/// scheme is refused, so a caller cannot name an executable or a shell command.
+/// This is the ONLY path by which anything leaves the webview. http and
+/// https open the browser. `file://` opens the default app for the file type.
+/// Every other scheme is refused, so a caller cannot name an executable or a
+/// shell command.
 #[tauri::command]
 pub(crate) fn open_path(target: String) -> Result<(), String> {
     let result = open_path_inner(&target);
@@ -18,11 +18,10 @@ fn open_path_inner(target: &str) -> Result<(), String> {
     shell_open(&resolve_open_target(target)?)
 }
 
-/// Gate the scheme, then normalize it. `file://` becomes an existing path
-/// with backslashes. `http(s)` is returned verbatim. Every other scheme is
-/// refused. No `cmd` or `explorer` argv string is ever built. URL
-/// metacharacters (`&`, `|`, `^`) therefore stay data and cannot inject a
-/// command.
+/// `file://` becomes an existing path with backslashes. `http(s)` is
+/// returned verbatim. Every other scheme is refused. No `cmd` or `explorer`
+/// argv string is ever built. URL metacharacters (`&`, `|`, `^`) therefore
+/// stay data and cannot inject a command.
 fn resolve_open_target(target: &str) -> Result<String, String> {
     let t = target.trim();
     if let Some(rest) = t.strip_prefix("file://") {
@@ -90,8 +89,7 @@ fn shell_open(target: &str) -> Result<(), String> {
     Err(format!("no default handler support on this platform: {target}"))
 }
 
-/// Percent-decoding for `file://` paths (%20 and similar). A '+' stays a
-/// literal '+'; a '+' is not a space.
+/// A '+' stays a literal '+'; a '+' is not a space.
 fn percent_decode(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());

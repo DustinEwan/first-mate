@@ -80,8 +80,6 @@ function onProxyChange(checked: boolean) {
   if (!checked && currentSpec.value) baseUrl.value = currentSpec.value.base;
 }
 
-// The roster fixes hosted endpoints. Base URL appears only for local
-// engines or an explicit proxy override.
 const showBaseUrl = computed(
   () => !!currentSpec.value && (currentSpec.value.isLocal || proxy.value),
 );
@@ -187,7 +185,6 @@ onMounted(async () => {
   baseUrl.value = s.llm.base_url;
   apiKey.value = s.llm.api_key;
   model.value = s.llm.model;
-  // A saved non-default endpoint on a hosted provider means Proxy was on.
   const spec = ps.find((p) => p.id === s.llm.provider);
   proxy.value = !!spec && !spec.isLocal && s.llm.base_url !== "" && s.llm.base_url !== spec.base;
   if (provider.value && baseUrl.value) refreshModels();

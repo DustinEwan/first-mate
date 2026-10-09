@@ -446,10 +446,8 @@ onMounted(() => {
     liveMsgId = -1;
   });
   // Mid-run compaction (docs/COMPACTION.md): the backend folded the
-  // oldest rows into a brief so the request fits the context window. The
-  // divider marks when the fold happened, not a transcript boundary.
-  // Rows above the divider stay visible. The next request resumes after
-  // the saved `summary` row.
+  // oldest rows into a brief so the request fits the context window. The next
+  // request resumes after the saved `summary` row.
   listen<{ summary: string; tokensBefore: number; dropped: number }>("compact", (event) => {
     addMsg(event.payload.summary, "summary", { folded: event.payload.dropped });
   });
@@ -545,9 +543,8 @@ async function submit() {
       priorHistory,
       systemPrompt: systemPromptBase.value + skillsAds.value,
       loadedSkills: loadedSkills(),
-      // Compaction knobs: 0 means read the window off the model endpoint.
-      // The percent caps how full the window may get before summarizing.
       contextWindow: llmSettings.context_window ?? 0,
+      // The percent caps how full the window may get before summarizing.
       compactAtPercent: llmSettings.compact_at_percent ?? 85,
     });
     // The return value is the unstreamed remainder, e.g. a turn-cap note

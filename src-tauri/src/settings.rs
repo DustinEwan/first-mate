@@ -1,11 +1,10 @@
 use tauri::Manager;
 
-/// Summon hotkey. `run` registers `HOTKEY` once, so this constant is the
-/// only place to change the binding.
+/// `run` registers `HOTKEY` once, so this constant is the only place to
+/// change the binding.
 pub(crate) const HOTKEY: &str = "Super+Alt+Space";
 
-/// Expose the summon hotkey to the frontend. The UI then shows the real
-/// binding instead of a copy.
+/// The UI shows the real binding instead of a copy.
 #[tauri::command]
 pub(crate) fn get_hotkey() -> &'static str {
     HOTKEY

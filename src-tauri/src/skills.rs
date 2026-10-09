@@ -28,8 +28,8 @@ fn prompt_path(name: &str) -> Option<std::path::PathBuf> {
     candidates.into_iter().find(|p| p.is_file())
 }
 
-/// `None` when no layer carries the file. The binary ships NO prompt text,
-/// so a missing file means the behaviour that needs it is unconfigured.
+/// The binary ships NO prompt text, so a missing file means the behaviour
+/// that needs it is unconfigured.
 pub(crate) fn prompt_content(name: &str) -> Option<String> {
     prompt_path(name)
         .and_then(|p| std::fs::read_to_string(p).ok())
@@ -94,10 +94,10 @@ fn skill_roots() -> Vec<std::path::PathBuf> {
     roots
 }
 
-/// Parse `---` frontmatter into (name, description, body). Other keys
-/// (license, metadata, compatibility) belong to the Agent Skills spec and
-/// to other clients, so this parser ignores them. Descriptions legitimately
-/// contain colons, so values may be YAML single- or double-quoted.
+/// Other keys (license, metadata, compatibility) belong to the Agent Skills
+/// spec and to other clients, so this parser ignores them. Descriptions
+/// legitimately contain colons, so values may be YAML single- or
+/// double-quoted.
 pub(crate) fn parse_frontmatter(md: &str) -> (Option<String>, Option<String>, String) {
     let Some(rest) = md
         .strip_prefix("---")
@@ -122,8 +122,7 @@ pub(crate) fn parse_frontmatter(md: &str) -> (Option<String>, Option<String>, St
     (name, description, body)
 }
 
-/// Strip YAML quoting from a single-line scalar. `"..."` uses backslash
-/// escapes; `'...'` uses doubled quotes.
+/// `"..."` uses backslash escapes; `'...'` uses doubled quotes.
 fn unquote(v: &str) -> String {
     if let Some(s) = v.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
         s.replace("\\\"", "\"").replace("\\\\", "\\")
@@ -134,7 +133,6 @@ fn unquote(v: &str) -> String {
     }
 }
 
-/// All skills found under the roots, first root winning on name clashes.
 pub(crate) fn discover_skills() -> Vec<SkillInfo> {
     let mut skills: Vec<SkillInfo> = Vec::new();
     for root in skill_roots() {
@@ -159,7 +157,6 @@ pub(crate) fn discover_skills() -> Vec<SkillInfo> {
     skills
 }
 
-/// Directory of the named skill (frontmatter name, falling back to dir name).
 pub(crate) fn skill_dir(name: &str) -> Option<std::path::PathBuf> {
     if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
         return None;
@@ -183,9 +180,8 @@ pub(crate) fn skill_dir(name: &str) -> Option<std::path::PathBuf> {
     None
 }
 
-/// The skill instructions: SKILL.md minus frontmatter. The loaded flag is not
-/// the capability. The model needs this body in context to use the tools the
-/// skill discloses.
+/// The loaded flag is not the capability. The model needs this body in
+/// context to use the tools the skill discloses.
 pub(crate) fn skill_body(name: &str) -> Option<String> {
     let dir = skill_dir(name)?;
     let md = std::fs::read_to_string(dir.join("SKILL.md")).ok()?;

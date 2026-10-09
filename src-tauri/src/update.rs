@@ -12,12 +12,9 @@ use tauri::{menu::MenuItem, AppHandle, Manager};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_updater::UpdaterExt;
 
-/// The first check waits. The tray menu must exist before the check updates
-/// the menu, and startup must stay fast.
 const CHECK_DELAY: Duration = Duration::from_secs(5);
 
-/// The tray "update" menu item, held as app state. The background check
-/// needs the item to enable and rename the entry.
+/// The background check needs the item to enable and rename the entry.
 pub(crate) struct UpdateItem(pub MenuItem<tauri::Wry>);
 
 pub(crate) fn spawn_check(app: &AppHandle) {
@@ -46,8 +43,7 @@ pub(crate) fn spawn_check(app: &AppHandle) {
     });
 }
 
-/// Tray menu "update" click. The install runs in a spawned task so the menu
-/// handler returns at once.
+/// The install runs in a spawned task so the menu handler returns at once.
 pub(crate) fn handle_menu_click(app: &AppHandle) {
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {

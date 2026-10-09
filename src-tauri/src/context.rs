@@ -48,7 +48,6 @@ pub(crate) fn estimate_str(s: &str) -> usize {
     estimate_text(s.chars().count())
 }
 
-/// Image parts count as a fixed allowance, not as their encoded length.
 pub(crate) fn estimate_tokens(msgs: &[Value]) -> usize {
     msgs.iter()
         .map(|m| match m.get("content") {
@@ -237,8 +236,7 @@ pub(crate) fn prune_savings_floor(threshold: usize) -> usize {
     MIN_PRUNE_SAVINGS_TOKENS.min(threshold / 4)
 }
 
-/// Replace old tool bodies with a one-line marker, keeping the message
-/// itself. A `tool` row must stay paired with its `tool_call`.
+/// A `tool` row must stay paired with its `tool_call`.
 ///
 /// Pruning is monotone. A row old enough to prune stays old as the run
 /// grows. The cached prefix is churned once rather than every turn.

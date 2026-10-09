@@ -111,10 +111,9 @@ pub(crate) fn is_winapp_call(command: &str) -> bool {
         .is_some_and(|t| t.eq_ignore_ascii_case("winapp"))
 }
 
-/// The elevated helper: a persistent PowerShell runspace fed JSON-line
-/// requests over a named pipe. The app writes this text to the First Mate tmp
-/// dir inside `elevate()`. The user can read the code that runs with admin
-/// rights, rather than trusting a compiled binary. Three guards apply:
+/// The app writes this text to the First Mate tmp dir inside `elevate()`. The
+/// user can read the code that runs with admin rights, rather than trusting a
+/// compiled binary. Three guards apply:
 /// - Only the First Mate executable may connect, checked from PID to image path.
 /// - A watchdog kills the helper when the app exits.
 /// - Every command runs under a hard timeout through async invocation.
@@ -338,8 +337,7 @@ fn write_helper_script() -> Result<std::path::PathBuf, String> {
     Ok(path)
 }
 
-/// Connect, then ping the other side. The session is trusted only after that
-/// ping answers.
+/// The session is trusted only after that ping answers.
 #[cfg(windows)]
 fn open_session(path: &str, pid: u32) -> Result<HelperSession, String> {
     let mut client =

@@ -20,8 +20,7 @@ fn fm_dir() -> std::path::PathBuf {
     home_dir().join(".firstmate")
 }
 
-/// Scratch directory for generated command scripts. The directory is
-/// created on demand.
+/// Scratch directory for generated command scripts.
 pub(crate) fn fm_tmp_dir() -> std::path::PathBuf {
     let d = fm_dir().join("tmp");
     let _ = std::fs::create_dir_all(&d);
@@ -35,8 +34,8 @@ pub(crate) fn fm_out_dir() -> std::path::PathBuf {
     d
 }
 
-/// Keep only the newest `keep` files in a scratch directory. Callers run
-/// this at startup, so files left by an earlier session cannot accumulate.
+/// Callers run this at startup, so files left by an earlier session cannot
+/// accumulate.
 pub(crate) fn trim_dir(dir: &std::path::Path, keep: usize) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;

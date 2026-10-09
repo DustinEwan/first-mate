@@ -54,8 +54,6 @@ pub(crate) async fn execute_tool_inner(name: &str, args: &serde_json::Value) -> 
     .await
 }
 
-/// Dispatch for the three elevation tools: UAC consent, the
-/// persistent admin session, and release.
 async fn execute_elevation(
     app: &tauri::AppHandle,
     name: &str,

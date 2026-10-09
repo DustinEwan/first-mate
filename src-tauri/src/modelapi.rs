@@ -4,15 +4,12 @@
 
 use crate::provider_catalog::{self, Api};
 
-/// The provider roster for the settings UI. The frontend renders these rows
-/// verbatim.
+/// The frontend renders these rows verbatim.
 #[tauri::command]
 pub(crate) fn list_providers() -> Vec<provider_catalog::Spec> {
     provider_catalog::catalog().to_vec()
 }
 
-/// Resolve the wire protocol for a provider id. An unknown id resolves to
-/// `Api::Openai`.
 fn api_of(provider: &str) -> Api {
     provider_catalog::lookup(provider).map(|s| s.api).unwrap_or(Api::Openai)
 }
@@ -183,7 +180,6 @@ async fn fetch_context(provider: &str, base: &str, api_key: &str, model: &str) -
     }
 }
 
-/// The context window under any field name the server uses.
 fn window_of_entry(entry: &serde_json::Value) -> Option<u32> {
     ["max_model_len", "n_ctx", "context_length", "context_window"]
         .iter()
@@ -191,7 +187,6 @@ fn window_of_entry(entry: &serde_json::Value) -> Option<u32> {
         .map(|v| v as u32)
 }
 
-/// One minimal chat completion verifies the saved LLM configuration.
 #[tauri::command]
 pub(crate) async fn test_llm(provider: String, base_url: String, api_key: String, model: String) -> Result<String, String> {
     let base = base_url.trim_end_matches('/');
@@ -293,8 +288,8 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
 
-    /// One-shot mock HTTP server. The server accepts one request, replies
-    /// with `resp_body`, and sends the raw request head on the channel.
+    /// The server accepts one request, replies with `resp_body`, and sends
+    /// the raw request head on the channel.
     fn mock(resp_body: &'static str) -> (String, std::sync::mpsc::Receiver<String>) {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = l.local_addr().unwrap().port();

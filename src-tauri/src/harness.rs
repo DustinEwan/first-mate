@@ -1,6 +1,5 @@
 use crate::exec::{AppNotifier, spawn_background_notify};
 
-/// Version string if a CLI resolves on PATH and exits 0 for `--version`.
 pub(crate) async fn cli_version(name: &str) -> Option<String> {
     let mut cmd = tokio::process::Command::new(name);
     #[cfg(windows)]
@@ -25,7 +24,6 @@ fn cli_available(name: &str) -> impl std::future::Future<Output = bool> {
 /// Harness readiness, shown by the Setup wizard.
 #[derive(serde::Serialize)]
 pub(crate) struct BootstrapStatus {
-    /// winapp CLI version, or None when missing.
     winapp: Option<String>,
     /// Whether winget exists, so the wizard can offer an unattended install.
     winget: bool,
@@ -47,9 +45,8 @@ pub(crate) async fn install_winapp(app: tauri::AppHandle) -> Result<String, Stri
     .await
 }
 
-/// The official non-interactive install command for the winapp CLI. It runs
-/// only when the user clicks Install in the Setup wizard, or explicitly asks
-/// the agent to install.
+/// Runs only when the user clicks Install in the Setup wizard, or explicitly
+/// asks the agent to install.
 fn winapp_install_cmd() -> tokio::process::Command {
     let mut cmd = tokio::process::Command::new("winget");
     cmd.args([

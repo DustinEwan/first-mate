@@ -4,7 +4,6 @@ use crate::fileedit::line_diff;
 use crate::log::{fm_out_dir, log};
 use crate::report::{ReportBody, ToolReport};
 
-/// Split a command line into arguments, respecting double quotes.
 /// `winapp ui search "Qwen 3.8 Flash Next" -a zen`
 ///   -> ["winapp", "ui", "search", "Qwen 3.8 Flash Next", "-a", "zen"]
 pub(crate) fn parse_command(cmd: &str) -> Vec<String> {
@@ -37,8 +36,6 @@ pub(crate) fn parse_command(cmd: &str) -> Vec<String> {
     args
 }
 
-/// True when the command uses shell features that require `cmd.exe`. Shell
-/// features are pipes, `&&`, redirection, and cmd built-ins.
 pub(crate) fn needs_shell(cmd: &str) -> bool {
     if cmd.contains(['|', '&', '>', '<', '^', '%', '(', ')']) {
         return true;
@@ -57,10 +54,9 @@ pub(crate) fn needs_shell(cmd: &str) -> bool {
 /// file. This counter keeps each spill name unique.
 static SPILL_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// Cap tool output over `max` chars. The FULL text spills to
-/// `~/.firstmate/output/`; the result keeps head + pointer + tail.
-/// `read_file` on the pointer path recovers any omitted middle, so
-/// nothing is unrecoverably lost.
+/// The FULL text spills to `~/.firstmate/output/`; the result keeps head +
+/// pointer + tail. `read_file` on the pointer path recovers any omitted
+/// middle, so nothing is unrecoverably lost.
 fn truncate_if_over(s: String, max: usize) -> String {
     let count = s.chars().count();
     if count <= max {
@@ -137,9 +133,9 @@ pub(crate) fn cmd_timeout() -> std::time::Duration {
     std::time::Duration::from_secs(secs)
 }
 
-/// Spawn with a deadline. On timeout, the direct child dies (kill_on_drop) and
-/// the process tree is swept. A tool call must always return, so the agent loop
-/// can never stall on a child that will not exit.
+/// On timeout, the direct child dies (kill_on_drop) and the process tree is
+/// swept. A tool call must always return, so the agent loop can never stall
+/// on a child that will not exit.
 #[cfg_attr(not(test), allow(dead_code))]
 async fn exec_capped(
     cmd: &mut tokio::process::Command,
@@ -198,7 +194,6 @@ pub(crate) fn bg_registry() -> &'static std::sync::Mutex<std::collections::HashM
     &BG_REGISTRY
 }
 
-/// Drain a pipe into the shared buffer, keeping the tail when it overflows.
 fn pump_bg_output<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
     mut reader: R,
     buf: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
@@ -240,10 +235,8 @@ fn evict_bg_jobs(reg: &mut std::collections::HashMap<u32, BgJob>) {
     }
 }
 
-/// Foreground grace period before a command is auto-backgrounded.
-/// Waiting past this point wastes an agent turn. The job moves to
-/// the background and announces its completion in the ledger by
-/// itself.
+/// Waiting past this point wastes an agent turn. The job moves to the
+/// background and announces its completion in the ledger by itself.
 fn auto_bg_secs() -> u64 {
     std::env::var("FIRSTMATE_AUTO_BG_SECS")
         .ok()
@@ -382,11 +375,10 @@ pub(crate) async fn spawn_background_notify(
     ))
 }
 
-/// Run a foreground command with an auto-background escape. If the command
-/// outlives `auto_bg_secs`, it becomes a background job. The job keeps the
-/// same pid and the same pipes. Nothing is killed and nothing is re-run. The
-/// tool returns immediately with the never-poll contract. Completion lands in
-/// the ledger by itself.
+/// If the command outlives `auto_bg_secs`, it becomes a background job. The
+/// job keeps the same pid and the same pipes. Nothing is killed and nothing
+/// is re-run. The tool returns immediately with the never-poll contract.
+/// Completion lands in the ledger by itself.
 pub(crate) async fn exec_or_background(
     notifier: std::sync::Arc<dyn BgNotifier>,
     mut cmd: tokio::process::Command,

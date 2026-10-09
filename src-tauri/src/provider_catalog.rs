@@ -31,7 +31,7 @@ pub(crate) enum Auth {
     /// No credentials (local engines).
     None,
 }
-/// One row of the roster.
+
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Spec {

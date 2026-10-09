@@ -89,8 +89,8 @@ pub fn run() {
                 MenuItem::with_id(app, "setup", "Setup Wizard", true, None::<&str>)?;
             let quit_item =
                 MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            // The item starts disabled. update.rs enables and renames the
-            // item when the background check finds an update.
+            // update.rs enables and renames the item when the background
+            // check finds an update.
             let update_item = MenuItem::with_id(app, "update", "Update…", false, None::<&str>)?;
             app.manage(update::UpdateItem(update_item.clone()));
             let menu = Menu::with_items(app, &[&toggle_item, &setup_item, &settings_item, &update_item, &quit_item])?;
@@ -150,8 +150,7 @@ pub fn run() {
                     }
                 })?;
 
-            // Closing the window only hides the window. The app keeps
-            // running in the tray.
+            // The app keeps running in the tray.
             if let Some(window) = app.get_webview_window("main") {
                 let win = window.clone();
                 window.on_window_event(move |event| {

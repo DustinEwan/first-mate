@@ -30,8 +30,7 @@ const provider = ref("");
 const baseUrl = ref("");
 const apiKey = ref("");
 const model = ref("");
-// Nullable because the input can be cleared. A cleared or missing value
-// means the default: 0 = auto-detect, 85 percent of the window.
+// Nullable because the input can be cleared. A cleared input saves the field's default.
 const contextWindow = ref<number | null>(0);
 const compactAtPercent = ref<number | null>(85);
 const models = ref<string[]>([]);

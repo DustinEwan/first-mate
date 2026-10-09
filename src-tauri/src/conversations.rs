@@ -1,14 +1,13 @@
 use crate::log::{home_dir, log};
 use crate::report::ToolReport;
 
-/// One persisted turn: role, text, and an optional report. Any role
-/// round-trips, `tool` included.
+/// Any role round-trips, `tool` included.
 #[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct ConvMsg {
     role: String,
     text: String,
-    /// Structured facts for a tool turn. The UI re-renders these fields on
-    /// resume. The `text` field is the model-facing transcript.
+    /// The UI re-renders these fields on resume. The `text` field is the
+    /// model-facing transcript.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     report: Option<ToolReport>,
 }
@@ -66,7 +65,7 @@ fn parse_conversation(raw: &str) -> (String, Vec<ConvMsg>) {
     (name, msgs)
 }
 
-/// Resolve a stored path. A path outside the conversations dir is refused.
+/// A path outside the conversations dir is refused.
 fn resolve_conv_path(path: &str) -> Result<std::path::PathBuf, String> {
     let full = std::path::Path::new(path)
         .canonicalize()
@@ -128,9 +127,8 @@ pub(crate) fn load_conversation(path: String) -> Result<Vec<ConvMsg>, String> {
     Ok(parse_conversation(&raw).1)
 }
 
-/// Delete a conversation file. The path passes the containment check that
-/// `load_conversation` uses, so only a file inside the conversations dir can
-/// be removed.
+/// The path passes the containment check that `load_conversation` uses, so
+/// only a file inside the conversations dir can be removed.
 #[tauri::command]
 pub(crate) fn delete_conversation(path: String) -> Result<(), String> {
     let full = resolve_conv_path(&path)?;

@@ -307,8 +307,7 @@ fn brief_transcript(
     format!("{head}\n[...middle of the dropped transcript omitted...]\n{tail}")
 }
 
-/// One non-streaming call. The next turn carries the brief instead of the rows
-/// it replaced.
+/// The next turn carries the brief instead of the rows it replaced.
 async fn summarize_http(
     client: &reqwest::Client,
     url: &str,

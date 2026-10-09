@@ -2,7 +2,7 @@ use tauri::{Manager, PhysicalPosition};
 
 /// The anchor glyph (icons/window.png, 256px), the same artwork as the tray
 /// icon. The bundle icons are generated from that source, so windows inherit
-/// it by default. The settings window sets the icon explicitly as well.
+/// it by default.
 pub(crate) fn anchor_icon() -> tauri::image::Image<'static> {
     tauri::image::Image::from_bytes(include_bytes!("../icons/window.png"))
         .expect("icons/window.png must be a valid PNG")
@@ -28,8 +28,6 @@ pub(crate) fn toggle_window(app: &tauri::AppHandle) {
     }
 }
 
-/// Open or focus the settings window, creating the window on first use.
-///
 /// The command wrapper MUST be async. A sync command runs on the main thread.
 /// Building a WebviewWindow there deadlocks the event loop. The async form
 /// runs on the tokio runtime, which proxies window creation correctly. The

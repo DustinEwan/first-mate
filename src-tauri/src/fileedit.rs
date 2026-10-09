@@ -46,9 +46,8 @@ pub(crate) fn line_diff(prev: &str, now: &str) -> String {
     out
 }
 
-/// Content hash of a file snapshot (FNV-1a, 4 hex chars). An edit must carry
-/// the tag that `read_file` emitted for the same bytes. An edit anchored to
-/// stale line numbers is rejected, not applied blindly.
+/// An edit must carry the tag that `read_file` emitted for the same bytes.
+/// An edit anchored to stale line numbers is rejected, not applied blindly.
 pub(crate) fn snapshot_tag(bytes: &[u8]) -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in bytes {
@@ -57,9 +56,9 @@ pub(crate) fn snapshot_tag(bytes: &[u8]) -> String {
     format!("{:04X}", ((h >> 32) as u32 & 0xFFFF) as u16)
 }
 
-/// Last tag the model saw per path. One process serves one user and one app,
-/// so a process-wide map is sufficient. The map guards edits against files
-/// that changed since the model read them.
+/// One process serves one user and one app, so a process-wide map is
+/// sufficient. The map guards edits against files that changed since the
+/// model read them.
 static SNAPSHOT_TAGS: std::sync::OnceLock<
     std::sync::Mutex<std::collections::HashMap<String, String>>,
 > = std::sync::OnceLock::new();
@@ -75,7 +74,6 @@ pub(crate) fn record_snapshot(path: &str, tag: &str) {
         .insert(path.to_lowercase(), tag.to_string());
 }
 
-/// The tag the model last saw for `path`, if it ever read it.
 pub(crate) fn seen_snapshot(path: &str) -> Option<String> {
     snapshot_tags()
         .lock()
@@ -93,8 +91,7 @@ pub(crate) enum EditOp {
 }
 
 impl EditOp {
-    /// Inclusive line span the op touches. An insert anchors a gap and
-    /// touches one line.
+    /// An insert anchors a gap and touches one line.
     fn span(&self) -> (usize, usize) {
         match self {
             EditOp::Replace { lo, hi, .. } | EditOp::Cut { lo, hi } => (*lo, *hi),
@@ -257,7 +254,6 @@ pub(crate) fn fence_for(body: &str) -> &'static str {
     }
 }
 
-/// Clip to `keep` lines: head, an omission marker, tail.
 pub(crate) fn clip_lines(s: &str, keep: usize) -> String {
     let lines: Vec<&str> = s.lines().collect();
     if lines.len() <= keep {
@@ -274,7 +270,6 @@ pub(crate) fn clip_lines(s: &str, keep: usize) -> String {
     )
 }
 
-/// Last path segment, whichever separator the path uses.
 pub(crate) fn base_name(path: &str) -> &str {
     path.rsplit(['\\', '/']).next().unwrap_or(path)
 }
@@ -297,9 +292,8 @@ pub(crate) fn result_tag(result: &str) -> Option<String> {
     (t.len() == 4).then_some(t)
 }
 
-/// The body of the first ``` ```diff ``` fence in `s`. The `edit_file`
-/// result already carries that diff, and the ledger reuses the diff
-/// verbatim.
+/// The `edit_file` result already carries that diff, and the ledger reuses
+/// the diff verbatim.
 pub(crate) fn extract_diff_fence(s: &str) -> Option<String> {
     let marker = "```diff\n";
     let start = s.find(marker)? + marker.len();
