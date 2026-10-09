@@ -159,10 +159,10 @@ controls:
 
 The 2025–2026 reception evidence for Copilot leaves four jobs standing. The
 four are: recover lost context, use what's in front of me, bounded delegation,
-and low-friction intent capture. Users consistently punish one combination:
+and low-friction intent capture. Users consistently reject one combination:
 plaintext at rest, plus an unconfirmed action that can change any file or
-account. §3–4 and the trust tiers are the answer to that punishment. Evidence
-and full analysis: `docs/roadmap/COPILOT-ANALYSIS.md`.
+account. §3–4 and the trust tiers answer those two complaints. Evidence and
+full analysis: `docs/roadmap/COPILOT-ANALYSIS.md`.
 
 ## 7. Derived capabilities
 
@@ -191,8 +191,8 @@ command gets an implicit argument. That argument is the active selection, the
 clipboard, or the active window. The command might summarize, translate, "file
 this", or "draft reply".
 The result lands back in the source app, not in a panel the user has to visit.
-The hotkey console already removes the cost of leaving the current application.
-That cost is what made Click to Do feel bad to use. What is still missing is
+The hotkey console already removes the step of leaving the current application.
+That extra step is what made Click to Do feel bad to use. What is still missing is
 UIA selection capture, and the winapp harness already speaks UIA. The other
 missing piece is a way to write the result back into the source application.
 

@@ -86,9 +86,9 @@ local model, because the scan itself cannot leak.
 
 The bias is to over-redact outbound traffic to a cloud provider. Detokenize
 restores the real value for display and for actions. A false positive therefore
-costs a token the user never sees. A false negative is the leak. Per-class
-toggles and the disclose-once override guard against over-redaction degrading
-model task quality.
+removes a token that detokenize puts back before the user sees it. A false
+negative is the leak. Per-class toggles and the disclose-once override guard
+against over-redaction degrading model task quality.
 
 ## On-disk truth and the console indicator
 

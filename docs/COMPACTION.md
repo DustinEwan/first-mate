@@ -34,12 +34,12 @@ model bugs. Both failures are measurable on a normal day of use.
 ## The rule that governs everything else
 
 Compaction **invalidates the prefix cache**. Rewriting history changes the
-prefix, so the next request pays a full re-prefill. The prefix therefore stays
-byte-stable by default. Compaction fires only when the window forces a fold.
-Old tool output is pruned only when the cache is already cold, or when the
-trailing suffix is small. A cold cache means the endpoint has been idle past
-the provider's TTL. Every compaction spends one cache miss. That miss must free
-window space that the run actually needs.
+prefix, so the next request re-processes the whole prefix. The prefix therefore
+stays byte-stable by default. Compaction fires only when the window forces a
+fold. Old tool output is pruned only when the cache is already cold, or when
+the trailing suffix is small. A cold cache means the endpoint has been idle
+past the provider's TTL. Every compaction causes one cache miss. The freed
+space must be space that the run actually needs.
 
 ## Mechanism
 
@@ -57,12 +57,12 @@ the request is built, and again between turns inside a run.
    estimate also adds the tool-registry overhead, which is byte-stable. When
    the endpoint reports `usage.prompt_tokens` on the stream, that count floors
    the estimate. Only the rows appended since that report are guesses.
-2. **Fold to a target, and only when the fold pays.** `target_tokens` is 75% of
-   the threshold. A request trimmed to exactly the threshold is over the line
-   again on the next tool result. Every fold costs a summarizer call. Before
-   this rule existed, a 12k window at 60% folded four times in one run. A fold
-   that frees less than `MIN_FOLD_SAVINGS_TOKENS` is skipped and logged instead
-   of paid for. One such fold on a 6k window bought 259 tokens.
+2. **Fold to a target, and skip folds that free too little.** `target_tokens` is
+   75% of the threshold. A request trimmed to exactly the threshold is over the
+   line again on the next tool result. Each fold requires one extra summarizer
+   call. Before this rule existed, a 12k window at 60% folded four times in one
+   run. A fold that frees less than `MIN_FOLD_SAVINGS_TOKENS` is skipped and
+   logged rather than run. One such fold on a 6k window freed only 259 tokens.
 3. **Cut where the wire allows.** Before a run, `turn_anchored_cut` cuts the
    persisted ledger at a turn boundary. The kept tail always begins at a user
    row, so a turn is never split. That cut removes a prefix, so any instruction
@@ -77,10 +77,10 @@ the request is built, and again between turns inside a run.
    The newest `prune_protect_tokens` are protected. That budget is 20k, capped
    at half the threshold. The cap leaves a small-window model an older half
    to prune. `load_skill` and `read_skill_resource` bodies are never touched.
-   Markers are computed first, and applied only when the savings clear
-   `MIN_PRUNE_SAVINGS_TOKENS`. A pass that cannot pay for the cache miss leaves
-   the transcript untouched. That pass does not elide rows and then report
-   nothing. Pruning makes no model call.
+   Markers are computed first, and applied only when the freed space clears
+   `MIN_PRUNE_SAVINGS_TOKENS`. A pass that frees too little leaves the transcript
+   untouched, because it would still cause the same cache miss. That pass does
+   not elide rows and then report nothing. Pruning makes no model call.
 5. **Summarize the dropped rows, and keep the instruction in hand.** The brief
    is framing, not a turn. The brief therefore folds into the system prompt
    through `set_summary`. The new brief replaces any earlier brief instead of
@@ -98,7 +98,7 @@ the request is built, and again between turns inside a run.
    The divider is worded for the reader: "summarized the earlier chat so it
    could keep going". The tooltip carries the row counts. The persisted
    `summary` row is where the next request resumes. A 166-row ledger therefore
-   pays one summarizer call. That ledger never re-folds rows that an earlier
+   needs one summarizer call. That ledger never re-folds rows that an earlier
    fold already covered.
 6. **Re-inject loaded skill bodies at request build.** The loaded set is rebuilt
    from the ledger. Each loaded skill's `SKILL.md` is then put back in the
@@ -109,8 +109,8 @@ the request is built, and again between turns inside a run.
 
 - **No image-lifetime policy.** Dropping older screenshots breaks before/after
   comparison, and before/after comparison is what a UI-driving agent must do.
-  Dropping older screenshots buys nothing that the cache does not already give
-  us.
+  Dropping older screenshots frees no space that the cache does not already
+  free.
 - **No provider-native compaction.** That path needs OpenAI Responses or the
   Anthropic beta. The local llama.cpp has neither.
 - Compaction does not build bitmap archives of the history.
