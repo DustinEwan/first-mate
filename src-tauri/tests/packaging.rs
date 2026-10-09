@@ -65,3 +65,22 @@ fn installer_packages_every_skill_file() {
         );
     }
 }
+
+#[test]
+fn installer_packages_the_prompt_content() {
+    // The binary ships no prompt text, so every prompt file the runtime reads
+    // has to travel with the installer — including the compaction brief rules.
+    let conf = std::fs::read_to_string(repo_root().join("src-tauri").join("tauri.conf.json"))
+        .expect("tauri.conf.json");
+    for name in ["AGENTS.md", "COMPACT.md"] {
+        let entry = format!("../prompts/{name}");
+        assert!(
+            conf.contains(&entry),
+            "tauri.conf.json resources must package {entry}"
+        );
+        assert!(
+            repo_root().join("prompts").join(name).is_file(),
+            "prompts/{name} must exist to be packaged"
+        );
+    }
+}

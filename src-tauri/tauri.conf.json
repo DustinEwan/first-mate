@@ -33,6 +33,7 @@
     "createUpdaterArtifacts": true,
     "resources": {
       "../prompts/AGENTS.md": "AGENTS.md",
+      "../prompts/COMPACT.md": "COMPACT.md",
       "../prompts/skills/elevation/SKILL.md": "skills/elevation/SKILL.md",
       "../prompts/skills/filesystem/SKILL.md": "skills/filesystem/SKILL.md",
       "../prompts/skills/powershell/SKILL.md": "skills/powershell/SKILL.md",
