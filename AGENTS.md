@@ -28,20 +28,30 @@ behavior. Most work in this repo is writing content rather than writing code.
   module exposes plain functions. The command wrappers live beside the handler
   table in `lib.rs`. That placement keeps the webview runtime out of a binary that
   merely links the module.
-- **Comments follow five rules.**
+- **Comments follow five checks, in order.** A comment is deleted at the first
+  check it fails. A rewrite changes form and adds no value, so check 5 never
+  rescues a comment that checks 1 to 4 delete.
 
   1. No thinking aloud. A comment that records the author's reasoning, doubts,
-     or the path taken to write the code is noise. That noise is deleted.
+     or the path taken to write the code is noise. A comment that explains a
+     language, library, or platform feature restates a manual the reader can
+     read. That noise is deleted.
   2. No provenance. A comment that describes a historical event leading to the
      current state is noise. That comment is thinking aloud in disguise.
-  3. No "what" comments. A comment that describes what the code does is noise.
-     The reader is assumed to be technically competent. If the code can be
-     understood without the comment, the comment serves no purpose.
-  4. Strictly why. A surviving comment carries context that the code cannot
-     communicate on its own. That context gives the reason a decision was made,
-     when that reason is not obvious otherwise.
-  5. The tone rules apply. A surviving comment follows the prose rules in the
-     next bullet. Those rules govern every sentence in this repo.
+  3. No "what" comments. Judge the comment against a developer who knows the
+     language, the framework, and the neighbouring files. If that developer
+     understands the code without the comment, the comment serves no purpose.
+  4. Strictly why, and only what cannot be encoded. A comment that states a
+     contract belongs in a type. A comment that states a constraint belongs in
+     a test or an assertion. A comment that survives checks 1 to 3 carries a
+     reason no type can hold. No test can assert that reason either. The reason
+     is a trap this codebase hit, or evidence about the world outside the code.
+  5. The tone rules apply. A comment that survives checks 1 to 4 follows the
+     prose rules in the next bullet. Those rules govern every sentence in this
+     repo.
+
+  When a comment's value is unclear, delete it. Ask what decision the comment
+  protects, and ask whether a type or a test can hold that decision instead.
 
 - **Prose follows the tone rules everywhere.** These rules govern every
   sentence in a comment, a doc, a prompt, and a commit body.
@@ -64,7 +74,7 @@ behavior. Most work in this repo is writing content rather than writing code.
   - Idiomatic shorthand is replaced with the mechanism it stood for.
   - Ceremony, hedging, filler, and marketing are deleted. The subject, the word
     "because", and any clause that limits a claim are never deleted.
-  - The deletions in rules 1 to 3 apply to docs and prompts, not to comments
+  - The deletions in checks 1 to 3 apply to docs and prompts, not to comments
     alone.
 
 - **Gates are not optional.** Every backend change passes `cargo test` and
