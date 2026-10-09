@@ -71,19 +71,3 @@ capability is re-earned through the skill. This is enforcement of
 context, not security: real protection is UAC consent and the trust
 tiers (roadmap Phase F). Skill content never names tools, so nothing
 here affects portability.
-
-## Shipped skills (`prompts/skills/`)
-
-- **winapp** — the hands on the screen: UI automation, screenshots,
-  browser, and first-party OS surfaces through the winapp CLI (pure
-  behavior over `run_command`).
-- **powershell** — terminal craft: read-only machine inventory patterns,
-  session mechanics.
-- **filesystem** — the six file/process tools and their rules.
-- **git-repo** — repository inspection and safe operations, with
-  `references/recipes.md`.
-- **elevation** — the user's admin door: UAC consent, the persistent
-  elevated session, its rules.
-
-User skills are folders dropped into `~/.firstmate/skills/` — they
-advertise, load, and execute exactly like shipped ones.
