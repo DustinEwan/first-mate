@@ -242,9 +242,9 @@ while conversations are still plaintext.
       never shows values.
 - [ ] Tests cover round-trip fidelity, untouched code blocks, and the rule that
       the token map is never persisted.
-- **Accept:** a cloud turn with fake card, JWT, email, and a registry-seeded
-  checksum-less account number leaves the machine tokenized, and that turn
-  renders correctly on return.
+- **Accept:** a cloud turn carrying a fake card, a JWT, and an email leaves the
+  machine tokenized. A registry-seeded account number with no checksum also
+  leaves tokenized. That turn renders correctly on return.
 
 ### Phase B — Agent profiles (§1)
 
@@ -316,9 +316,9 @@ while conversations are still plaintext.
 
 - [ ] Continuity (needs C) adds embeddings over sealed conversations and
       outputs, plus agent-side relevance queries. Ambient capture is excluded.
-- [ ] Focus transfer (needs B) adds UIA selection capture, treats the
-      selection, clipboard, or window as an implicit argument, and writes back
-      to the source application.
+- [ ] Focus transfer (needs B) adds UIA selection capture. The focused
+      selection, clipboard, or window becomes the implicit argument. The agent
+      writes the result back to the source application.
 - [ ] Voice input (needs A) adds push-to-talk on the summon hotkey, and
       speech-to-text is local only.
 - [ ] Scheduled delegation (needs E + F) binds an approved skill to a trigger
