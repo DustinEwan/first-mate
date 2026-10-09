@@ -32,13 +32,13 @@
     "targets": "all",
     "createUpdaterArtifacts": true,
     "resources": {
-      "../AGENTS.md": "AGENTS.md",
-      "../skills/elevation/SKILL.md": "skills/elevation/SKILL.md",
-      "../skills/filesystem/SKILL.md": "skills/filesystem/SKILL.md",
-      "../skills/powershell/SKILL.md": "skills/powershell/SKILL.md",
-      "../skills/git-repo/SKILL.md": "skills/git-repo/SKILL.md",
-      "../skills/git-repo/references/recipes.md": "skills/git-repo/references/recipes.md",
-      "../skills/winapp/SKILL.md": "skills/winapp/SKILL.md"
+      "../prompts/AGENTS.md": "AGENTS.md",
+      "../prompts/skills/elevation/SKILL.md": "skills/elevation/SKILL.md",
+      "../prompts/skills/filesystem/SKILL.md": "skills/filesystem/SKILL.md",
+      "../prompts/skills/powershell/SKILL.md": "skills/powershell/SKILL.md",
+      "../prompts/skills/git-repo/SKILL.md": "skills/git-repo/SKILL.md",
+      "../prompts/skills/git-repo/references/recipes.md": "skills/git-repo/references/recipes.md",
+      "../prompts/skills/winapp/SKILL.md": "skills/winapp/SKILL.md"
     },
     "category": "Utility",
     "shortDescription": "Hotkey-summoned desktop assistant",

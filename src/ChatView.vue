@@ -308,7 +308,7 @@ function newChat() {
 }
 
 // Prompt and skill ads are CONTENT: re-read them at every conversation
-// start so editing AGENTS.md or skills/ takes effect on the next chat —
+// start so editing prompts/AGENTS.md or prompts/skills/ takes effect on the next chat —
 // closing the window only hides it, so a mount-once fetch would serve a
 // stale prompt for the life of the process.
 function refreshBehavior() {
@@ -430,7 +430,7 @@ onMounted(() => {
   });
 });
 
-// Behavior text comes from AGENTS.md (repo root or ~/.firstmate), loaded via
+// Behavior text comes from AGENTS.md (repo prompts/ or ~/.firstmate), loaded via
 // get_system_prompt; the Rust fallback applies only when no file exists.
 const systemPromptBase = ref("");
 

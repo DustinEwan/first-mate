@@ -20,12 +20,12 @@ borderless and always-on-top.
 
 ## How it works
 
-- **Behavior** comes from `AGENTS.md`, layered: dev repo layout wins outright
-  (working copy under test), then `~/.firstmate/AGENTS.md` — which OVERRIDES
-  the packaged baseline — then the packaged copy next to the exe (bundled by
-  the installer). The binary ships no prompt text. Edit behavior as content,
-  not code.
-- **Capabilities** are skills in `skills/`, layered the same way: user skills
+- **Behavior** comes from `prompts/AGENTS.md`, layered: dev repo layout wins
+  outright (working copy under test), then `~/.firstmate/AGENTS.md` — which
+  OVERRIDES the packaged baseline — then the packaged copy next to the exe
+  (bundled by the installer). The binary ships no prompt text. Edit behavior
+  as content, not code.
+- **Capabilities** are skills in `prompts/skills/`, layered the same way: user skills
   in `~/.firstmate/skills/` override packaged ones by name and extend the
   set. Only five core tools are in context at start
   (`run_command`, `get_command_output`, `kill_command`, `load_skill`,
@@ -54,9 +54,9 @@ src-tauri/src/            Rust backend, one feature module per concern:
                             listing, path opening, winapp CLI bootstrap
 src/ChatView.vue          chat window (virtualized message list, markdown)
 settings.html             settings window (provider, model, API key, base URL)
-skills/                   winapp, powershell, filesystem, git-repo, elevation
+prompts/                  First Mate's own content: AGENTS.md (system prompt) + skills/
 docs/SKILLS.md            skill system design
-AGENTS.md                 system prompt (the agent's identity; packaged by the installer, user-overridable)
+AGENTS.md                 guidance for CODING agents working on this repo
 ```
 
 ## Configuration

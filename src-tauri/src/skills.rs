@@ -2,12 +2,12 @@ use crate::log::home_dir;
 
 /// AGENTS.md resolution — prompt content is layered, never compiled in:
 /// - dev repo layout (`../src-tauri` present): the working copy wins, it
-///   is the content under test
+///   is the content under test (`../prompts/AGENTS.md`)
 /// - installed: `~/.firstmate/AGENTS.md` OVERRIDES the packaged baseline
-///   (repo AGENTS.md, bundled next to the exe)
+///   (repo prompts/AGENTS.md, bundled next to the exe)
 /// - baseline fallbacks: cwd and the exe dir / its parent
 fn agents_md_path() -> Option<std::path::PathBuf> {
-    let dev = std::path::PathBuf::from("../AGENTS.md");
+    let dev = std::path::PathBuf::from("../prompts/AGENTS.md");
     if dev.is_file() && std::path::Path::new("../src-tauri").is_dir() {
         return Some(dev);
     }
@@ -66,7 +66,7 @@ pub(crate) struct SkillInfo {
 fn skill_roots() -> Vec<std::path::PathBuf> {
     let mut candidates: Vec<std::path::PathBuf> = Vec::new();
     if std::path::Path::new("../src-tauri").is_dir() {
-        candidates.push(std::path::PathBuf::from("../skills"));
+        candidates.push(std::path::PathBuf::from("../prompts/skills"));
     }
     candidates.push(home_dir().join(".firstmate").join("skills"));
     candidates.push(std::path::PathBuf::from("skills"));
@@ -216,7 +216,7 @@ mod tests {
 
     #[test]
     fn repo_skill_is_discoverable_and_loadable() {
-        // cargo test runs with cwd = src-tauri, so ../skills is the repo root.
+        // cargo test runs with cwd = src-tauri, so ../prompts/skills is the repo root.
         let skills = discover_skills();
         let git = skills.iter().find(|s| s.name == "git-repo").expect("git-repo skill");
         assert!(git.description.contains("git repositories"));
@@ -273,7 +273,7 @@ mod tests {
         // EXACTLY the repo file — the binary carries no prompt text, so
         // any deviation means content crept into code.
         let p = get_system_prompt();
-        assert_eq!(p, std::fs::read_to_string("../AGENTS.md").unwrap());
+        assert_eq!(p, std::fs::read_to_string("../prompts/AGENTS.md").unwrap());
         assert!(p.contains("file://"), "prompt must come from AGENTS.md");
     }
 
@@ -286,7 +286,7 @@ mod tests {
         let roots = skill_roots();
         assert_eq!(
             roots[0],
-            std::path::PathBuf::from("../skills").canonicalize().unwrap()
+            std::path::PathBuf::from("../prompts/skills").canonicalize().unwrap()
         );
         let user = home_dir().join(".firstmate").join("skills");
         if let Ok(user) = user.canonicalize() {

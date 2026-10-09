@@ -5,7 +5,7 @@
 use std::path::Path;
 
 fn repo_root() -> &'static Path {
-    // CARGO_MANIFEST_DIR = src-tauri; skills live one level up.
+    // CARGO_MANIFEST_DIR = src-tauri; prompt content lives one level up.
     Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap()
 }
 
@@ -22,7 +22,7 @@ fn frontmatter_value(md: &str, key: &str) -> Option<String> {
 
 #[test]
 fn packaged_skills_have_identity_frontmatter() {
-    let root = repo_root().join("skills");
+    let root = repo_root().join("prompts").join("skills");
     let mut found = Vec::new();
     for skill in [
         "winapp",
@@ -58,7 +58,7 @@ fn installer_packages_every_skill_file() {
         "git-repo",
         "elevation",
     ] {
-        let entry = format!("../skills/{skill}/SKILL.md");
+        let entry = format!("../prompts/skills/{skill}/SKILL.md");
         assert!(
             conf.contains(&entry),
             "tauri.conf.json resources must package {entry}"

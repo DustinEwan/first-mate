@@ -110,11 +110,11 @@ All capability knowledge lives here, including the primary one:
   first-party OS surfaces (`skills/winapp/`) — pure behavior, drives
   `run_command`
 - **powershell**: terminal craft — read-only machine inventory patterns
-  (CIM/WMI, driver store, services) and session mechanics (`skills/powershell/`)
-- **filesystem**: file/process tool usage and rules (`skills/filesystem/`)
-- **git-repo**: repository inspection and safe operations (`skills/git-repo/`)
+  (CIM/WMI, driver store, services) and session mechanics (`prompts/skills/powershell/`)
+- **filesystem**: file/process tool usage and rules (`prompts/skills/filesystem/`)
+- **git-repo**: repository inspection and safe operations (`prompts/skills/git-repo/`)
 - **elevation**: the user's admin door — UAC consent, the persistent
-  elevated session, and its rules (`skills/elevation/`)
+  elevated session, and its rules (`prompts/skills/elevation/`)
 - **User skills**: drop a folder into `~/.firstmate/skills/`
 
 ## Prompt Content & Layering
@@ -122,14 +122,14 @@ All capability knowledge lives here, including the primary one:
 The binary ships **no prompt text** — not even a fallback. Prompt content
 is files, layered:
 
-1. **Dev repo layout** (`../src-tauri` exists): repo `AGENTS.md` and repo
-   `skills/` win outright — they are the working copy under test.
+1. **Dev repo layout** (`../src-tauri` exists): repo `prompts/AGENTS.md` and
+   repo `prompts/skills/` win outright — they are the working copy under test.
 2. **User directory** (`~/.firstmate/`): `AGENTS.md` here OVERRIDES the
    packaged baseline; `skills/` here overrides packaged skills by name and
    EXTENDS the set with new folders.
 3. **Packaged baseline**: the installer bundles `AGENTS.md` and every
    skill's `SKILL.md`/references next to the exe (`bundle.resources` in
-   `tauri.conf.json` — one line per new skill file).
+   `tauri.conf.json` — one line per new skill file, sourced from `prompts/`).
 
 Name clashes resolve first-root-wins, so the ordering above *is* the
 override semantics; no merge logic exists. With no `AGENTS.md` anywhere,
