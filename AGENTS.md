@@ -57,7 +57,8 @@ behavior. Most work in this repo is content, not code.
   type or a test holds most such decisions.
 
 - **Prose rules apply everywhere.** Apply these rules to every sentence in a
-  comment, a doc, a prompt, and a commit body.
+  comment, a doc, a prompt, and a commit body. The section "Simplified
+  Technical English rules" cites the source for each rule.
 
   - Write all prose in Simplified Technical English.
   - State one fact in at most 20 words.
@@ -87,6 +88,49 @@ behavior. Most work in this repo is content, not code.
 - **Proof is what the running app shows.** Do not report a change as done until
   the running app shows the effect. Accept a screenshot, a process state, or a
   log line as proof. A clean build is not proof. A passing mock is not proof.
+
+## Simplified Technical English rules
+
+ASD-STE100 Issue 9 Part 1 holds these rules:
+`https://www.asd-ste100.org/assets/files/ASD-STE100_ISSUE9.pdf`. The list cites
+the rules that decided wording in this repo. No tool checks these rules. A
+reviewer reads the prose.
+
+- Rule 3.6 Active voice. The subject must be the noun that does the action.
+  `Check 1 deletes the comment` fails, because a check deletes nothing.
+- Rule 3.6 Unknown agent. When the reader does the action, use `you`. Do not
+  invent `a developer` as the subject.
+- Rule 3.6 Passive voice. Use the active voice. When the agent is unknown,
+  passive is legal in description.
+- Rule 3.7 Verb, not noun. Use an approved verb for an action. Prefer `delete`
+  over `removal`.
+- Rule 5.1 Sentence length in an instruction. Use at most 20 words.
+- Rule 5.2 One instruction per sentence, unless two actions happen together.
+- Rule 5.3 Imperative mood. Write an instruction in the command form. A
+  declarative restatement leaves the reader unsure who must act.
+- Rule 5.3 The verb `must`. Do not put `must` before an imperative, except for
+  safety. State a prohibition as `Do not …`.
+- Rule 5.4 Condition first. Put the condition before the command. A comma
+  divides the condition from the command. The wrong order is
+  `Apply the primer when the surface is dry.` The right order is
+  `When the surface is dry, apply the primer.`
+- Rule 5.5 Notes give information, not instructions. A reason sentence stays
+  declarative.
+- Rule 6.1 One subject per descriptive sentence. Give information gradually.
+- Section 6 Descriptive writing. The imperative is not permitted there. Layout
+  and Commands stay declarative.
+- Rule 6.3 Sentence length in description. The limit is 25 words. This repo
+  keeps the 20-word cap for all prose.
+- Rule 9.4 One wording per thing. When the context is the same, reuse one
+  sentence style. The prose rules have one name in this file.
+- GR-3 Pronouns. When another noun is near, replace the pronoun with that
+  noun. The five checks repeat `the comment` for that reason.
+- GR-4 The pronoun `this`. Make sure the reader knows which item `this` names.
+- Colon and list length. Each item after a colon counts as a new sentence. The
+  limit before the colon is 20 words in an instruction, and 25 words in
+  description.
+- Part 2 Controlled dictionary. Part 1 holds the rules. Part 2 holds the
+  approved words. Rule 1.8 accepts technical nouns from the subject field.
 
 ## Layout
 
