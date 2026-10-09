@@ -4,104 +4,103 @@ First Mate is a Windows desktop assistant that the user summons with a hotkey.
 Tauri 2 provides the Rust backend. Vue 3 provides the frontend. An agent drives
 the desktop through skills.
 
-The Rust core is deliberately small, because content carries the product's
-behavior. Most work in this repo is writing content rather than writing code.
+The Rust core is deliberately small, because content defines the product's
+behavior. Most work in this repo is content, not code.
 
 ## Philosophy
 
 - **Content is not code.** First Mate's identity is `prompts/AGENTS.md`. First
   Mate's capabilities are `prompts/skills/*/SKILL.md`. The binary contains no
-  prompt text, and a test enforces that. Before you implement a behavior in Rust,
-  ask whether that behavior is really content. `docs/SKILLS.md` explains the
-  design.
-- **Every capability is a skill.** A behavior that the product agent learns ships
-  as an Agent Skills folder. `SKILL.md` frontmatter stays spec-pure: `name` and
-  `description` only, and the reference validator must pass. Skill content never
-  names a tool, because tools belong to the client. The skill-to-tool mapping is
-  Rust policy in `skill_required()`. The dispatch gate refuses a gated tool
-  until its skill is loaded. `src-tauri/tests/packaging.rs` enforces packaging.
+  prompt text. A test enforces that requirement. Before you implement a
+  behavior in Rust, ask whether that behavior is really content.
+  `docs/SKILLS.md` explains the design.
+- **Every capability is a skill.** Ship every behavior the product agent learns
+  as an Agent Skills folder. Keep `SKILL.md` frontmatter spec-pure: `name` and
+  `description` only. Make the reference validator pass on every skill folder.
+  Skill content never names a tool, because tools belong to the client. The
+  skill-to-tool mapping is Rust policy in `skill_required()`. The dispatch gate
+  refuses a gated tool until the agent loads its skill.
+  `src-tauri/tests/packaging.rs` enforces packaging.
 - **The user's machine is the user's.** The product runs without elevation by
-  default. Administrator reach exists only behind explicit user consent, and the
+  default. Administrator reach exists only behind explicit user consent. The
   user can revoke that consent. Every surface the agent drives is a surface the
   user could drive in person.
-- **One feature module per concern, and IPC glue in `lib.rs` only.** A feature
-  module exposes plain functions. The command wrappers live beside the handler
-  table in `lib.rs`. That placement keeps the webview runtime out of a binary that
-  merely links the module.
-- **Comments follow five checks, in order.** A developer deletes a comment at
-  the first check it fails. A rewrite changes form and adds no information.
-  Check 5 never restores a comment that an earlier check deleted.
+- **One feature module per concern, and IPC glue in `lib.rs` only.** Expose
+  plain functions from each feature module. Put the command wrappers beside the
+  handler table in `lib.rs`. A binary that only links the module then needs no
+  webview runtime.
+- **Apply five checks to every comment, in order.** Delete a comment at the
+  first check that the comment fails. Do not rewrite a comment that fails a
+  check. A rewrite changes the form only. Do not restore a comment that an
+  earlier check deleted.
 
-  1. No thinking aloud. A comment that records the author's reasoning, doubts,
-     or the steps the author followed is noise. A developer deletes that noise.
-     A comment that explains a language, library, or platform feature repeats a
-     manual a developer can read. Check 1 deletes that comment.
-  2. No provenance. A comment that describes a historical event leading to the
-     current state is noise. A historical note records the author's reasoning
-     about the code, so check 2 deletes that note.
-  3. No "what" comments. Check 3 names the reader: a developer who knows the
-     language, the framework, and the neighbouring files. If that developer
-     understands the code without the comment, the comment serves no purpose,
-     and check 3 deletes the comment.
-  4. Strictly why, and only what no type or test can carry. A comment that
-     states a contract belongs in a type. A comment that states a constraint
-     belongs in a test or an assertion. A comment that survives checks 1 to 3
-     carries a reason no type can hold. No test can assert that reason. That
-     reason names a trap this codebase hit, or a measurement about the world
+  1. No thinking aloud. If a comment records the author's reasoning, doubts, or
+     steps, delete the comment. If a comment explains a language, library, or
+     platform feature, delete the comment. Such text repeats a manual the author
+     can read.
+  2. No provenance. If a comment describes a historical event that led to the
+     current state, delete the comment. A historical note records the author's
+     reasoning about the code.
+  3. No "what" comments. The reader of a comment knows the language, the
+     framework, and the neighbouring files. If that reader understands the code
+     without the comment, delete the comment.
+  4. Strictly why, and only what no type or test can carry. If a comment states
+     a contract, put the contract in a type. If a comment states a constraint,
+     put the constraint in a test or an assertion. Keep a comment only for a
+     reason no type can hold. No test can assert that reason. Write a reason
+     that names a trap this codebase hit, or a measurement about the world
      outside the code.
-  5. The tone rules apply. A comment that survives checks 1 to 4 follows the
-     prose rules in the next bullet. Those rules govern every sentence in this
-     repo.
+  5. The prose rules apply. Apply the prose rules in the next bullet to a
+     comment that survives checks 1 to 4.
 
-  A developer who cannot name the decision a comment protects deletes that
-  comment. A type or a test holds most such decisions.
+  If you cannot name the decision the comment protects, delete the comment. A
+  type or a test holds most such decisions.
 
-- **Prose follows the tone rules everywhere.** These rules govern every
-  sentence in a comment, a doc, a prompt, and a commit body.
+- **Prose rules apply everywhere.** Apply these rules to every sentence in a
+  comment, a doc, a prompt, and a commit body.
 
-  - Simplified Technical English governs all prose.
-  - A sentence states one fact in at most 20 words.
-  - A sentence is active, and it carries an explicit subject and verb.
-  - One verb describes each action.
-  - A concrete noun replaces an abstract noun where both fit.
-  - A sentence names its referent instead of a pronoun. A pronoun that would
-    force the reader to reopen a file or a diff forces a rewrite.
-  - A writer may use a fragment only in a table cell, a bullet label, or a
-    heading. A writer never states a cause in a fragment alone.
-  - Explanation runs in this order: conclusion, then evidence, then what
-    changes as a result.
-  - Mechanism replaces conclusion. Each explanation names the cause, the
+  - Write all prose in Simplified Technical English.
+  - State one fact in at most 20 words.
+  - Use the active voice, with an explicit subject and verb.
+  - Use one verb for each action.
+  - Use a concrete noun instead of an abstract noun.
+  - Name the referent instead of a pronoun. If the reader must reopen a file or
+    a diff to resolve a pronoun, rewrite the sentence.
+  - Use a fragment only in a table cell, a bullet label, or a heading. Do not
+    state a cause in a fragment alone.
+  - Write in this order: conclusion, evidence, then the result.
+  - Explain the mechanism, not only the conclusion. Name the cause, the
     constraint, and the observable result.
-  - Writing is concrete: the exact file, symbol, API, state field, edge case,
-    and the check that proves the claim.
-  - A writer writes the mechanism instead of the idiom.
-  - A writer deletes ceremony, hedging, filler, and marketing. A writer never
-    deletes the subject, the word "because", or a clause that limits a claim.
-  - The deletions in checks 1 to 3 apply to docs and prompts, not to comments
-    alone.
+  - Name the exact file, symbol, API, state field, edge case, and the check that
+    proves the claim.
+  - Write the mechanism, not the idiom.
+  - Delete ceremony, hedging, filler, and marketing. Do not delete the subject,
+    the word "because", or a clause that limits a claim.
+  - Apply checks 1 to 3 to docs and prompts, not to comments alone.
 
-- **Gates are not optional.** Every backend change passes `cargo test` and
-  `cargo clippy --all-targets -- -D warnings`. Every frontend change passes
-  `npm run lint`, which runs eslint and prettier. Every commit follows
-  Conventional Commits, and `.githooks/commit-msg` checks that. A commit body
-  states what is true now. A commit body never narrates how you found that out.
-- **Done means observed.** A change is finished when the running app has shown
-  the effect. The proof is a screenshot, a process state, or a log line. Compiling
-  cleanly is not proof, and a passing mock is not proof.
+- **Gates are not optional.** Run `cargo test` and
+  `cargo clippy --all-targets -- -D warnings` for every backend change. Run
+  `npm run lint` for every frontend change. That script runs eslint and
+  prettier. Follow Conventional Commits in every commit. `.githooks/commit-msg`
+  checks that. Write in the commit body what is true after the change. Do not
+  narrate how you found the problem in the commit body.
+- **Proof is what the running app shows.** Do not report a change as done until
+  the running app shows the effect. Accept a screenshot, a process state, or a
+  log line as proof. A clean build is not proof. A passing mock is not proof.
 
 ## Layout
 
-The README section "Layout" says where code belongs. In short: `src-tauri/src/`
-holds feature modules, `src/` holds the frontend, `prompts/` holds runtime
-content, and `docs/` holds design documentation.
+The README section "Layout" shows where code belongs. In short:
+`src-tauri/src/` contains feature modules. `src/` contains the frontend.
+`prompts/` contains runtime content. `docs/` contains design documentation.
 
-`docs/ROADMAP.md` holds direction and build order. That document is living, so
-consult it before feature work and update it when priorities move.
+Consult `docs/ROADMAP.md` before feature work. When priorities move, update
+`docs/ROADMAP.md`.
 
 ## Commands (Windows host; repo at C:\repos\firstmate)
 
-- Dev loop: `npm run tauri dev`. Vite serves port 1420.
-- Gates: run `cargo test` and clippy from `src-tauri/`. Run `npm run lint` for the
-  frontend, and `npm run format` fixes what prettier reports.
+- Dev loop: `npm run tauri dev`. Vite serves the app on port 1420.
+- Gates: run `cargo test` and clippy from `src-tauri/`. Run `npm run lint` for
+  the frontend. `npm run format` fixes what prettier reports.
 - Full frontend build: `npm run build`, which runs lint, then `tsc`, then
   `vite build`.
