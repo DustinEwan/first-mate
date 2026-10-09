@@ -28,11 +28,45 @@ behavior. Most work in this repo is writing content rather than writing code.
   module exposes plain functions. The command wrappers live beside the handler
   table in `lib.rs`. That placement keeps the webview runtime out of a binary that
   merely links the module.
-- **Prose states the constraint.** A comment, doc, or prompt sentence states one
-  fact in at most 20 words. Each sentence names its referent instead of a
-  pronoun. Idiomatic shorthand is replaced with the mechanism it stood for. Text
-  never narrates a past design, an investigation, or a rejected alternative. The
-  file does not record that history, so a later reader cannot verify the claim.
+- **Comments follow five rules.**
+
+  1. No thinking aloud. A comment that records the author's reasoning, doubts,
+     or the path taken to write the code is noise. That noise is deleted.
+  2. No provenance. A comment that describes a historical event leading to the
+     current state is noise. That comment is thinking aloud in disguise.
+  3. No "what" comments. A comment that describes what the code does is noise.
+     The reader is assumed to be technically competent. If the code can be
+     understood without the comment, the comment serves no purpose.
+  4. Strictly why. A surviving comment carries context that the code cannot
+     communicate on its own. That context gives the reason a decision was made,
+     when that reason is not obvious otherwise.
+  5. The tone rules apply. A surviving comment follows the prose rules in the
+     next bullet. Those rules govern every sentence in this repo.
+
+- **Prose follows the tone rules everywhere.** These rules govern every
+  sentence in a comment, a doc, a prompt, and a commit body.
+
+  - Prose is written in Simplified Technical English.
+  - A sentence states one fact in at most 20 words.
+  - A sentence is active, and it carries an explicit subject and verb.
+  - One verb describes each action.
+  - A concrete noun replaces an abstract noun where both fit.
+  - A sentence names its referent instead of a pronoun. A pronoun that would
+    force the reader to reopen a file or a diff forces a rewrite.
+  - A fragment is allowed only in a table cell, a bullet label, or a heading. A
+    fragment never carries a causal claim on its own.
+  - Explanation runs in this order: conclusion, then evidence, then what
+    changes as a result.
+  - Mechanism replaces conclusion. Each explanation names the cause, the
+    constraint, and the observable result.
+  - Writing is concrete: the exact file, symbol, API, state field, edge case,
+    and the check that proves the claim.
+  - Idiomatic shorthand is replaced with the mechanism it stood for.
+  - Ceremony, hedging, filler, and marketing are deleted. The subject, the word
+    "because", and any clause that limits a claim are never deleted.
+  - The deletions in rules 1 to 3 apply to docs and prompts, not to comments
+    alone.
+
 - **Gates are not optional.** Every backend change passes `cargo test` and
   `cargo clippy --all-targets -- -D warnings`. Every frontend change passes
   `npm run lint`, which runs eslint and prettier. Every commit follows
