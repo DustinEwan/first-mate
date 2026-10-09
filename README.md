@@ -27,14 +27,16 @@ borderless and always-on-top.
   as content, not code.
 - **Capabilities** are skills in `prompts/skills/`, layered the same way: user skills
   in `~/.firstmate/skills/` override packaged ones by name and extend the
-  set. Only five core tools are in context at start
-  (`run_command`, `get_command_output`, `kill_command`, `load_skill`,
-  `read_skill_resource`); each skill's `tools:` frontmatter unlocks more when
-  the model loads it. A tool that isn't disclosed is refused at dispatch.
+  set. Skills are pure knowledge per the
+  [Agent Skills](https://agentskills.io/) spec — `SKILL.md` frontmatter is
+  only `name` + `description`, validated. The agent's full tool array rides
+  every request; tools whose rules a skill teaches (the file tools, the
+  admin trio) are refused at dispatch until that skill is loaded, and the
+  refusal names the skill to load.
 - **Conversations** persist to `~/.firstmate/conversations/*.chat`, including
   the tool ledger (`🔧 call -> result` lines), so a resumed chat knows what
-  was already inspected and verified. Tool availability resets to core on
-  resume.
+  was already inspected and verified. Loaded-skill state resets on
+  resume: gated tools refuse again until re-activated.
 - **Links** in answers leave the chat window via a validated `open_path`
   command (`ShellExecuteW`): `http(s)` opens your default browser, `file://`
   opens the file's default app. The chat webview never navigates.
@@ -47,7 +49,7 @@ src-tauri/src/            Rust backend, one feature module per concern:
   llm.rs                    chat loops (lmkit + OpenAI-compatible), stop button
   execute.rs route.rs       tool dispatch, shell-dup interception
   exec.rs psrep.rs          command runner, background jobs, PowerShell session
-  tooldefs.rs skills.rs     tool schemas + disclosure, skill discovery
+  tooldefs.rs skills.rs     tool schemas + skill gate, skill discovery
   report.rs fileedit.rs     tool facts for the report panel, edit ops + diffs
   conversations.rs log.rs settings.rs window.rs modelapi.rs openpath.rs
   harness.rs                persistence, logging, settings, windows, model

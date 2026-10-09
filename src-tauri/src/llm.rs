@@ -5,7 +5,7 @@ use crate::log::log;
 use crate::provider_catalog::{self, Api};
 use crate::report::tool_report;
 use crate::route::looks_like_unexecuted_intent;
-use crate::tooldefs::{core_tools, enable_skill_tools, to_tool_defs, tool_is_disclosed};
+use crate::tooldefs::{agent_tools, to_tool_defs};
 
 /// User interrupt for the running agent loop. The tool loop is uncapped
 /// (real work takes many turns), so the stop button is the brake: checked
@@ -178,9 +178,14 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
     };
     let llm = create_chat_provider(&config).map_err(|e| e.to_string())?;
 
-    // Active tool schemas: core only until a skill's `tools:` enables more
-    // (tool availability is skill-driven; see docs/SKILLS.md).
-    let mut active: Vec<serde_json::Value> = core_tools();
+    // Static tool array: the full registry on every request. Availability
+    // is not schema-gated — the dispatch gate in execute.rs enforces the
+    // skill contract, and the identical array keeps provider prefix
+    // caching warm (docs/SKILLS.md).
+    let active: Vec<serde_json::Value> = agent_tools()
+        .as_array()
+        .expect("tool array")
+        .clone();
 
     // Build the conversation history: system prompt, prior turns, new message.
     let mut history: Vec<ChatMessage> = vec![ChatMessage::system(system_prompt)];
@@ -196,6 +201,10 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
 
     // Per-run memory of tool results for output budgeting (dedupe/truncate).
     let mut seen: HashMap<String, String> = HashMap::new();
+    // Skills loaded into this conversation: unlocks their gated tools at
+    // dispatch. Resumed conversations start empty — capability is
+    // re-earned through the skill.
+    let mut loaded_skills: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut turn = 0;
     let mut nudged = false;
     loop {
@@ -204,7 +213,7 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
             let _ = app.emit("stream_done", serde_json::json!({}));
             return Ok("(stopped)".to_string());
         }
-        // Rebuilt each turn: loading a skill mid-run grows the visible set.
+        // Identical every turn: the tool array never changes mid-run.
         let tools: Vec<ToolDefinition> = to_tool_defs(&active);
         log(&format!("TURN {}: history_msgs={} tools={}", turn, history.len(), tools.len()));
         let request = ChatRequest {
@@ -285,13 +294,9 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
                     }),
                 );
                 let t0 = std::time::Instant::now();
-                let result = if tool_is_disclosed(&active, &name) {
-                    execute_tool(&app, &active, &name, &args, &mut seen)
-                        .await
-                        .unwrap_or_else(|e| format!("Error: {e}"))
-                } else {
-                    format!("Error: tool '{name}' is not available in this conversation. Its implementation exists but its schema is not disclosed; load the skill whose 'tools:' list enables it, then call it again.")
-                };
+                let result = execute_tool(&app, &loaded_skills, &name, &args, &mut seen)
+                    .await
+                    .unwrap_or_else(|e| format!("Error: {e}"));
                 let ok = !result.starts_with("Error");
                 let report = tool_report(&name, &args, &result, t0.elapsed().as_millis());
                 let _ = app.emit("tool_result", serde_json::json!({
@@ -302,14 +307,8 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
                 history.push(ChatMessage::tool(call.id.clone(), result));
                 if name == "load_skill" && ok {
                     let skill = args.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                    let added = enable_skill_tools(&mut active, skill);
-                    if !added.is_empty() {
-                        log(&format!(
-                            "TOOLS ENABLED by skill {skill}: {} (active={})",
-                            added.join(", "),
-                            active.len()
-                        ));
-                    }
+                    loaded_skills.insert(skill.to_string());
+                    log(&format!("SKILL LOADED: {skill} (its gated tools unlocked)"));
                 }
             }
             log(&format!(
@@ -439,9 +438,11 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
     }
     msgs.push(serde_json::json!({ "role": "user", "content": message }));
 
-    // Core tools only; skills' `tools:` lists grow this set mid-run.
-    let mut tools: Vec<serde_json::Value> = core_tools();
+    // Static full registry; the dispatch gate in execute.rs enforces the
+    // skill contract.
+    let tools: Vec<serde_json::Value> = agent_tools().as_array().expect("tool array").clone();
     let mut seen: HashMap<String, String> = HashMap::new();
+    let mut loaded_skills: std::collections::HashSet<String> = std::collections::HashSet::new();
     let client = reqwest::Client::new();
     let mut turn = 0;
     let mut nudged = false;
@@ -581,13 +582,9 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
                     }),
                 );
                 let t0 = std::time::Instant::now();
-                let result = if tool_is_disclosed(&tools, &name) {
-                    execute_tool(&app, &tools, &name, &args, &mut seen)
-                        .await
-                        .unwrap_or_else(|e| format!("Error: {e}"))
-                } else {
-                    format!("Error: tool '{name}' is not available in this conversation. Its implementation exists but its schema is not disclosed; load the skill whose 'tools:' list enables it, then call it again.")
-                };
+                let result = execute_tool(&app, &loaded_skills, &name, &args, &mut seen)
+                    .await
+                    .unwrap_or_else(|e| format!("Error: {e}"));
                 let report = tool_report(&name, &args, &result, t0.elapsed().as_millis());
                 let _ = app.emit("tool_result", serde_json::json!({
                     "name": &name,
@@ -622,14 +619,8 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
                 }
                 if name == "load_skill" && !result.starts_with("Error") {
                     let skill = args.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                    let added = enable_skill_tools(&mut tools, skill);
-                    if !added.is_empty() {
-                        log(&format!(
-                            "TOOLS ENABLED by skill {skill}: {} (active={})",
-                            added.join(", "),
-                            tools.len()
-                        ));
-                    }
+                    loaded_skills.insert(skill.to_string());
+                    log(&format!("SKILL LOADED: {skill} (its gated tools unlocked)"));
                 }
             }
             log(&format!(

@@ -1,6 +1,6 @@
 ---
 name: winapp
-description: Inspect and interact with running Windows applications via the winapp CLI. Use for any UI automation — screenshots, clicking, typing, reading app state, window control — for the web (open the page in the browser and read it there), and for OS tasks that have a first-party UI (driver/update install, uninstall, settings): open the surface with `start ms-settings:...` or `start devmgmt.msc`, then drive it.
+description: "Inspect and interact with running Windows applications via the winapp CLI. Use for any UI automation — screenshots, clicking, typing, reading app state, window control — for the web (open the page in the browser and read it there), and for OS tasks that have a first-party UI (driver/update install, uninstall, settings): open the surface with `start ms-settings:...` or `start devmgmt.msc`, then drive it."
 ---
 
 # WinApp UI Automation

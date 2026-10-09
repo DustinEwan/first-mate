@@ -10,13 +10,15 @@ use crate::log::{fm_tmp_dir, log};
 use crate::psrep::{PsRun, ps_session_exec};
 use crate::route::route_to_tool;
 use crate::skills::{discover_skills, parse_frontmatter, resolve_skill_resource, skill_dir};
-use crate::tooldefs::core_tools;
+use crate::tooldefs::skill_required;
 
 /// Execute a tool by name with JSON arguments. Returns the result as a
-/// string. `app` enables background-job completion announcements.
+/// string. `app` enables background-job completion announcements;
+/// `loaded` is the set of skills loaded into this conversation (the
+/// dispatch gate's input).
 pub(crate) async fn execute_tool(
     app: &tauri::AppHandle,
-    active: &[serde_json::Value],
+    loaded: &std::collections::HashSet<String>,
     name: &str,
     args: &serde_json::Value,
     seen: &mut HashMap<String, String>,
@@ -28,7 +30,7 @@ pub(crate) async fn execute_tool(
         "elevate" | "delevate" | "run_elevated" => execute_elevation(app, name, args).await,
         _ => {
             let notifier = std::sync::Arc::new(AppNotifier(app.clone()));
-            execute_tool_notify(Some(app), notifier, active, name, args).await
+            execute_tool_notify(Some(app), notifier, loaded, name, args).await
         }
     };
     let summary = match &result {
@@ -43,8 +45,14 @@ pub(crate) async fn execute_tool(
 /// but never announced.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) async fn execute_tool_inner(name: &str, args: &serde_json::Value) -> Result<String, String> {
-    let core = core_tools();
-    execute_tool_notify(None, std::sync::Arc::new(NoopNotifier), &core, name, args).await
+    execute_tool_notify(
+        None,
+        std::sync::Arc::new(NoopNotifier),
+        &std::collections::HashSet::new(),
+        name,
+        args,
+    )
+    .await
 }
 
 /// The elevation trio: UAC consent, the persistent admin session, release.
@@ -81,14 +89,24 @@ async fn execute_elevation(
 async fn execute_tool_notify(
     app: Option<&tauri::AppHandle>,
     notifier: std::sync::Arc<dyn BgNotifier>,
-    active: &[serde_json::Value],
+    loaded: &std::collections::HashSet<String>,
     name: &str,
     args: &serde_json::Value,
 ) -> Result<String, String> {
+    // Dispatch gate (client policy, not spec): a tool whose usage rules
+    // live in a skill's instructions refuses until that skill is loaded —
+    // the refusal teaches the model the path.
+    if let Some(skill) = skill_required(name) {
+        if !loaded.contains(skill) {
+            return Err(format!(
+                "tool '{name}' requires the '{skill}' skill: call load_skill(\"{skill}\"), follow its instructions, then call {name} again"
+            ));
+        }
+    }
     match name {
         "run_command" => {
             let command = args.get("command").and_then(|c| c.as_str()).unwrap_or("");
-            if let Some((tool, why)) = route_to_tool(command, active) {
+            if let Some((tool, why)) = route_to_tool(command, loaded) {
                 return Err(format!(
                     "Blocked: `{command}` duplicates the {tool} tool, which is already available \
                      in this conversation. Call {tool} instead ({why}: structured output, no shell \
@@ -397,15 +415,8 @@ async fn execute_tool_notify(
             let md = tokio::fs::read_to_string(dir.join("SKILL.md"))
                 .await
                 .map_err(|e| e.to_string())?;
-            let (_, _, tools, body) = parse_frontmatter(&md);
-            if tools.is_empty() {
-                Ok(body)
-            } else {
-                Ok(format!(
-                    "{body}\n\n[Tools now enabled for the rest of this conversation: {}]",
-                    tools.join(", ")
-                ))
-            }
+            let (_, _, body) = parse_frontmatter(&md);
+            Ok(body)
         }
         "read_skill_resource" => {
             let path = args.get("path").and_then(|c| c.as_str()).unwrap_or("");
@@ -460,7 +471,6 @@ fn search_files_walk<'a>(
 mod tests {
     use super::*;
     use crate::psrep::ps_session_shutdown;
-    use crate::tooldefs::{core_tools, enable_skill_tools, tool_schema};
 
     #[tokio::test]
     async fn powershell_shell_mode_survives_quote_hell() {
@@ -499,11 +509,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_command_blocks_dup_when_tool_disclosed() {
-        let fs = ["list_dir"]
-            .iter()
-            .filter_map(|n| tool_schema(n))
-            .collect::<Vec<_>>();
+    async fn run_command_blocks_dup_after_owning_skill_loaded() {
+        let fs: std::collections::HashSet<String> =
+            ["filesystem".to_string()].into_iter().collect();
         let err = execute_tool_notify(
             None,
             std::sync::Arc::new(NoopNotifier),
@@ -514,7 +522,7 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.contains("Blocked") && err.contains("list_dir"), "{err}");
-        // With only core tools disclosed, the same command runs normally.
+        // Before the owning skill loads, the same command runs normally.
         let ok = execute_tool_inner("run_command", &serde_json::json!({ "command": "echo dir" }))
             .await
             .unwrap();
@@ -532,16 +540,16 @@ mod tests {
     async fn read_file_stamps_tag_and_line_numbers() {
         let p = temp_path("read1.txt");
         std::fs::write(&p, "alpha\nbravo\ncharlie\ndelta\n").unwrap();
-        let out = execute_tool_inner("read_file", &serde_json::json!({ "path": &p }))
+        let out = fs_call("read_file", serde_json::json!({ "path": &p }))
             .await
             .unwrap();
         let tag = out.lines().next().unwrap();
         assert!(tag.starts_with('[') && tag.contains("#") && tag.ends_with(']'), "{tag}");
         assert!(out.contains("1:alpha") && out.contains("4:delta"), "{out}");
         // Windowed read with continuation pointer.
-        let win = execute_tool_inner(
+        let win = fs_call(
             "read_file",
-            &serde_json::json!({ "path": &p, "offset": 2, "limit": 2 }),
+            serde_json::json!({ "path": &p, "offset": 2, "limit": 2 }),
         )
         .await
         .unwrap();
@@ -549,17 +557,17 @@ mod tests {
         assert!(!win.contains("1:alpha") && !win.contains("4:delta"), "{win}");
         assert!(win.contains("use offset 4 to continue"), "{win}");
         // Same content -> same tag; edited content -> different tag.
-        let again = execute_tool_inner("read_file", &serde_json::json!({ "path": &p }))
+        let again = fs_call("read_file", serde_json::json!({ "path": &p }))
             .await
             .unwrap();
         assert_eq!(again.lines().next().unwrap(), tag);
         std::fs::write(&p, "alpha\nbravo!\ncharlie\ndelta\n").unwrap();
-        let after = execute_tool_inner("read_file", &serde_json::json!({ "path": &p }))
+        let after = fs_call("read_file", serde_json::json!({ "path": &p }))
             .await
             .unwrap();
         assert_ne!(after.lines().next().unwrap(), tag);
         // Stale offset is an error, not an empty read.
-        let err = execute_tool_inner("read_file", &serde_json::json!({ "path": &p, "offset": 99 }))
+        let err = fs_call("read_file", serde_json::json!({ "path": &p, "offset": 99 }))
             .await
             .unwrap_err();
         assert!(err.contains("past the end"), "{err}");
@@ -570,18 +578,15 @@ mod tests {
     async fn read_file_refuses_binary() {
         let p = temp_path("binary.bin");
         std::fs::write(&p, [0x48u8, 0, 0x69, 0]).unwrap();
-        let err = execute_tool_inner("read_file", &serde_json::json!({ "path": &p }))
+        let err = fs_call("read_file", serde_json::json!({ "path": &p }))
             .await
             .unwrap_err();
         assert!(err.contains("binary"), "{err}");
         std::fs::remove_file(&p).ok();
     }
 
-    fn fs_tools() -> Vec<serde_json::Value> {
-        ["read_file", "edit_file", "write_file"]
-            .iter()
-            .filter_map(|n| tool_schema(n))
-            .collect()
+    fn fs_loaded() -> std::collections::HashSet<String> {
+        ["filesystem".to_string()].into_iter().collect()
     }
 
     fn tag_of(out: &str) -> String {
@@ -591,7 +596,7 @@ mod tests {
     }
 
     async fn fs_call(name: &str, args: serde_json::Value) -> Result<String, String> {
-        execute_tool_notify(None, std::sync::Arc::new(NoopNotifier), &fs_tools(), name, &args).await
+        execute_tool_notify(None, std::sync::Arc::new(NoopNotifier), &fs_loaded(), name, &args).await
     }
 
     #[tokio::test]
@@ -723,9 +728,9 @@ mod tests {
         }
     }
 
-    /// One replay of a full agent session against the real machine: skill
-    /// load enables tools -> persistent PowerShell session keeps state and
-    /// cwd -> interceptor refuses duplicated shell -> read/edit/write guard
+    /// One replay of a full agent session against the real machine:
+    /// skill-gated tools execute -> persistent PowerShell session keeps
+    /// state and cwd -> interceptor refuses duplicated shell -> read/edit/write guard
     /// chain -> slow command auto-backgrounds -> completion is announced.
     #[tokio::test]
     async fn composite_agent_session_replay() {
@@ -734,16 +739,17 @@ mod tests {
         let dpath = dir.to_string_lossy().to_string();
         let fpath = dir.join("notes.md").to_string_lossy().to_string();
 
-        // Stage 2: loading the skill discloses its tools to this run.
-        let mut active = core_tools();
-        assert_eq!(enable_skill_tools(&mut active, "filesystem").len(), 6);
+        // Activation state: the filesystem skill is loaded in this run, so
+        // its gated tools execute; the refusal path is tested separately.
+        let loaded: std::collections::HashSet<String> =
+            ["filesystem".to_string()].into_iter().collect();
+        let loaded = &loaded;
         let rec = std::sync::Arc::new(Recorder::default());
         let n: std::sync::Arc<dyn BgNotifier> = rec.clone();
         let call = |name: &str, args: serde_json::Value| {
             let n = n.clone();
             let name = name.to_string();
-            let tools: &Vec<serde_json::Value> = &active;
-            async move { execute_tool_notify(None, n, tools, &name, &args).await }
+            async move { execute_tool_notify(None, n, loaded, &name, &args).await }
         };
 
         // Persistent session: state survives between calls, cwd sticks.
@@ -873,5 +879,25 @@ mod tests {
 
         ps_session_shutdown().await;
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn gated_tool_refuses_until_its_skill_is_loaded() {
+        // Dispatch gate: with no skill loaded, gated tools refuse and the
+        // refusal names the path; ungated capability executes normally.
+        let err = execute_tool_inner("list_dir", &serde_json::json!({ "path": "." }))
+            .await
+            .expect_err("filesystem tools must refuse before the skill loads");
+        assert!(
+            err.contains("requires the 'filesystem' skill") && err.contains("load_skill"),
+            "{err}"
+        );
+        let ok = execute_tool_inner(
+            "run_command",
+            &serde_json::json!({ "command": "echo gated-ok" }),
+        )
+        .await
+        .unwrap();
+        assert!(ok.contains("gated-ok"), "{ok}");
     }
 }

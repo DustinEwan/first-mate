@@ -1,7 +1,6 @@
 ---
 name: elevation
-description: Administrator rights the user grants and can revoke — a persistent elevated PowerShell session for tasks that genuinely need admin (services, registry writes, scheduled tasks, firewall, driving elevated app windows). Load when a task needs admin or failed with "access denied" / "requires elevation".
-tools: elevate, delevate, run_elevated
+description: "Administrator rights the user grants and can revoke — a persistent elevated PowerShell session for tasks that genuinely need admin (services, registry writes, scheduled tasks, firewall, driving elevated app windows). Load when a task needs admin or failed with \"access denied\" / \"requires elevation\"."
 ---
 
 # Elevation — the user's door, not yours

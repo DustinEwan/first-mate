@@ -1,7 +1,6 @@
-use crate::skills::{parse_frontmatter, skill_dir};
 
 /// The tools the agent can call, in OpenAI function-calling format.
-fn agent_tools() -> serde_json::Value {
+pub(crate) fn agent_tools() -> serde_json::Value {
     serde_json::json!([
         {
             "type": "function",
@@ -161,13 +160,15 @@ fn agent_tools() -> serde_json::Value {
                 }
             }
         },
-        // Shape only — no prose. These tools enter the model's context only
-        // when the elevation skill loads (frontmatter `tools:`), and that
-        // SKILL.md is their description. Same for any future skill-gated tool.
+        // Skill-gated tools ride every request (static array), so their
+        // schemas must be self-describing: minimal prose that names the
+        // skill whose instructions govern them. The dispatch gate refuses
+        // until then; the SKILL.md remains the real documentation.
         {
             "type": "function",
             "function": {
                 "name": "run_elevated",
+                "description": "Run a command in the persistent elevated (admin) PowerShell session. Governed by the 'elevation' skill: load_skill(\"elevation\") first.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -182,6 +183,7 @@ fn agent_tools() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "elevate",
+                "description": "Request the user's admin consent (UAC) to open the elevated session. Governed by the 'elevation' skill: load_skill(\"elevation\") first.",
                 "parameters": {"type": "object", "properties": {}}
             }
         },
@@ -189,24 +191,29 @@ fn agent_tools() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "delevate",
+                "description": "Release the elevated session, returning to standard rights. Governed by the 'elevation' skill: load_skill(\"elevation\") first.",
                 "parameters": {"type": "object", "properties": {}}
             }
         }
     ])
 }
 
-/// The only tool schemas injected into context before any skill is loaded:
-/// command execution plus the skill machinery itself. Everything else is
-/// implemented here in Rust but stays OUT of the model's context until a
-/// skill's frontmatter `tools:` list enables it (see `enable_skill_tools`).
-const CORE_TOOLS: &[&str] = &[
-    "run_command",
-    "get_command_output",
-    "kill_command",
-    "load_skill",
-    "read_skill_resource",
-];
+/// Client policy, not Agent Skills spec: skill *content* never names
+/// tools — the spec has no tool concept. These tools carry their usage
+/// rules inside a skill's instructions, so the dispatch gate in
+/// `execute.rs` refuses them until that skill is loaded into the
+/// conversation; the refusal teaches the model the path.
+pub(crate) fn skill_required(tool: &str) -> Option<&'static str> {
+    match tool {
+        "read_file" | "edit_file" | "write_file" | "list_dir" | "search_files" | "list_processes" => {
+            Some("filesystem")
+        }
+        "elevate" | "delevate" | "run_elevated" => Some("elevation"),
+        _ => None,
+    }
+}
 
+#[cfg(test)]
 pub(crate) fn tool_schema(name: &str) -> Option<serde_json::Value> {
     agent_tools()
         .as_array()
@@ -215,34 +222,6 @@ pub(crate) fn tool_schema(name: &str) -> Option<serde_json::Value> {
                 .find(|t| t.pointer("/function/name").and_then(|n| n.as_str()) == Some(name))
                 .cloned()
         })
-}
-
-pub(crate) fn core_tools() -> Vec<serde_json::Value> {
-    CORE_TOOLS.iter().filter_map(|n| tool_schema(n)).collect()
-}
-
-/// Append the tool schemas a skill's frontmatter `tools:` enables that are
-/// not already in `active`. Returns the names added (empty = pure-behavior
-/// skill). Unknown names are skipped: the skill cannot invent tools.
-pub(crate) fn enable_skill_tools(active: &mut Vec<serde_json::Value>, skill_name: &str) -> Vec<String> {
-    let Some(dir) = skill_dir(skill_name) else {
-        return Vec::new();
-    };
-    let Ok(md) = std::fs::read_to_string(dir.join("SKILL.md")) else {
-        return Vec::new();
-    };
-    let (_, _, tools, _) = parse_frontmatter(&md);
-    let mut added = Vec::new();
-    for t in tools {
-        if active.iter().any(|v| v.pointer("/function/name").and_then(|n| n.as_str()) == Some(t.as_str())) {
-            continue;
-        }
-        if let Some(schema) = tool_schema(&t) {
-            active.push(schema);
-            added.push(t);
-        }
-    }
-    added
 }
 
 /// Convert OpenAI-format tool schemas to lmkit types.
@@ -270,60 +249,52 @@ pub(crate) fn to_tool_defs(values: &[serde_json::Value]) -> Vec<lmkit::ToolDefin
         .collect()
 }
 
-/// Dispatch gate: a tool may execute only if its schema is disclosed in the
-/// current run (core or skill-enabled). Resumed conversations and hallucinated
-/// calls must not reach undisclosed implementations.
-pub(crate) fn tool_is_disclosed(active: &[serde_json::Value], name: &str) -> bool {
-    active
-        .iter()
-        .any(|t| t.pointer("/function/name").and_then(|n| n.as_str()) == Some(name))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn fs_tools_hidden_until_filesystem_skill_enables_them() {
-        // Tool availability is skill-driven: the core context carries only
-        // command+skill primitives; the filesystem skill's frontmatter
-        // enables the fs tools; unknown names can't invent tools.
-        let core = core_tools();
-        let core_names: Vec<&str> = core
-            .iter()
-            .map(|t| t.pointer("/function/name").and_then(|n| n.as_str()).unwrap())
-            .collect();
-        assert_eq!(core_names.len(), CORE_TOOLS.len());
-        for hidden in ["read_file", "edit_file", "write_file", "list_dir", "search_files", "list_processes"] {
-            assert!(!core_names.contains(&hidden), "{hidden} must not be in core");
+    fn gated_tools_name_their_owning_skill() {
+        // The gate map must agree with the registry: every gated tool
+        // exists, and the agent's standing capability is never gated.
+        for t in [
+            "read_file",
+            "edit_file",
+            "write_file",
+            "list_dir",
+            "search_files",
+            "list_processes",
+        ] {
+            assert_eq!(skill_required(t), Some("filesystem"), "{t}");
+            assert!(tool_schema(t).is_some(), "{t} missing from registry");
         }
-        let fs_skill = skill_dir("filesystem").expect("filesystem skill dir");
-        let md = std::fs::read_to_string(fs_skill.join("SKILL.md")).unwrap();
-        let (_, _, declared, _) = parse_frontmatter(&md);
-        assert_eq!(declared.len(), 6, "filesystem skill declares 6 tools");
-        let mut active = core.clone();
-        let added = enable_skill_tools(&mut active, "filesystem");
-        assert_eq!(added.len(), 6);
-        assert_eq!(active.len(), core.len() + 6);
-        // Idempotent: loading twice adds nothing.
-        assert!(enable_skill_tools(&mut active, "filesystem").is_empty());
-        // Pure-behavior skill enables nothing; unknown skill enables nothing.
-        assert!(enable_skill_tools(&mut active, "winapp").is_empty());
-        assert!(enable_skill_tools(&mut active, "no-such-skill").is_empty());
+        for t in ["elevate", "delevate", "run_elevated"] {
+            assert_eq!(skill_required(t), Some("elevation"), "{t}");
+            assert!(tool_schema(t).is_some(), "{t} missing from registry");
+        }
+        for t in [
+            "run_command",
+            "get_command_output",
+            "kill_command",
+            "load_skill",
+            "read_skill_resource",
+        ] {
+            assert_eq!(skill_required(t), None, "{t} must stay ungated");
+            assert!(tool_schema(t).is_some(), "{t} missing from registry");
+        }
     }
 
     #[test]
-    fn undisclosed_tools_are_refused_at_dispatch() {
-        // The gate mirrors disclosure: core run cannot execute fs tools;
-        // after the skill enables them, the same check passes.
-        let core = core_tools();
-        assert!(tool_is_disclosed(&core, "run_command"));
-        assert!(tool_is_disclosed(&core, "load_skill"));
-        for hidden in ["read_file", "write_file", "list_dir", "search_files", "list_processes"] {
-            assert!(!tool_is_disclosed(&core, hidden), "{hidden} undisclosed");
+    fn full_registry_is_disclosed_every_request() {
+        // Static tool array: no per-run schema mutation, so provider
+        // prefix caching stays warm across the whole conversation.
+        let all = agent_tools().as_array().expect("tool array").clone();
+        let names: Vec<&str> = all
+            .iter()
+            .map(|t| t.pointer("/function/name").and_then(|n| n.as_str()).unwrap())
+            .collect();
+        for gated in ["read_file", "list_dir", "elevate", "run_elevated"] {
+            assert!(names.contains(&gated), "{gated} must be in the static array");
         }
-        let mut active = core.clone();
-        enable_skill_tools(&mut active, "filesystem");
-        assert!(tool_is_disclosed(&active, "read_file"));
     }
 }

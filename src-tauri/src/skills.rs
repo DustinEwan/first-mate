@@ -88,39 +88,47 @@ fn skill_roots() -> Vec<std::path::PathBuf> {
     roots
 }
 
-/// Parse `---` frontmatter. Returns (name, description, tools, body).
-/// `tools:` is a comma-separated list of Rust-implemented tools the skill
-/// enables when loaded; skills without it are pure behavior.
-pub(crate) fn parse_frontmatter(md: &str) -> (Option<String>, Option<String>, Vec<String>, String) {
-    let empty_tools = Vec::new();
+/// Parse `---` frontmatter. Returns (name, description, body). Only the
+/// two required Agent Skills spec fields matter to us — both are what
+/// stage 1 advertises. Any other frontmatter key (license, metadata,
+/// compatibility, ...) belongs to the spec and other clients; we ignore
+/// it. Values may be YAML double- or single-quoted (descriptions
+/// legitimately contain colons); quotes are stripped and inner quotes
+/// unescaped.
+pub(crate) fn parse_frontmatter(md: &str) -> (Option<String>, Option<String>, String) {
     let Some(rest) = md
         .strip_prefix("---")
         .and_then(|r| r.strip_prefix('\n'))
         .or_else(|| md.strip_prefix("---\r\n"))
     else {
-        return (None, None, empty_tools, md.to_string());
+        return (None, None, md.to_string());
     };
     let Some(end) = rest.find("\n---") else {
-        return (None, None, empty_tools, md.to_string());
+        return (None, None, md.to_string());
     };
     let mut name = None;
     let mut description = None;
-    let mut tools = Vec::new();
     for line in rest[..end].lines() {
         if let Some(v) = line.strip_prefix("name:") {
-            name = Some(v.trim().to_string());
+            name = Some(unquote(v.trim()));
         } else if let Some(v) = line.strip_prefix("description:") {
-            description = Some(v.trim().to_string());
-        } else if let Some(v) = line.strip_prefix("tools:") {
-            tools = v
-                .split(',')
-                .map(|t| t.trim().to_string())
-                .filter(|t| !t.is_empty())
-                .collect();
+            description = Some(unquote(v.trim()));
         }
     }
     let body = rest[end + 4..].trim_start_matches(['\r', '\n']).to_string();
-    (name, description, tools, body)
+    (name, description, body)
+}
+
+/// Strip YAML quoting from a single-line scalar: `"..."` (backslash
+/// escapes) or `'...'` (doubled-quote escapes).
+fn unquote(v: &str) -> String {
+    if let Some(s) = v.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+        s.replace("\\\"", "\"").replace("\\\\", "\\")
+    } else if let Some(s) = v.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')) {
+        s.replace("''", "'")
+    } else {
+        v.to_string()
+    }
 }
 
 /// All skills found under the roots, first root winning on name clashes.
@@ -135,7 +143,7 @@ pub(crate) fn discover_skills() -> Vec<SkillInfo> {
                 continue;
             };
             let dir_name = entry.file_name().to_string_lossy().to_string();
-            let (name, description, _, _) = parse_frontmatter(&md);
+            let (name, description, _) = parse_frontmatter(&md);
             let name = name.unwrap_or(dir_name);
             if !skills.iter().any(|s| s.name == name) {
                 skills.push(SkillInfo {
@@ -201,17 +209,27 @@ mod tests {
 
     #[test]
     fn frontmatter_splits_metadata_from_body() {
-        let md = "---\nname: demo\ndescription: A demo skill.\ntools: read_file, list_dir\n---\n\n# Body\nDo things.\n";
-        let (name, desc, tools, body) = parse_frontmatter(md);
+        let md = "---\nname: demo\ndescription: A demo skill.\nlicense: MIT\n---\n\n# Body\nDo things.\n";
+        let (name, desc, body) = parse_frontmatter(md);
         assert_eq!(name.as_deref(), Some("demo"));
         assert_eq!(desc.as_deref(), Some("A demo skill."));
-        assert_eq!(tools, vec!["read_file".to_string(), "list_dir".to_string()]);
         assert_eq!(body, "# Body\nDo things.\n");
         // No frontmatter: body passes through untouched.
-        let (n2, d2, t2, b2) = parse_frontmatter("plain text");
+        let (n2, d2, b2) = parse_frontmatter("plain text");
         assert!(n2.is_none() && d2.is_none());
-        assert!(t2.is_empty());
         assert_eq!(b2, "plain text");
+    }
+
+    #[test]
+    fn quoted_descriptions_unescape() {
+        // Descriptions legitimately contain colons (`start ms-settings:`)
+        // and quotes; the YAML-valid quoted form must parse to plain text.
+        let md = "---\nname: demo\ndescription: \"Open `start ms-settings:apps`, the user's \\\"main\\\" panel\"\n---\n\nBody\n";
+        let (_, desc, _) = parse_frontmatter(md);
+        assert_eq!(
+            desc.as_deref(),
+            Some("Open `start ms-settings:apps`, the user's \"main\" panel")
+        );
     }
 
     #[test]
@@ -240,16 +258,15 @@ mod tests {
         assert!(win.description.contains("winapp CLI"), "{}", win.description);
         let dir = skill_dir("winapp").expect("winapp skill dir");
         let md = std::fs::read_to_string(dir.join("SKILL.md")).unwrap();
-        let (_, _, tools, body) = parse_frontmatter(&md);
+        let (_, _, body) = parse_frontmatter(&md);
         assert!(body.contains("# WinApp UI Automation"));
         assert!(body.contains("measured on this machine"));
-        assert!(tools.is_empty(), "winapp must not enable tools");
     }
 
     #[test]
-    fn powershell_skill_is_discoverable_and_toolless() {
+    fn powershell_skill_is_discoverable() {
         // The terminal hand: inventory craft as a skill, not prompt text.
-        // It enables no tools — run_command is core; the skill is behavior.
+        // Pure behavior: run_command does the work; the skill is craft.
         let skills = discover_skills();
         let ps = skills
             .iter()
@@ -258,13 +275,12 @@ mod tests {
         assert!(ps.description.contains("inventory"), "{}", ps.description);
         let dir = skill_dir("powershell").expect("skill dir");
         let md = std::fs::read_to_string(dir.join("SKILL.md")).unwrap();
-        let (_, _, tools, body) = parse_frontmatter(&md);
+        let (_, _, body) = parse_frontmatter(&md);
         assert!(body.contains("# PowerShell"));
         assert!(
             body.contains("Win32_PnPSignedDriver"),
             "inventory patterns must live in the skill"
         );
-        assert!(tools.is_empty(), "powershell must not enable tools");
     }
 
     #[test]

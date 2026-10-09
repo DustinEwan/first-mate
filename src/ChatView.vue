@@ -322,8 +322,8 @@ function refreshBehavior() {
       `\n\n## Skills (loaded on demand)\nAvailable skills:\n${list}\n` +
       `When a task matches a skill's domain, call load_skill("<name>") to get its ` +
       `full instructions before acting; read reference files with ` +
-      `read_skill_resource("<skill>/<relative/path>"). Loading a skill may also ` +
-      `enable additional tools for the rest of the conversation.`;
+      `read_skill_resource("<skill>/<relative/path>"). Tools documented by a ` +
+      `skill refuse calls until that skill is loaded.`;
   });
 }
 
@@ -491,7 +491,7 @@ async function submit() {
     .slice(-30)
     // The wire only knows user/assistant: the tool ledger rides along as
     // assistant context ("🔧 name args -> result") so a resumed run knows
-    // what was already done. Tools themselves stay undisclosed until reloaded.
+    // what was already done. Gated tools refuse again until re-activated.
     .map((m) => ({ role: m.cls === "tool" ? "assistant" : m.cls, content: m.text }));
 
   isThinking.value = true;

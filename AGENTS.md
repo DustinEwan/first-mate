@@ -13,11 +13,13 @@ coded.
   zero prompt text; a test enforces it. Any behavior you are tempted to
   implement in Rust, first ask whether it is really content. Design:
   `docs/SKILLS.md`.
-- **Every capability is a skill.** Each tool or behavior the product
-  agent can use ships as a skill folder with `SKILL.md` frontmatter
-  (name, description, enabled tools) and is disclosed to the model only
-  when loaded. Undeclared tools are refused at dispatch; packaging is
-  enforced by `src-tauri/tests/packaging.rs`.
+- **Every capability is a skill.** Behavior the product agent learns
+  ships as Agent Skills folders: `SKILL.md` frontmatter is spec-pure
+  (name + description; the reference validator must pass) and never
+  names tools. Tools belong to the client; the skill→tools mapping is
+  Rust policy (`skill_required()`), and gated tools are refused at
+  dispatch until their skill is loaded. Packaging is enforced by
+  `src-tauri/tests/packaging.rs`.
 - **The user's machine is the user's.** The product runs
   non-elevated by default; admin reach exists only behind explicit,
   revocable user consent, and every surface the agent drives is one the

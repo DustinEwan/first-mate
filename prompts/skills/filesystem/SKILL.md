@@ -1,16 +1,16 @@
 ---
 name: filesystem
 description: Read, edit, write, list, and search files and directories on this machine, and list running processes. Use for any question about file contents, directory state, or what is installed/running.
-tools: read_file, edit_file, write_file, list_dir, search_files, list_processes
 ---
 
 # Filesystem & Processes
 
-Loading this skill enables six tools: `read_file`, `edit_file`, `write_file`,
-`list_dir`, `search_files`, `list_processes`. Prefer them over shelling out
-through `run_command` — they return clean output without quoting problems,
-and `run_command` refuses duplicated patterns (`dir`, `type`, `findstr`, ...)
-when these tools are available.
+Six dedicated tools cover file and process work: `read_file`, `edit_file`,
+`write_file`, `list_dir`, `search_files`, `list_processes`. They became
+available when this skill loaded — prefer them over shelling out through
+`run_command`: clean output, no quoting problems, no truncation, and
+`run_command` refuses duplicated patterns (`dir`, `type`, `findstr`, ...)
+while this skill is active.
 
 ## Tools
 - `read_file(path, offset?, limit?)` — numbered lines (`N:TEXT`) with a

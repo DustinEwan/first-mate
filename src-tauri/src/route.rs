@@ -1,4 +1,5 @@
-use crate::tooldefs::tool_is_disclosed;
+use crate::tooldefs::skill_required;
+use std::collections::HashSet;
 
 /// A text-only turn that is a declared intent rather than a final answer:
 /// short and action-declaring ("Let me check X", or ending mid-thought).
@@ -17,10 +18,11 @@ pub(crate) fn looks_like_unexecuted_intent(text: &str) -> bool {
 }
 
 /// Inline shell programs that duplicate a dedicated tool. Routing applies
-/// ONLY when the target tool is disclosed in this conversation — an
-/// undisclosed tool is not an alternative the model may use, so the shell
-/// command passes through untouched. Returns (tool, why).
-pub(crate) fn route_to_tool(command: &str, active: &[serde_json::Value]) -> Option<(&'static str, &'static str)> {
+/// ONLY after the duplicated tool's owning skill is loaded in this
+/// conversation — before activation the model has not seen the tool's
+/// rules, so the shell command passes through untouched.
+/// Returns (tool, why).
+pub(crate) fn route_to_tool(command: &str, loaded: &HashSet<String>) -> Option<(&'static str, &'static str)> {
     let lower = command.to_lowercase();
     // Only program position counts: the first token of any command segment
     // (`git grep` stays legal; `cmd /c "dir"` does not).
@@ -39,7 +41,7 @@ pub(crate) fn route_to_tool(command: &str, active: &[serde_json::Value]) -> Opti
             "set-content" | "out-file" => ("write_file", "writing files directly"),
             _ => continue,
         };
-        if tool_is_disclosed(active, tool) {
+        if skill_required(tool).is_some_and(|s| loaded.contains(s)) {
             return Some((tool, why));
         }
     }
@@ -49,7 +51,6 @@ pub(crate) fn route_to_tool(command: &str, active: &[serde_json::Value]) -> Opti
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tooldefs::tool_schema;
 
     #[test]
     fn intent_detection_separates_declared_action_from_final_answer() {
@@ -68,13 +69,10 @@ mod tests {
     }
 
     #[test]
-    fn interceptor_routes_only_disclosed_tools() {
-        let fs = ["list_dir", "read_file", "search_files", "list_processes", "write_file"]
-            .iter()
-            .filter_map(|n| tool_schema(n))
-            .collect::<Vec<_>>();
-        let core: Vec<serde_json::Value> = Vec::new();
-        // Program position, disclosed -> route.
+    fn interceptor_routes_only_after_owning_skill_loaded() {
+        let fs: HashSet<String> = ["filesystem".to_string()].into_iter().collect();
+        let none: HashSet<String> = HashSet::new();
+        // Program position, skill loaded -> route.
         assert_eq!(route_to_tool("dir C:\\repos", &fs).map(|(t, _)| t), Some("list_dir"));
         assert_eq!(
             route_to_tool("powershell -Command \"Get-ChildItem\" | more", &fs).map(|(t, _)| t),
@@ -82,8 +80,8 @@ mod tests {
         );
         assert_eq!(route_to_tool("type notes.txt", &fs).map(|(t, _)| t), Some("read_file"));
         assert_eq!(route_to_tool("FINDSTR foo *.rs", &fs).map(|(t, _)| t), Some("search_files"));
-        // Undisclosed -> pass through untouched.
-        assert_eq!(route_to_tool("dir C:\\repos", &core), None);
+        // Owning skill not loaded -> pass through untouched.
+        assert_eq!(route_to_tool("dir C:\\repos", &none), None);
         // Non-program position stays legal.
         assert_eq!(route_to_tool("git grep list_dir", &fs), None);
         assert_eq!(route_to_tool("echo dir", &fs), None);
