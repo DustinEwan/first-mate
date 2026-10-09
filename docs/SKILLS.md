@@ -1,196 +1,89 @@
-# First Mate — Agent Skills Design
+# First Mate and Agent Skills
 
-Every capability First Mate has is delivered as a **skill** and loaded on
-demand, following the [Agent Skills](https://agentskills.io/) open
-specification. This document covers the skill system only: structure,
-discovery, progressive disclosure, and the tool-availability gate. App-level
-behavior (window, tray, links, persistence) lives in the README.
+Every capability First Mate teaches is delivered as a **skill** following
+the [Agent Skills](https://agentskills.io/) open specification. This
+document is two things: what the spec says, and how First Mate implements
+it as a client. App-level behavior (window, tray, persistence) lives in
+the README.
 
-## Skill Structure
+## The spec
 
-```
-skills/
-└── <skill-name>/
-    ├── SKILL.md              # Required — YAML frontmatter + markdown instructions
-    ├── references/           # Optional — reference docs loaded on demand
-    │   └── <file>.md
-    └── scripts/              # Optional — executable scripts
-        └── <file>.sh
-```
-
-### SKILL.md Format
-
-```yaml
----
-name: winapp
-description: Inspect and interact with running Windows applications via winapp CLI. Use for UI automation, screenshots, clicking, and app control.
-tools: # optional — Rust tools this skill enables when loaded; omit for pure-behavior skills
----
-```
-
-`tools:` is a comma-separated list of Rust-implemented tools (see
-`agent_tools()`) that are injected into the model's context ONLY after this
-skill is loaded. A skill without `tools:` is pure behavior. A skill cannot
-invent tools: unknown names are skipped.
-
-## Progressive Disclosure
-
-Five stages, minimizing context usage:
-
-| Stage | Tokens | Trigger |
-|-------|--------|---------|
-| 1. Advertise | ~100/skill | Automatic — injected into system prompt at startup |
-| 2. Load | <5,000 | Agent calls `load_skill("<name>")` when task matches |
-| 2b. Enable tools | ~150/tool | Same call: the skill's `tools:` schemas join the request, for the rest of the run |
-| 3. Read resources | as needed | Agent calls `read_skill_resource("<path>")` |
-| 4. Run scripts | as needed | Agent uses shell tool to execute commands |
-
-Before any skill is loaded, the request carries only the core tools
-(`CORE_TOOLS`): `run_command`, `get_command_output`, `kill_command`,
-`load_skill`, `read_skill_resource`. Tool *implementation* always lives in
-Rust; tool *availability* is a skill decision.
-
-### Stage 1: Advertise
-
-At startup, scan `skills/` for `SKILL.md` files. Parse YAML frontmatter. Inject into system prompt:
+A skill is a **portable folder of knowledge**, not a capability:
 
 ```
-Available skills:
-- winapp: Inspect and interact with running Windows applications via winapp CLI. Use for UI automation, screenshots, clicking, and app control.
-- filesystem: Read, write, list, and search files on the Windows filesystem.
-- ...
+skill-name/
+├── SKILL.md          # Required: YAML frontmatter + markdown instructions
+├── scripts/          # Optional: executable code (run via the agent's own tools)
+├── references/       # Optional: docs loaded on demand
+└── assets/           # Optional: templates, data
 ```
 
-### Stage 2: Load
+- **Frontmatter** allows exactly these top-level keys: `name` (required;
+  lowercase, matches the directory), `description` (required; what the
+  skill does and when to use it), plus optional `license`,
+  `compatibility`, `metadata`, and the experimental `allowed-tools`.
+  Unknown keys are a validation error — the reference validator rejects
+  them, so a skill carrying client-specific keys is not portable.
+- **Progressive disclosure, three stages:** *Discovery* — at startup only
+  `name: description` (~100 tokens/skill) is loaded; *Activation* — when
+  a task matches, the full `SKILL.md` body (< 5k tokens recommended)
+  enters context; *Execution* — the agent follows the instructions with
+  **the tools it already has**, running bundled code or reading
+  referenced files as needed.
+- The spec has **no tool concept**. Tools belong to the agent; skills
+  teach their effective and safe use. That is what makes one skill work
+  unchanged across every compatible client.
+- Skills can be checked with the reference validator
+  (`uvx --from skills-ref agentskills validate <dir>`); all shipped and
+  third-party skills must pass.
 
-When the agent determines a task matches a skill's domain, it calls:
+## First Mate as a client
 
-```
-load_skill("winapp")
-→ Returns the full SKILL.md body (markdown instructions)
-```
+**Discovery.** `skill_roots()` scans, highest precedence first: the dev
+repo's `prompts/skills/` (working copy under test), `~/.firstmate/skills/`
+(user overrides by name and extends the set), then the packaged baseline
+installed next to the exe (`bundle.resources` in `tauri.conf.json` — one
+entry per new skill file). Name clashes resolve first-root-wins; that
+ordering *is* the override semantics, no merge logic. The system prompt
+itself follows the same layering (`AGENTS.md`); the binary ships no
+prompt text at all. The frontend advertises each skill as one
+`name: description` line.
 
-### Stage 3: Read Resources
+**Activation.** The model calls `load_skill("<name>")` and receives the
+`SKILL.md` body — nothing else. `read_skill_resource("<skill>/<rel>")`
+serves reference files; traversal and escapes from the skill directory
+are refused.
 
-For supplementary reference material:
+**Execution.** Instructions run through the agent's standing tools —
+`run_command` (persistent PowerShell/cmd sessions, background jobs), the
+file tools, and so on. The tool array is **static and complete on every
+request**: no mid-run schema changes, so provider prefix caching stays
+warm.
 
-```
-read_skill_resource("winapp/references/ui-automation.md")
-→ Returns the file contents
-```
+**The dispatch gate (client policy, invisible to skills).** Some tools
+carry their usage rules inside a skill's instructions — the file tools
+belong to `filesystem`, the admin trio to `elevation`. First Mate
+declares that mapping in Rust (`skill_required()` in `tooldefs.rs`),
+tracks which skills each conversation has loaded, and refuses a gated
+tool before its skill is loaded; the refusal names the skill, so the
+model self-corrects in one turn. Resumed conversations start unloaded —
+capability is re-earned through the skill. This is enforcement of
+context, not security: real protection is UAC consent and the trust
+tiers (roadmap Phase F). Skill content never names tools, so nothing
+here affects portability.
 
-### Stage 4: Execute
+## Shipped skills (`prompts/skills/`)
 
-The agent uses the existing **shell tool** to run commands. The skill instructions tell it what to run. No separate `run_skill_script` tool is needed for CLI-based skills.
+- **winapp** — the hands on the screen: UI automation, screenshots,
+  browser, and first-party OS surfaces through the winapp CLI (pure
+  behavior over `run_command`).
+- **powershell** — terminal craft: read-only machine inventory patterns,
+  session mechanics.
+- **filesystem** — the six file/process tools and their rules.
+- **git-repo** — repository inspection and safe operations, with
+  `references/recipes.md`.
+- **elevation** — the user's admin door: UAC consent, the persistent
+  elevated session, its rules.
 
-## Capability Tiers
-
-### Core Tools (always in context)
-
-- **Command**: `run_command`, `get_command_output`, `kill_command`
-- **Skills**: `load_skill`, `read_skill_resource`
-
-The interpreter itself: enough to run anything and load anything.
-
-### Skill-Enabled Tools (in context only after their skill loads)
-
-- **filesystem skill** enables: `read_file`, `edit_file`, `write_file`,
-  `list_dir`, `search_files`, `list_processes`
-- **elevation skill** enables: `elevate`, `delevate`, `run_elevated`
-
-Implemented in Rust from startup; invisible to the model until the skill's
-`tools:` enables them.
-
-### Skills (loaded on demand)
-
-All capability knowledge lives here, including the primary one:
-
-- **winapp**: THE core skill — the hands on the screen: UI automation
-  (commands, rules, measured latency costs), browser control, and driving
-  first-party OS surfaces (`skills/winapp/`) — pure behavior, drives
-  `run_command`
-- **powershell**: terminal craft — read-only machine inventory patterns
-  (CIM/WMI, driver store, services) and session mechanics (`prompts/skills/powershell/`)
-- **filesystem**: file/process tool usage and rules (`prompts/skills/filesystem/`)
-- **git-repo**: repository inspection and safe operations (`prompts/skills/git-repo/`)
-- **elevation**: the user's admin door — UAC consent, the persistent
-  elevated session, and its rules (`prompts/skills/elevation/`)
-- **User skills**: drop a folder into `~/.firstmate/skills/`
-
-## Prompt Content & Layering
-
-The binary ships **no prompt text** — not even a fallback. Prompt content
-is files, layered:
-
-1. **Dev repo layout** (`../src-tauri` exists): repo `prompts/AGENTS.md` and
-   repo `prompts/skills/` win outright — they are the working copy under test.
-2. **User directory** (`~/.firstmate/`): `AGENTS.md` here OVERRIDES the
-   packaged baseline; `skills/` here overrides packaged skills by name and
-   EXTENDS the set with new folders.
-3. **Packaged baseline**: the installer bundles `AGENTS.md` and every
-   skill's `SKILL.md`/references next to the exe (`bundle.resources` in
-   `tauri.conf.json` — one line per new skill file, sourced from `prompts/`).
-
-Name clashes resolve first-root-wins, so the ordering above *is* the
-override semantics; no merge logic exists. With no `AGENTS.md` anywhere,
-the agent runs on skill advertisements alone.
-
-## Implementation
-
-Implemented across the `src-tauri/src/` feature modules (`skills.rs` discovery and
-loading, `tooldefs.rs` schemas and disclosure, `route.rs` interception,
-`execute.rs` dispatch, `psrep.rs` the PowerShell session, `lib.rs` IPC wiring)
-plus `src/ChatView.vue`:
-
-### 1. Skill Discovery (Rust)
-
-`skill_roots()` returns the layering above, highest precedence first;
-`discover_skills()` parses each `<skill>/SKILL.md` frontmatter (`name`,
-`description`), first root winning on name clashes.
-
-### 2. Advertise (frontend, stage 1)
-
-`#[tauri::command] list_skills()` returns `Vec<SkillInfo>`. On mount,
-ChatView.vue appends the name/description list plus load instructions to the
-system prompt.
-
-### 3. Load / Read resources (agent tools, stages 2-3)
-
-`load_skill(name)` and `read_skill_resource("<skill>/<rel/path>")` are tools
-in the model's tool list (not tauri commands — the model calls them mid-run).
-`resolve_skill_resource` refuses traversal and any path escaping the skill
-directory (canonicalize + prefix check).
-
-### 4. Execute (stage 4)
-
-The agent uses the `run_command` tool as instructed by the skill body.
-
-### Tool registry and disclosure
-
-`agent_tools()` is the full registry of Rust-implemented tools. Requests
-start with `core_tools()` only; `enable_skill_tools()` appends a loaded
-skill's `tools:` schemas to the run's active set (both provider loops
-rebuild the request's tool list each turn). The tool loop is uncapped; the
-user stops a run with the stop button (`stop_chat`): checked between turns
-and tool calls, and it also interrupts a command already running in the
-PowerShell session (the session child is killed; the command may have
-partially run).
-
-### Dispatch gate
-
-`tool_is_disclosed()` runs before every execution: a tool whose schema is
-not in the run's active set is refused with an instruction to load the
-skill that enables it. Implementation without disclosure is not a path to
-execution — resumed conversations and hallucinated calls included.
-
-Resumed conversations reset tool availability to core: the persisted tool
-ledger (see README) tells the model what was already inspected, but every
-capability must be re-discovered through its skill.
-
-### Example
-
-`skills/git-repo/` — SKILL.md + `references/recipes.md`, loaded on demand.
-
-## Future Work
-
-- **Skill approval**: Require user approval for certain skill actions (e.g., clicking, typing)
+User skills are folders dropped into `~/.firstmate/skills/` — they
+advertise, load, and execute exactly like shipped ones.

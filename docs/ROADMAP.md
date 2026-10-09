@@ -245,6 +245,7 @@ story stays coherent.
 - [ ] Tiers 0–3 enforced in the exec harness (extend the `route.rs` seam)
 - [ ] Profile `tier_default` enforced, not metadata
 - [ ] Per-call confirm UI for tier 2+; detokenize-at-execute gated by tier 3
+- [ ] Skill-action approval gates: user confirm before agent click/type, under tier enforcement
 - **Accept:** a `general`-profile agent cannot delete outside its workspace without an explicit confirm
 
 ### Phase G — Derived capabilities (§7), in this order
