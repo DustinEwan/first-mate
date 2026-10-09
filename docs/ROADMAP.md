@@ -104,7 +104,7 @@ output inbound), never in the model. Detection stacks deterministic
 shape+checksum checks, a user-seeded entity registry, provenance marks,
 and an optional local-NER net; over-redaction is the accepted bias
 because detokenize restores truth everywhere the user can see. Full
-design: `docs/REDACTION.md`.
+design: `docs/roadmap/REDACTION.md`.
 
 **Dependency:** profile model bindings (§1) decide when this runs; item 3
 decides what's worth protecting on disk instead.
@@ -139,7 +139,7 @@ lost context, use what's in front of me, bounded delegation, and
 low-friction intent capture — and the one thing users consistently
 punish is plaintext-at-rest plus unbounded blast radius (§3–4 and the
 trust tiers are that answer). Evidence and full analysis:
-`docs/COPILOT-ANALYSIS.md`.
+`docs/roadmap/COPILOT-ANALYSIS.md`.
 
 ## 7. Derived capabilities
 

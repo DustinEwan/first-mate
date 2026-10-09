@@ -57,6 +57,7 @@ settings.html             settings window (provider, model, API key, base URL)
 prompts/                  First Mate's own content: AGENTS.md (system prompt) + skills/
 docs/SKILLS.md            skill system design
 docs/ROADMAP.md           direction and build order (living document)
+docs/roadmap/             roadmap support: redaction design, Copilot analysis
 AGENTS.md                 guidance for CODING agents working on this repo
 ```
 
