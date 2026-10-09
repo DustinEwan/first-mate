@@ -20,11 +20,12 @@ borderless and always-on-top.
 
 ## How it works
 
-- **Behavior** comes from `prompts/AGENTS.md`, layered: dev repo layout wins
-  outright (working copy under test), then `~/.firstmate/AGENTS.md` — which
+- **Behavior** comes from prompt content in `prompts/`, layered: dev repo layout
+  wins outright (working copy under test), then `~/.firstmate/<file>` — which
   OVERRIDES the packaged baseline — then the packaged copy next to the exe
-  (bundled by the installer). The binary ships no prompt text. Edit behavior
-  as content, not code.
+  (bundled by the installer). `AGENTS.md` is the system prompt; `COMPACT.md` is
+  what the summarizer is told when a long conversation is folded. The binary
+  ships no prompt text. Edit behavior as content, not code.
 - **Capabilities** are skills in `prompts/skills/`, layered the same way: user skills
   in `~/.firstmate/skills/` override packaged ones by name and extend the
   set. Skills are pure knowledge per the
@@ -35,33 +36,27 @@ borderless and always-on-top.
   refusal names the skill to load.
 - **Conversations** persist to `~/.firstmate/conversations/*.chat`, including
   the tool ledger (`🔧 call -> result` lines), so a resumed chat knows what
-  was already inspected and verified. Loaded-skill state resets on
-  resume: gated tools refuse again until re-activated.
+  was already inspected and verified. Capability is earned per conversation:
+  the ledger's `load_skill` entries re-seed the tool gate on every later turn,
+  including after a resume — a skill loaded once stays loaded for that chat.
 - **Links** in answers leave the chat window via a validated `open_path`
   command (`ShellExecuteW`): `http(s)` opens your default browser, `file://`
   opens the file's default app. The chat webview never navigates.
 
 ## Layout
 
-```
-src-tauri/src/            Rust backend, one feature module per concern:
-  lib.rs                    app wiring: plugins, IPC table, tray, hotkey
-  llm.rs                    chat loops (lmkit + OpenAI-compatible), stop button
-  execute.rs route.rs       tool dispatch, shell-dup interception
-  exec.rs psrep.rs          command runner, background jobs, PowerShell session
-  tooldefs.rs skills.rs     tool schemas + skill gate, skill discovery
-  report.rs fileedit.rs     tool facts for the report panel, edit ops + diffs
-  conversations.rs log.rs settings.rs window.rs modelapi.rs openpath.rs
-  harness.rs                persistence, logging, settings, windows, model
-                            listing, path opening, winapp CLI bootstrap
-src/ChatView.vue          chat window (virtualized message list, markdown)
-settings.html             settings window (provider, model, API key, base URL)
-prompts/                  First Mate's own content: AGENTS.md (system prompt) + skills/
-docs/SKILLS.md            skill system design
-docs/ROADMAP.md           direction and build order (living document)
-docs/roadmap/             roadmap support: redaction design, Copilot analysis
-AGENTS.md                 guidance for CODING agents working on this repo
-```
+- **`src-tauri/`** — Rust backend. One feature module per concern: the chat
+  loops, command execution, tool dispatch, skills, elevation, persistence,
+  model endpoints. Tauri's IPC command glue lives only in `lib.rs`, so a
+  module never drags the webview runtime into a binary that just links it.
+- **`src/` + `settings.html`** — the Vue console and the settings window.
+- **`prompts/`** — the product's behavior: `AGENTS.md` (the system prompt),
+  `COMPACT.md` (the rules a fold is written under) and `skills/`. Packaged as
+  installer resources, never compiled in.
+- **`docs/`** — design documentation. `ROADMAP.md` carries direction and
+  build order; `SKILLS.md` the skill system; `COMPACTION.md` the context
+  window; `roadmap/` the design detail a roadmap item points at.
+- **`AGENTS.md`** — guidance for coding agents working on this repo.
 
 ## Configuration
 
@@ -77,15 +72,14 @@ Prerequisites: Windows 11, Node.js, Rust (MSVC toolchain + VS Build Tools),
 WebView2.
 
 ```
-npm install            # frontend deps
-dev-server.bat         # vite dev server on :1420 (keep running)
-cargo-vs.bat build     # build the Rust binary via VS env  (also: run, test)
-build-fe.bat           # production frontend bundle into dist/
+npm install           # frontend deps
+npm run tauri dev     # vite on :1420 plus the Rust core, one command
+npm run build         # lint + tsc + production bundle into dist/
 ```
 
-`cargo-vs.bat` wraps cargo with the Visual Studio environment so the MSVC
-linker is found; run it from `src-tauri/`. The debug binary is
-`src-tauri/target/debug/firstmate.exe`.
+`cargo` needs the MSVC linker in its environment: run it from a Visual Studio
+Developer Prompt, or call `vcvars64.bat` first — otherwise rustc can't find
+`link.exe`. The debug binary is `src-tauri/target/debug/firstmate.exe`.
 
 ## Quality gates
 
@@ -102,7 +96,7 @@ feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert, `!` for breaking.
 ## Tests
 
 ```
-cd src-tauri && cargo-vs.bat test
+cd src-tauri && cargo test
 ```
 
 ## Releasing

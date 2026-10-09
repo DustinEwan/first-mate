@@ -39,7 +39,7 @@ coded.
 
 ## Layout
 
-See README "Layout" for the module map. In short: `src-tauri/src/`
+See README "Layout" for where code belongs. In short: `src-tauri/src/`
 feature modules, `src/` frontend, `prompts/` runtime content, `docs/`
 design documentation. Direction and build order live in
 `docs/ROADMAP.md` — a living document: consult it before feature work,

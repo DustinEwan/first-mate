@@ -96,6 +96,9 @@ interface Msg {
   done?: boolean;
   // Structured facts: rendered as sections of one bordered panel.
   tool?: ToolReport;
+  // Compaction bookkeeping: how many rows this divider folded into the brief.
+  // View-only — a reopened conversation shows the divider without a count.
+  folded?: number;
 }
 
 const TOOL_GLYPH: Record<string, string> = {
@@ -250,6 +253,10 @@ interface LlmSettings {
   model: string;
   api_key: string;
   base_url: string;
+  // Compaction (docs/COMPACTION.md): 0 = read the window off the model
+  // endpoint. Settings files written before compaction carry neither.
+  context_window?: number;
+  compact_at_percent?: number;
 }
 let llmSettings: LlmSettings | null = null;
 
@@ -257,12 +264,41 @@ function addMsg(text: string, cls = "", extra: Partial<Msg> = {}) {
   messages.value.push({ id: nextId++, text, cls, ...extra });
 }
 
+// Divider expansion is view state, not transcript data: keeping it out of
+// `messages` means clicking a divider doesn't trip the deep
+// scroll-to-bottom watcher and drag the user back to the live edge.
+const openSummaries = ref(new Set<number>());
+
+function toggleSummary(id: number) {
+  if (openSummaries.value.has(id)) openSummaries.value.delete(id);
+  else openSummaries.value.add(id);
+}
+
+// The divider is written for the person reading the chat, not for the ledger:
+// plain words about what happened, with the mechanics (how many messages went
+// into the summary) left to the tooltip. It marks when the summarizing
+// happened, not a boundary — everything above it stays visible.
+function foldTitle(m: Msg): string {
+  const folded = m.folded ? ` ${m.folded} earlier messages were folded into it.` : "";
+  return openSummaries.value.has(m.id)
+    ? `Hide the summary.${folded}`
+    : `Show the summary First Mate works from instead of those messages.${folded}`;
+}
+
+// What counts as the transcript: the turns the model saw (or produced).
+// `dim` notes and errors are UI-only, so they neither persist nor go back
+// on the wire. `summary` is a compaction divider: it persists as its own
+// row so a reopened conversation still shows what was summarized away.
+function isTranscriptRow(m: Msg): boolean {
+  return ["user", "assistant", "tool", "summary"].includes(m.cls) && !!m.text.trim();
+}
+
 function persistConversation() {
   if (tempChat.value) return; // temp chats live only in this window's memory
   // The tool ledger persists too: a resumed conversation can see what was
   // already inspected, verified, and executed instead of re-doing it.
   const turns = messages.value
-    .filter((m) => ["user", "assistant", "tool"].includes(m.cls) && m.text.trim())
+    .filter(isTranscriptRow)
     .map((m) => ({ role: m.cls, text: m.text, report: m.done ? m.tool : undefined }));
   if (turns.length === 0) return;
   if (!convName.value) {
@@ -285,6 +321,8 @@ function refreshConversations() {
 function openConversation(c: ConvInfo) {
   invoke<ConvMsg[]>("load_conversation", { path: c.path })
     .then((msgs) => {
+      // role ↔ cls is 1:1, so a persisted "summary" row comes back as the
+      // compaction divider — not a chat bubble, and not dropped.
       messages.value = msgs.map((m) => ({
         id: nextId++,
         text: m.text,
@@ -428,6 +466,15 @@ onMounted(() => {
   listen("stream_reset", () => {
     liveMsgId = -1;
   });
+  // Mid-run compaction (docs/COMPACTION.md): the backend folded the oldest
+  // rows of this run into a brief so the request stays inside the window. The
+  // divider lands after whatever tool rows have already streamed, so it marks
+  // when the fold happened rather than where the transcript begins: the rows
+  // above it stay in the view, and the newest tail stays on the wire under
+  // them. The saved `summary` row is what the next request resumes after.
+  listen<{ summary: string; tokensBefore: number; dropped: number }>("compact", (event) => {
+    addMsg(event.payload.summary, "summary", { folded: event.payload.dropped });
+  });
 });
 
 // Behavior text comes from AGENTS.md (repo prompts/ or ~/.firstmate), loaded via
@@ -467,6 +514,21 @@ function onInputKey(e: KeyboardEvent) {
   }
 }
 
+// Capability is earned once per CONVERSATION, not once per request: the tool
+// ledger is the record of what this conversation loaded, so a skill loaded on
+// an earlier turn — or in a conversation resumed from disk — keeps its gated
+// tools unlocked. The backend re-checks this set at dispatch.
+function loadedSkills(): string[] {
+  const names = new Set<string>();
+  for (const m of messages.value) {
+    const r = m.tool;
+    if (m.cls === "tool" && m.done && r?.tool === "load_skill" && r.ok && r.subject) {
+      names.add(r.subject);
+    }
+  }
+  return [...names];
+}
+
 async function submit() {
   const text = input.value.trim();
   if (!text) return;
@@ -474,6 +536,9 @@ async function submit() {
   // second concurrent loop.
   if (isThinking.value) return;
   addMsg(text, "user");
+  // The row just added is the CURRENT message: it travels in `message`, so
+  // it must not also appear in the history.
+  const currentId = nextId - 1;
   input.value = "";
 
   if (!llmSettings || !llmSettings.provider || !llmSettings.model) {
@@ -481,17 +546,16 @@ async function submit() {
     return;
   }
 
-  // Send prior turns so the agent remembers recent context. The message
-  // just added is the current one, so drop it from the history. Windowed:
-  // an unbounded history bloats every request (760KB observed) and, worse,
-  // conditions small models into narrating without ever calling tools.
+  // The whole transcript goes on the wire: every turn the model has seen,
+  // minus the message just typed. No row cap — the backend windows by tokens
+  // and cuts at turn boundaries (docs/COMPACTION.md), so a count here would
+  // silently drop the user's task out from under the agent. The wire knows
+  // user/assistant/summary: the tool ledger rides along as assistant context
+  // ("🔧 name args -> result") so a resumed run knows what was already done,
+  // and a compaction divider rides along as the summary that replaced the
+  // rows above it.
   const priorHistory = messages.value
-    .filter((m) => ["user", "assistant", "tool"].includes(m.cls) && m.text.trim())
-    .slice(0, -1)
-    .slice(-30)
-    // The wire only knows user/assistant: the tool ledger rides along as
-    // assistant context ("🔧 name args -> result") so a resumed run knows
-    // what was already done. Gated tools refuse again until re-activated.
+    .filter((m) => m.id !== currentId && isTranscriptRow(m))
     .map((m) => ({ role: m.cls === "tool" ? "assistant" : m.cls, content: m.text }));
 
   isThinking.value = true;
@@ -506,6 +570,11 @@ async function submit() {
       message: text,
       priorHistory,
       systemPrompt: systemPromptBase.value + skillsAds.value,
+      loadedSkills: loadedSkills(),
+      // Compaction knobs: 0 = read the window off the model endpoint; the
+      // percent is how much of it the agent may fill before summarizing.
+      contextWindow: llmSettings.context_window ?? 0,
+      compactAtPercent: llmSettings.compact_at_percent ?? 85,
     });
     // The return value is the unstreamed remainder (e.g. the turn-cap note
     // after a tool turn reset the live message). Only when nothing at all
@@ -637,7 +706,11 @@ window.addEventListener("keydown", (e) => {
         <div class="main">
           <DynamicScroller ref="scrollerRef" :items="messages" key-field="id" class="scroller">
             <template #default="{ item, active }">
-              <DynamicScrollerItem :item="item" :active="active" :size-dependencies="[item.text]">
+              <DynamicScrollerItem
+                :item="item"
+                :active="active"
+                :size-dependencies="[item.text, openSummaries.has(item.id)]"
+              >
                 <!-- Safe by construction: renderMd() = marked -> DOMPurify.sanitize. -->
                 <!-- eslint-disable vue/no-v-html -->
                 <div
@@ -661,6 +734,20 @@ window.addEventListener("keydown", (e) => {
                       {{ item.done ? reportFooter(item.tool) : "running…" }}
                     </div>
                   </div>
+                </div>
+                <div
+                  v-else-if="item.cls === 'summary'"
+                  class="msg summary"
+                  :class="{ open: openSummaries.has(item.id) }"
+                >
+                  <button
+                    class="summary-rule"
+                    :title="foldTitle(item)"
+                    @click="toggleSummary(item.id)"
+                  >
+                    ── First Mate summarized the earlier chat so it could keep going ──
+                  </button>
+                  <pre v-if="openSummaries.has(item.id)" class="summary-body">{{ item.text }}</pre>
                 </div>
                 <div v-else class="msg" :class="item.cls">{{ item.text }}</div>
               </DynamicScrollerItem>

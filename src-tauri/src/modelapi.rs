@@ -116,6 +116,86 @@ pub(crate) async fn list_models(provider: String, base_url: String, api_key: Str
     Ok(models)
 }
 
+type WindowMap = std::collections::HashMap<(String, String), Option<u32>>;
+
+/// Endpoint answers, so a model that reports no window is not asked again
+/// on every turn.
+static WINDOW_CACHE: std::sync::LazyLock<std::sync::Mutex<WindowMap>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(WindowMap::new()));
+
+/// The context window the endpoint reports for a model, resolved once per
+/// endpoint + model. Compaction needs a window before it can have a
+/// threshold: llama.cpp and its clones report `max_model_len`, Ollama keeps
+/// it inside `model_info`, and hosts that say nothing leave the caller to
+/// the configured fallback.
+pub(crate) async fn model_context(
+    provider: &str,
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+) -> Option<u32> {
+    let base = base_url.trim_end_matches('/');
+    if base.is_empty() || model.is_empty() {
+        return None;
+    }
+    let key = (base.to_string(), model.to_string());
+    // A silent endpoint is cached as silent: a model that never reports a
+    // window must not cost a listing round trip on every chat turn.
+    if let Some(hit) = WINDOW_CACHE.lock().ok()?.get(&key).copied() {
+        return hit;
+    }
+    let found = fetch_context(provider, base, api_key, model).await;
+    if let Ok(mut c) = WINDOW_CACHE.lock() {
+        c.insert(key, found);
+    }
+    found
+}
+
+async fn fetch_context(provider: &str, base: &str, api_key: &str, model: &str) -> Option<u32> {
+    let client = reqwest::Client::new();
+    match api_of(provider) {
+        Api::Ollama => {
+            let body: serde_json::Value = client
+                .post(format!("{base}/api/show"))
+                .json(&serde_json::json!({ "model": model }))
+                .send()
+                .await
+                .ok()?
+                .json()
+                .await
+                .ok()?;
+            body.get("model_info")
+                .and_then(|i| i.as_object())?
+                .iter()
+                .find(|(k, _)| k.ends_with("context_length"))
+                .and_then(|(_, v)| v.as_u64())
+                .map(|v| v as u32)
+        }
+        Api::Openai => {
+            let mut req = client.get(format!("{}/models", provider_catalog::root(base)));
+            if !api_key.is_empty() {
+                req = req.bearer_auth(api_key);
+            }
+            let body: serde_json::Value = req.send().await.ok()?.json().await.ok()?;
+            body.get("data")
+                .and_then(|d| d.as_array())?
+                .iter()
+                .find(|m| m.get("id").and_then(|i| i.as_str()) == Some(model))
+                .and_then(window_of_entry)
+        }
+        // Anthropic and Google report no per-model window on their listing.
+        _ => None,
+    }
+}
+
+/// The window under whichever name the server happens to use.
+fn window_of_entry(entry: &serde_json::Value) -> Option<u32> {
+    ["max_model_len", "n_ctx", "context_length", "context_window"]
+        .iter()
+        .find_map(|k| entry.get(*k).and_then(|v| v.as_u64()))
+        .map(|v| v as u32)
+}
+
 /// Make a minimal chat completion to verify the LLM config actually works.
 #[tauri::command]
 pub(crate) async fn test_llm(provider: String, base_url: String, api_key: String, model: String) -> Result<String, String> {
@@ -298,6 +378,32 @@ mod tests {
         let models = list_models("ollama".into(), base, String::new()).await.unwrap();
         assert_eq!(models, vec!["llama3:latest".to_string()]);
         assert!(head(&rx).starts_with("GET /api/tags"));
+    }
+
+    #[tokio::test]
+    async fn a_llama_style_listing_reports_the_context_window() {
+        let (base, _rx) = mock(
+            r#"{"data":[{"id":"other","max_model_len":8192},{"id":"glm","max_model_len":200000}]}"#,
+        );
+        assert_eq!(
+            model_context("custom", &base, "", "glm").await,
+            Some(200_000),
+            "the window of the selected model, not the first row"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_silent_endpoint_is_asked_once_not_every_turn() {
+        let (base, rx) = mock(r#"{"data":[{"id":"gpt-x"}]}"#);
+        assert_eq!(model_context("openai", &base, "", "gpt-x").await, None);
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_secs(5)).is_ok(),
+            "the first lookup asks the endpoint"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "a model that reports nothing is cached as reporting nothing"
+        );
     }
 
     #[tokio::test]

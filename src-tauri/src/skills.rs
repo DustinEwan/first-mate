@@ -1,41 +1,48 @@
 use crate::log::home_dir;
 
-/// AGENTS.md resolution — prompt content is layered, never compiled in:
+/// Prompt content resolution — content is layered, never compiled in. For a
+/// file by name (`AGENTS.md`, `COMPACT.md`):
 /// - dev repo layout (`../src-tauri` present): the working copy wins, it
-///   is the content under test (`../prompts/AGENTS.md`)
-/// - installed: `~/.firstmate/AGENTS.md` OVERRIDES the packaged baseline
-///   (repo prompts/AGENTS.md, bundled next to the exe)
+///   is the content under test (`../prompts/<name>`)
+/// - installed: `~/.firstmate/<name>` OVERRIDES the packaged baseline
+///   (repo prompts/<name>, bundled next to the exe)
 /// - baseline fallbacks: cwd and the exe dir / its parent
-fn agents_md_path() -> Option<std::path::PathBuf> {
-    let dev = std::path::PathBuf::from("../prompts/AGENTS.md");
+fn prompt_path(name: &str) -> Option<std::path::PathBuf> {
+    let dev = std::path::PathBuf::from(format!("../prompts/{name}"));
     if dev.is_file() && std::path::Path::new("../src-tauri").is_dir() {
         return Some(dev);
     }
-    let user = home_dir().join(".firstmate").join("AGENTS.md");
+    let user = home_dir().join(".firstmate").join(name);
     if user.is_file() {
         return Some(user);
     }
-    let mut candidates = vec![std::path::PathBuf::from("AGENTS.md")];
+    let mut candidates = vec![std::path::PathBuf::from(name)];
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            candidates.push(dir.join("AGENTS.md"));
+            candidates.push(dir.join(name));
             if let Some(parent) = dir.parent() {
-                candidates.push(parent.join("AGENTS.md"));
+                candidates.push(parent.join(name));
             }
         }
     }
     candidates.into_iter().find(|p| p.is_file())
 }
 
-/// The system prompt is content, not code: it is AGENTS.md, discovered via
-/// `agents_md_path`. The binary ships NO prompt text — with no AGENTS.md
-/// anywhere, the agent runs on the skill advertisements alone.
-#[tauri::command]
-pub(crate) fn get_system_prompt() -> String {
-    agents_md_path()
+/// A prompt content file's text, or `None` when no layer carries one. The
+/// binary ships NO prompt text, so a missing file means the behaviour that
+/// needs it is unconfigured — never that a compiled-in copy stood in.
+pub(crate) fn prompt_content(name: &str) -> Option<String> {
+    prompt_path(name)
         .and_then(|p| std::fs::read_to_string(p).ok())
         .filter(|s| !s.trim().is_empty())
-        .unwrap_or_default()
+}
+
+/// The system prompt is content, not code: it is AGENTS.md, discovered by
+/// `prompt_path`. With no AGENTS.md anywhere, the agent runs on the skill
+/// advertisements alone.
+#[tauri::command]
+pub(crate) fn get_system_prompt() -> String {
+    prompt_content("AGENTS.md").unwrap_or_default()
 }
 
 /// Skills advertised to the frontend for system-prompt injection (stage 1
@@ -178,6 +185,17 @@ pub(crate) fn skill_dir(name: &str) -> Option<std::path::PathBuf> {
         }
     }
     None
+}
+
+/// The skill's instructions: SKILL.md minus frontmatter. This is what the
+/// model needs in context to use a capability — the fact that a skill was
+/// loaded is not the capability.
+pub(crate) fn skill_body(name: &str) -> Option<String> {
+    let dir = skill_dir(name)?;
+    let md = std::fs::read_to_string(dir.join("SKILL.md")).ok()?;
+    let (_, _, body) = parse_frontmatter(&md);
+    let body = body.trim().to_string();
+    (!body.is_empty()).then_some(body)
 }
 
 /// Resolve `"<skill>/<relative/path>"` to a real file, refusing anything

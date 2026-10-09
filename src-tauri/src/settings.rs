@@ -10,13 +10,32 @@ pub(crate) fn get_hotkey() -> &'static str {
 }
 
 /// LLM configuration, persisted as part of the app settings.
-#[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 #[serde(default)]
 struct LlmSettings {
     provider: String,
     model: String,
     api_key: String,
     base_url: String,
+    /// Context window in tokens; 0 = ask the endpoint, which reports
+    /// `max_model_len` (llama.cpp) or nothing. Silent endpoints fall back to
+    /// `context::DEFAULT_WINDOW_TOKENS`.
+    context_window: u32,
+    /// Compact once the request reaches this share of the window.
+    compact_at_percent: u8,
+}
+
+impl Default for LlmSettings {
+    fn default() -> Self {
+        Self {
+            provider: String::new(),
+            model: String::new(),
+            api_key: String::new(),
+            base_url: String::new(),
+            context_window: 0,
+            compact_at_percent: 85,
+        }
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Default)]

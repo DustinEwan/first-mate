@@ -308,6 +308,54 @@ body {
   font-family: monospace;
 }
 
+/* Compaction divider: a rule across the console, not a chat bubble. The
+   summary starts collapsed — the point of the divider is that the rows above
+   it left the MODEL's context, not that they should be hidden from the user,
+   so the whole scrollback stays put and this row only records what replaced
+   them. */
+.msg.summary {
+  padding: 6px 12px 12px;
+  color: #8a8f98;
+}
+.summary-rule {
+  display: block;
+  width: 100%;
+  padding: 2px 0 6px;
+  background: none;
+  border: none;
+  color: #8a8f98;
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: 0.5px;
+  text-align: center;
+  cursor: pointer;
+}
+.summary-rule:hover {
+  color: #c9ced6;
+}
+
+/* The caret is CSS-only so the divider keeps its exact wording. */
+.summary-rule::after {
+  content: " ▸";
+  font-size: 10px;
+}
+.msg.summary.open .summary-rule::after {
+  content: " ▾";
+}
+.summary-body {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid #2c2c31;
+  border-radius: 6px;
+  background: #141518;
+  color: #8a8f98;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* Tool report: one bordered panel with identity / effect / metadata
    sections, mirroring the TUI's boxed tool output. Spacing lives as
    padding on the wrapper: the virtual scroller positions items by the

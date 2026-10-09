@@ -66,8 +66,9 @@ belong to `filesystem`, the admin trio to `elevation`. First Mate
 declares that mapping in Rust (`skill_required()` in `tooldefs.rs`),
 tracks which skills each conversation has loaded, and refuses a gated
 tool before its skill is loaded; the refusal names the skill, so the
-model self-corrects in one turn. Resumed conversations start unloaded —
-capability is re-earned through the skill. This is enforcement of
+model self-corrects in one turn. The set is the conversation's own
+`load_skill` ledger, so it holds across every later turn and a resume from
+disk; a new conversation starts unloaded. This is enforcement of
 context, not security: real protection is UAC consent and the trust
 tiers (roadmap Phase F). Skill content never names tools, so nothing
 here affects portability.

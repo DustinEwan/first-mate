@@ -9,6 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 mod conversations;
+mod context;
 mod exec;
 mod elevate;
 mod execute;

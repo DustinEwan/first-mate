@@ -8,6 +8,7 @@ import {
   NFormItem,
   NSelect,
   NInput,
+  NInputNumber,
   NButton,
   NCheckbox,
   NSpace,
@@ -19,12 +20,20 @@ interface LlmSettings {
   model: string;
   api_key: string;
   base_url: string;
+  // Compaction (docs/COMPACTION.md): 0 = read the window off the model
+  // endpoint. Settings files written before compaction carry neither.
+  context_window?: number;
+  compact_at_percent?: number;
 }
 
 const provider = ref("");
 const baseUrl = ref("");
 const apiKey = ref("");
 const model = ref("");
+// Compaction knobs. Nullable because the input can be cleared; a cleared or
+// missing value means the default (0 = auto-detect, 85% of the window).
+const contextWindow = ref<number | null>(0);
+const compactAtPercent = ref<number | null>(85);
 const models = ref<string[]>([]);
 const status = ref("");
 
@@ -92,6 +101,8 @@ Promise.all([
   baseUrl.value = s.llm.base_url;
   apiKey.value = s.llm.api_key;
   model.value = s.llm.model;
+  contextWindow.value = s.llm.context_window ?? 0;
+  compactAtPercent.value = s.llm.compact_at_percent ?? 85;
   const spec = ps.find((p) => p.id === s.llm.provider);
   proxy.value = !!spec && !spec.isLocal && s.llm.base_url !== "" && s.llm.base_url !== spec.base;
 });
@@ -118,6 +129,8 @@ async function save() {
       model: model.value,
       api_key: apiKey.value,
       base_url: baseUrl.value,
+      context_window: contextWindow.value ?? 0,
+      compact_at_percent: compactAtPercent.value ?? 85,
     },
   };
   try {
@@ -193,6 +206,25 @@ function closeWindow() {
               />
               <n-button size="small" secondary @click="refreshModels"> &#8635; refresh </n-button>
             </n-space>
+          </n-form-item>
+          <n-form-item label="Context window (tokens)">
+            <n-input-number v-model:value="contextWindow" :min="0" :show-button="false" />
+            <template #feedback>
+              Detected from the model endpoint (max_model_len); set it when the endpoint reports
+              nothing. 0 = auto-detect.
+            </template>
+          </n-form-item>
+          <n-form-item label="Compact at % of context">
+            <n-input-number
+              v-model:value="compactAtPercent"
+              :min="10"
+              :max="100"
+              :show-button="false"
+            />
+            <template #feedback>
+              Compact the earlier turns once the conversation reaches this share of the context
+              window (10–100, default 85).
+            </template>
           </n-form-item>
         </n-form>
         <n-space align="center">
