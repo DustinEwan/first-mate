@@ -56,6 +56,7 @@ src/ChatView.vue          chat window (virtualized message list, markdown)
 settings.html             settings window (provider, model, API key, base URL)
 prompts/                  First Mate's own content: AGENTS.md (system prompt) + skills/
 docs/SKILLS.md            skill system design
+docs/ROADMAP.md           direction and build order (living document)
 AGENTS.md                 guidance for CODING agents working on this repo
 ```
 

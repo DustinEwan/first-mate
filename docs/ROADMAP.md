@@ -2,14 +2,14 @@
 
 North star: a desktop assistant that _does tasks on your PC_ — not a chat
 window. Everything below serves that: the right agent for the job, skills
-that compound, and the trust layer that makes it safe to point an agent at
-a machine full of personal data.
+that compound, and the trust layer that makes it safe to point an agent
+at a machine full of personal data.
 
-Owner priorities are §1–4; §5 unifies them into one user-facing privacy
-slider. §6 reads Copilot's track record for the _usefulness_ underneath
-its features — the jobs users actually hire for, inferred from what gets
-praised vs punished — and §7 derives First Mate capabilities from those
-jobs, not from Microsoft's mechanisms. §8 is the build order.
+This is a **living document**: it records direction and build order
+(§1–5 features, §6's derived jobs, §7 destinations, §8 build order, and
+the non-goals). Update it when priorities move — it is only as good as
+its last revision. Design detail lives in the docs it points to, not
+here.
 
 ## 1. Agent Profiles
 
@@ -97,63 +97,14 @@ lands).
 or financial data. Local models need none of this — so the feature is
 "when the resolved provider is remote, redact."
 
-**Design sketch.**
-
-- A redaction pass over every outbound request when
-  `provider.kind != local`: detect → tokenize → send; reversible
-  placeholders `⟦EMAIL_1⟧`.
-- **Detection layer 1 — shape + checksum (deterministic, always on).**
-  Financial identifiers carry built-in math, so they are exactly
-  detectable, not guessed: cards (Luhn + BIN network prefixes), IBAN
-  (ISO 13616 per-country length table + mod-97), ABA routing (mod-10
-  weights 3-7-1), SWIFT/BIC (ISO 9362 format), SSN (position-dependent
-  validity), crypto addresses (base58/bech32 checksums), secrets
-  (API-key shapes, JWTs), email/phone, Windows paths under
-  `Users\<name>`.
-- The token map is **session-scoped** — the model echoes tokens across
-  turns — and lives in memory only: never persisted, never sent.
-- Detokenize happens at three harness boundaries, never in the model:
-  **display** (the console renders truth — or obfuscates it, per the
-  §5 level), **tool/action execute** ("email `⟦EMAIL_1⟧` the summary"
-  substitutes the real address at execution time, under the profile's
-  trust tier), and **tool output inbound** (exec/file output gets the
-  same pass _before_ it enters a cloud prompt — both directions
-  covered).
-- Failure classes, handled explicitly: the model **mangles** a token
-  (fuzzy-repair pass on the distinctive `⟦…⟧` shape); the model must
-  **reason over** the real value ("is this IBAN valid?" — it can't;
-  route to a local-model profile or a per-field disclose-once
-  override); an action **sends** a real value out-of-band (web search,
-  email) — that is the trust-tier-3 confirm gate at the
-  leaving-the-machine boundary, not a redaction bug.
-- **Detection layer 2 — entity registry (closed set).** The hard cases
-  (US account numbers: no standard, no checksum, 8–17 digits,
-  shape-indistinguishable from order IDs) don't need open-world
-  detection — the valuable targets are _the user's own_ values, a tiny
-  closed set. Seed in profile settings (accounts, addresses, employer);
-  auto-grow from layer-1/3 hits after one-time user confirmation;
-  exact-match anywhere, any format, thereafter. Registry stored sealed
-  (§3).
-- **Detection layer 3 — provenance.** Content from marked origins is
-  sensitive regardless of shape: file reads under declared sensitive
-  paths, UIA fields named/auto-id'd "Account No." (the winapp harness
-  already reads UIA), online-banking browser origins, password-manager
-  clipboard (never allowed). A number from the bank's own web app needs
-  no checksum to be known.
-- **Detection layers 4–5 — context + local model net.** Trigger-word
-  proximity ("acct", "routing", "balance") + digit-length windows
-  firing only in combination; then an optional small local NER/LLM pass
-  (ollama binding) for shapeless entities (names, employer, health) —
-  local so the scan itself can't leak.
-- **Bias rule:** over-redact outbound to cloud — detokenize restores
-  display and actions, so a false positive costs a token the user never
-  sees; a false negative is the leak. Per-class toggles + disclose-once
-  guard against over-redaction degrading model task quality.
-- Chat-log truth is a privacy-level choice (§5): L1 stores _redacted_
-  text (minimize on-disk truth); L2+ stores sealed truth (§3) so the
-  console can reveal on demand.
-- Console affordance: a "redacted N items" chip on each cloud turn,
-  click-through to what classes fired (never the values).
+**Design sketch.** A reversible tokenize pass on every outbound request
+when the resolved provider is remote: detect → tokenize → send;
+detokenize at the harness boundaries (display, tool execute, tool
+output inbound), never in the model. Detection stacks deterministic
+shape+checksum checks, a user-seeded entity registry, provenance marks,
+and an optional local-NER net; over-redaction is the accepted bias
+because detokenize restores truth everywhere the user can see. Full
+design: `docs/REDACTION.md`.
 
 **Dependency:** profile model bindings (§1) decide when this runs; item 3
 decides what's worth protecting on disk instead.
@@ -183,22 +134,12 @@ decides what's worth protecting on disk instead.
 
 ## 6. The Copilot lesson: usefulness, not features
 
-Microsoft's 2025–2026 AI features are mechanisms; their reception tells us
-which _jobs_ underneath them are real. Users can't articulate the job —
-they praise or punish the packaging — so the job is inferred from the
-reaction pattern. Four jobs survive the evidence:
-
-| Job (what the user is actually hiring for)                                                                                                    | Evidence from reception                                                                                                                                                                                                                                                   | What it rules in / out                                                                                                    |
-| --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| **"Don't make me lose what I already saw/knew."** Recovery of lost context — the thing I read, the fix I did, the decision I made last month. | Recall: constant backlash yet devoted actual users ("first truly great and useful AI productivity tool"). The backlash tracked the _plaintext-by-default posture_, not the recovery value — the redesigned Hello-gated version kept the praise and shed some of the fear. | The job is real and worth serving. It does NOT imply an ambient recorder; that's one costly way to serve it.              |
-| **"Use what's already in front of me."** The current selection/window should be the argument to the next action, without copy-paste rituals.  | Click to Do: mixed as a spectacle, genuinely valued as an accessibility surface. The chat-app packaging (leave your app, paste into a panel) ate most of the value.                                                                                                       | The job is real; the friction of the delivery is the failure mode. A globally hotkeyed assistant already avoids that tax. |
-| **"Take this chore off my hands — I'll approve the plan."** Offloading repeatable multi-step drudgery while keeping control of the leash.     | Copilot Actions: adoption discourse is almost entirely about the containment model (workspace, low-privilege account, scoped access) — because _trust is the purchase_, not the demo. Nobody brags about one-shot agent tricks.                                           | Delegation with explicit, bounded trust is the product. Unbounded autonomy reads as reckless and sells nothing.           |
-| **"Capture my intent at the speed of thought."** Low-friction expression for requests too long to type.                                       | Voice Access: the most uniformly positive sentiment of any Windows AI feature, adopted far beyond its accessibility audience. Nobody wants voice _control_ when in flow — they want voice _input_.                                                                        | Voice as an input modality; hands-free OS operation is someone else's product.                                            |
-
-The punishment signal is just as clear: plaintext-at-rest storage and
-unbounded blast radius are the only things users consistently hate. Items
-§3–4 and the trust tiers below are that answer, so the four jobs above can
-be pursued without importing the liability.
+Four jobs survive the 2025–2026 Copilot reception evidence — recover
+lost context, use what's in front of me, bounded delegation, and
+low-friction intent capture — and the one thing users consistently
+punish is plaintext-at-rest plus unbounded blast radius (§3–4 and the
+trust tiers are that answer). Evidence and full analysis:
+`docs/COPILOT-ANALYSIS.md`.
 
 ## 7. Derived capabilities
 
