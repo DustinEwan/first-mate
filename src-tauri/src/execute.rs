@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
+use crate::elevate::{
+    agent_delevate, agent_elevate, agent_run_elevated, elevation_active, is_winapp_call,
+};
 use crate::exec::{AppNotifier, BgNotifier, NoopNotifier, bg_registry, budget_output, cmd_timeout, exec_or_background, needs_shell, parse_command, spawn_background_notify};
 use crate::fileedit::{apply_edit_ops, parse_edit_ops, record_snapshot, seen_snapshot, snapshot_tag};
 use crate::log::{fm_tmp_dir, log};
@@ -19,8 +22,15 @@ pub(crate) async fn execute_tool(
     seen: &mut HashMap<String, String>,
 ) -> Result<String, String> {
     log(&format!("TOOL CALL: {} args={}", name, args));
-    let notifier = std::sync::Arc::new(AppNotifier(app.clone()));
-    let result = execute_tool_notify(notifier, active, name, args).await;
+    // The elevation tools need the app handle (managed state + window
+    // events), so they are dispatched here, not in the headless core.
+    let result = match name {
+        "elevate" | "delevate" | "run_elevated" => execute_elevation(app, name, args).await,
+        _ => {
+            let notifier = std::sync::Arc::new(AppNotifier(app.clone()));
+            execute_tool_notify(Some(app), notifier, active, name, args).await
+        }
+    };
     let summary = match &result {
         Ok(s) => format!("OK len={}", s.len()),
         Err(e) => format!("ERR {}", e.chars().take(200).collect::<String>()),
@@ -34,10 +44,42 @@ pub(crate) async fn execute_tool(
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) async fn execute_tool_inner(name: &str, args: &serde_json::Value) -> Result<String, String> {
     let core = core_tools();
-    execute_tool_notify(std::sync::Arc::new(NoopNotifier), &core, name, args).await
+    execute_tool_notify(None, std::sync::Arc::new(NoopNotifier), &core, name, args).await
 }
 
+/// The elevation trio: UAC consent, the persistent admin session, release.
+async fn execute_elevation(
+    app: &tauri::AppHandle,
+    name: &str,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    match name {
+        "elevate" => {
+            let a = app.clone();
+            tokio::task::spawn_blocking(move || agent_elevate(&a))
+                .await
+                .map_err(|e| format!("elevate task crashed: {e}"))?
+        }
+        "delevate" => agent_delevate(app),
+        "run_elevated" => {
+            let command = args.get("command").and_then(|c| c.as_str()).unwrap_or("");
+            if command.is_empty() {
+                return Err("run_elevated needs a command".into());
+            }
+            let secs = args
+                .get("timeout_secs")
+                .and_then(|s| s.as_u64())
+                .unwrap_or(120);
+            agent_run_elevated(app.clone(), command.to_string(), std::time::Duration::from_secs(secs))
+                .await
+        }
+        _ => Err(format!("unknown elevation tool: {name}")),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn execute_tool_notify(
+    app: Option<&tauri::AppHandle>,
     notifier: std::sync::Arc<dyn BgNotifier>,
     active: &[serde_json::Value],
     name: &str,
@@ -52,6 +94,20 @@ async fn execute_tool_notify(
                      in this conversation. Call {tool} instead ({why}: structured output, no shell \
                      quoting, no truncation)."
                 ));
+            }
+            // Elevated Control ON: winapp runs in the elevated session, so
+            // it drives elevated windows too (UIPI refuses MEDIUM input
+            // against HIGH targets — silently). First-token match only.
+            if let Some(app) = app {
+                if elevation_active(app) && is_winapp_call(command) {
+                    log("RUN winapp via elevated session");
+                    return agent_run_elevated(
+                        app.clone(),
+                        command.to_string(),
+                        cmd_timeout(),
+                    )
+                    .await;
+                }
             }
             let background = args
                 .get("background")
@@ -449,6 +505,7 @@ mod tests {
             .filter_map(|n| tool_schema(n))
             .collect::<Vec<_>>();
         let err = execute_tool_notify(
+            None,
             std::sync::Arc::new(NoopNotifier),
             &fs,
             "run_command",
@@ -534,7 +591,7 @@ mod tests {
     }
 
     async fn fs_call(name: &str, args: serde_json::Value) -> Result<String, String> {
-        execute_tool_notify(std::sync::Arc::new(NoopNotifier), &fs_tools(), name, &args).await
+        execute_tool_notify(None, std::sync::Arc::new(NoopNotifier), &fs_tools(), name, &args).await
     }
 
     #[tokio::test]
@@ -686,7 +743,7 @@ mod tests {
             let n = n.clone();
             let name = name.to_string();
             let tools: &Vec<serde_json::Value> = &active;
-            async move { execute_tool_notify(n, tools, &name, &args).await }
+            async move { execute_tool_notify(None, n, tools, &name, &args).await }
         };
 
         // Persistent session: state survives between calls, cwd sticks.

@@ -10,6 +10,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 mod conversations;
 mod exec;
+mod elevate;
 mod execute;
 mod fileedit;
 mod harness;
@@ -28,6 +29,7 @@ mod update;
 mod window;
 
 use crate::conversations::{delete_conversation, list_conversations, load_conversation, save_conversation};
+use crate::elevate::{self as elevate_mod, ElevationState};
 use crate::harness::{bootstrap_status, cli_version, install_winapp};
 use crate::llm::{chat_with_llm, stop_chat};
 use crate::log::{fm_out_dir, fm_tmp_dir, log, trim_dir};
@@ -37,14 +39,33 @@ use crate::settings::{HOTKEY, get_hotkey, get_settings, save_settings};
 use crate::skills::{get_system_prompt, list_skills};
 use crate::window::{open_settings, open_settings_inner, toggle_window};
 
+// IPC command glue lives here (next to the handler list that keeps it in
+// the app binary) so feature modules stay free of tauri's command
+// machinery — see the note in elevate.rs.
+#[tauri::command]
+fn elevation_status(app: tauri::AppHandle) -> elevate_mod::ElevStatus {
+    elevate_mod::status_snapshot(&app)
+}
+
+#[tauri::command]
+fn elevate(app: tauri::AppHandle) -> Result<String, String> {
+    elevate_mod::elevate_core(&app)
+}
+
+#[tauri::command]
+fn delevate(app: tauri::AppHandle) -> Result<String, String> {
+    Ok(elevate_mod::delevate_core(&app, false))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, list_models, list_providers, test_llm, chat_with_llm, stop_chat, list_skills, list_conversations, load_conversation, delete_conversation, save_conversation, get_system_prompt, open_path, bootstrap_status, install_winapp, open_settings])
+        .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, list_models, list_providers, test_llm, chat_with_llm, stop_chat, list_skills, list_conversations, load_conversation, delete_conversation, save_conversation, get_system_prompt, open_path, bootstrap_status, install_winapp, open_settings, elevate, delevate, elevation_status])
         .setup(|app| {
+            app.manage(ElevationState::default());
             // Scratch hygiene (P6): drop old generations of generated
             // scripts and spilled output from previous sessions.
             trim_dir(&fm_tmp_dir(), 50);

@@ -96,6 +96,7 @@ The interpreter itself: enough to run anything and load anything.
 
 - **filesystem skill** enables: `read_file`, `edit_file`, `write_file`,
   `list_dir`, `search_files`, `list_processes`
+- **elevation skill** enables: `elevate`, `delevate`, `run_elevated`
 
 Implemented in Rust from startup; invisible to the model until the skill's
 `tools:` enables them.
@@ -104,10 +105,16 @@ Implemented in Rust from startup; invisible to the model until the skill's
 
 All capability knowledge lives here, including the primary one:
 
-- **winapp**: Windows UI automation — commands, rules, and measured latency
-  costs (`skills/winapp/`) — pure behavior, drives `run_command`
+- **winapp**: THE core skill — the hands on the screen: UI automation
+  (commands, rules, measured latency costs), browser control, and driving
+  first-party OS surfaces (`skills/winapp/`) — pure behavior, drives
+  `run_command`
+- **powershell**: terminal craft — read-only machine inventory patterns
+  (CIM/WMI, driver store, services) and session mechanics (`skills/powershell/`)
 - **filesystem**: file/process tool usage and rules (`skills/filesystem/`)
 - **git-repo**: repository inspection and safe operations (`skills/git-repo/`)
+- **elevation**: the user's admin door — UAC consent, the persistent
+  elevated session, and its rules (`skills/elevation/`)
 - **User skills**: drop a folder into `~/.firstmate/skills/`
 
 ## Prompt Content & Layering

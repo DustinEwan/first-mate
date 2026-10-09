@@ -234,6 +234,11 @@ const conversations = ref<ConvInfo[]>([]);
 const convName = ref<string | null>(null);
 // Temporary conversations: never written to disk, vanish on New/restart.
 const tempChat = ref(false);
+// Elevated Control: the admin session's state, mirrored from Rust. The
+// toggle is the user's hand on it; the agent's elevate/delevate move it
+// too, via the elevation_changed event.
+const elevActive = ref(false);
+const elevCount = ref(0);
 
 function focusInput() {
   const el = inputRef.value?.querySelector("textarea") || inputRef.value?.querySelector("input");
@@ -289,6 +294,7 @@ function openConversation(c: ConvInfo) {
       convName.value = c.name;
       tempChat.value = false;
       panelOpen.value = false;
+      refreshBehavior();
     })
     .catch((e) => console.error("load failed", e));
 }
@@ -298,6 +304,27 @@ function newChat() {
   convName.value = null;
   tempChat.value = false;
   panelOpen.value = false;
+  refreshBehavior();
+}
+
+// Prompt and skill ads are CONTENT: re-read them at every conversation
+// start so editing AGENTS.md or skills/ takes effect on the next chat —
+// closing the window only hides it, so a mount-once fetch would serve a
+// stale prompt for the life of the process.
+function refreshBehavior() {
+  invoke<string>("get_system_prompt").then((p) => {
+    systemPromptBase.value = p;
+  });
+  invoke<SkillInfo[]>("list_skills").then((skills) => {
+    if (skills.length === 0) return;
+    const list = skills.map((s) => `- ${s.name}: ${s.description}`).join("\n");
+    skillsAds.value =
+      `\n\n## Skills (loaded on demand)\nAvailable skills:\n${list}\n` +
+      `When a task matches a skill's domain, call load_skill("<name>") to get its ` +
+      `full instructions before acting; read reference files with ` +
+      `read_skill_resource("<skill>/<relative/path>"). Loading a skill may also ` +
+      `enable additional tools for the rest of the conversation.`;
+  });
 }
 
 function newTempChat() {
@@ -305,6 +332,7 @@ function newTempChat() {
   convName.value = null;
   tempChat.value = true;
   panelOpen.value = false;
+  refreshBehavior();
   addMsg("Temporary conversation — nothing here is saved to disk.", "dim");
 }
 
@@ -332,19 +360,21 @@ onMounted(() => {
     if (!s.llm.model) wizardOpen.value = true;
   });
   listen("open_setup", () => (wizardOpen.value = true));
-  invoke<string>("get_system_prompt").then((p) => {
-    systemPromptBase.value = p;
+  invoke<{ active: boolean; commands: number }>("elevation_status").then((s) => {
+    elevActive.value = s.active;
+    elevCount.value = s.commands;
   });
-  invoke<SkillInfo[]>("list_skills").then((skills) => {
-    if (skills.length === 0) return;
-    const list = skills.map((s) => `- ${s.name}: ${s.description}`).join("\n");
-    skillsAds.value =
-      `\n\n## Skills (loaded on demand)\nAvailable skills:\n${list}\n` +
-      `When a task matches a skill's domain, call load_skill("<name>") to get its ` +
-      `full instructions before acting; read reference files with ` +
-      `read_skill_resource("<skill>/<relative/path>"). Loading a skill may also ` +
-      `enable additional tools for the rest of the conversation.`;
+  listen<{ active: boolean; pid?: number; commands?: number }>("elevation_changed", (e) => {
+    elevActive.value = e.payload.active;
+    elevCount.value = e.payload.commands ?? 0;
+    addMsg(
+      e.payload.active
+        ? `Elevated Control ON — admin session (pid ${e.payload.pid}). You can end it any time with the ELEV button.`
+        : "Elevated Control OFF — back to non-elevated only.",
+      "dim",
+    );
   });
+  refreshBehavior();
   // Focus the input when the window is shown/focused.
   nextTick(() => focusInput());
   listen("tauri://focus", () => focusInput());
@@ -515,6 +545,15 @@ function openSettings() {
   invoke("open_settings").catch((e) => console.error("open settings failed", e));
 }
 
+async function toggleElevation() {
+  try {
+    if (elevActive.value) addMsg(await invoke<string>("delevate"), "dim");
+    else addMsg(await invoke<string>("elevate"), "dim");
+  } catch (e) {
+    addMsg(String(e), "error");
+  }
+}
+
 // Auto-scroll to bottom when new messages arrive. DynamicScroller
 // measures item sizes asynchronously: right after a bulk load (opening
 // a conversation, or the startup load while the window is still hidden)
@@ -578,6 +617,18 @@ window.addEventListener("keydown", (e) => {
           "
         >
           &#9776;
+        </button>
+        <button
+          class="elev-toggle"
+          :class="{ on: elevActive }"
+          :title="
+            elevActive
+              ? `Elevated Control ON — ${elevCount} admin command(s) run. Click to give it up.`
+              : 'Elevated Control OFF — the agent has no admin rights. ON requires your UAC consent.'
+          "
+          @click="toggleElevation"
+        >
+          &#9650;{{ elevActive ? ` ${elevCount}` : "" }}
         </button>
         <button class="settings-gear" title="Settings" @click="openSettings">&#9881;</button>
         <button class="close" @click="hide">&#10005;</button>

@@ -247,6 +247,27 @@ mod tests {
     }
 
     #[test]
+    fn powershell_skill_is_discoverable_and_toolless() {
+        // The terminal hand: inventory craft as a skill, not prompt text.
+        // It enables no tools — run_command is core; the skill is behavior.
+        let skills = discover_skills();
+        let ps = skills
+            .iter()
+            .find(|s| s.name == "powershell")
+            .expect("powershell skill");
+        assert!(ps.description.contains("inventory"), "{}", ps.description);
+        let dir = skill_dir("powershell").expect("skill dir");
+        let md = std::fs::read_to_string(dir.join("SKILL.md")).unwrap();
+        let (_, _, tools, body) = parse_frontmatter(&md);
+        assert!(body.contains("# PowerShell"));
+        assert!(
+            body.contains("Win32_PnPSignedDriver"),
+            "inventory patterns must live in the skill"
+        );
+        assert!(tools.is_empty(), "powershell must not enable tools");
+    }
+
+    #[test]
     fn system_prompt_comes_from_agents_md_not_the_binary() {
         // cargo test runs with cwd = src-tauri (dev layout): the prompt is
         // EXACTLY the repo file — the binary carries no prompt text, so

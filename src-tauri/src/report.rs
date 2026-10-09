@@ -207,6 +207,14 @@ pub(crate) fn tool_report(
         "get_command_output" | "kill_command" => (s("pid"), None),
         "load_skill" => (s("name"), None),
         "read_skill_resource" => (s("path"), None),
+        "run_elevated" => (
+            s("command")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" "),
+            Some("elevated".into()),
+        ),
+        "elevate" | "delevate" => (String::new(), None),
         _ => {
             let kv = args
                 .as_object()
@@ -231,7 +239,7 @@ pub(crate) fn tool_report(
                 kind: "diff".into(),
                 text,
             }),
-            "run_command" | "get_command_output" => Some(ReportBody {
+            "run_command" | "get_command_output" | "run_elevated" => Some(ReportBody {
                 kind: "output".into(),
                 text: clip_lines(result, 18),
             }),

@@ -1,6 +1,6 @@
 ---
 name: winapp
-description: Inspect and interact with running Windows applications via the winapp CLI. Use for any UI automation — screenshots, clicking, typing, reading app state, window control — and for OS tasks that have a first-party UI (driver/update install, uninstall, settings): open the surface with `start ms-settings:...` or `start devmgmt.msc`, then drive it.
+description: Inspect and interact with running Windows applications via the winapp CLI. Use for any UI automation — screenshots, clicking, typing, reading app state, window control — for the web (open the page in the browser and read it there), and for OS tasks that have a first-party UI (driver/update install, uninstall, settings): open the surface with `start ms-settings:...` or `start devmgmt.msc`, then drive it.
 ---
 
 # WinApp UI Automation
@@ -12,13 +12,22 @@ Windows applications.
 - The user asks to click, type, navigate, or read anything in a GUI app
 - The user asks for a screenshot or what an app is showing
 - You need to verify the visible result of an action
-- **The task has a first-party UI — do it through the UI, not by scripting around it.** Open the surface with `start <uri>` (cmd shell), then drive it with the commands below:
+- **The task has a surface that already exists — use it; do not script around
+  it.** Open the surface with `start <uri>` (cmd shell), then drive it with the
+  commands below:
+  - The web: `start <url>` opens the default browser — read pages by
+    screenshot (you can see the image), search via the address bar. Fetching
+    a site's HTML in a terminal is not an option: there is nobody at this
+    desk who would do that.
   - Windows Update (OS + driver updates): `start ms-settings:windowsupdate`
   - Installed apps / uninstall: `start ms-settings:appsfeatures`
   - Device Manager: `start devmgmt.msc`
   - Network & Internet: `start ms-settings:network`
   - Everything else: `start ms-settings:` (search box inside)
-  These pages perform privileged operations with the user's UAC approval; your non-elevated shell cannot — do not fake that with RunAs/elevation helpers.
+  These pages perform privileged operations with the user's UAC approval;
+  your non-elevated shell cannot. Never improvise that with RunAs — when a
+  privileged job has no surface worth driving, that is what the **elevation**
+  skill (`load_skill("elevation")`) is for.
 
 ## Commands
 

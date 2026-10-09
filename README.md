@@ -54,9 +54,9 @@ src-tauri/src/            Rust backend, one feature module per concern:
                             listing, path opening, winapp CLI bootstrap
 src/ChatView.vue          chat window (virtualized message list, markdown)
 settings.html             settings window (provider, model, API key, base URL)
-skills/                   winapp, filesystem, git-repo
+skills/                   winapp, powershell, filesystem, git-repo, elevation
 docs/SKILLS.md            skill system design
-AGENTS.md                 system prompt (behavior rules for the model; packaged by the installer, user-overridable)
+AGENTS.md                 system prompt (the agent's identity; packaged by the installer, user-overridable)
 ```
 
 ## Configuration

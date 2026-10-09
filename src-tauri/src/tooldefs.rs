@@ -160,6 +160,37 @@ fn agent_tools() -> serde_json::Value {
                     "required": ["path"]
                 }
             }
+        },
+        // Shape only — no prose. These tools enter the model's context only
+        // when the elevation skill loads (frontmatter `tools:`), and that
+        // SKILL.md is their description. Same for any future skill-gated tool.
+        {
+            "type": "function",
+            "function": {
+                "name": "run_elevated",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {"type": "string"},
+                        "timeout_secs": {"type": "integer"}
+                    },
+                    "required": ["command"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "elevate",
+                "parameters": {"type": "object", "properties": {}}
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "delevate",
+                "parameters": {"type": "object", "properties": {}}
+            }
         }
     ])
 }

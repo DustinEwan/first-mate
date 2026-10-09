@@ -81,6 +81,28 @@ body {
   color: #ffffff;
 }
 
+.titlebar .elev-toggle {
+  -webkit-app-region: no-drag;
+  background: none;
+  border: none;
+  color: #565c66;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 0 8px;
+  cursor: pointer;
+}
+
+.titlebar .elev-toggle:hover {
+  color: #ffffff;
+}
+
+/* Elevation is ON: amber, same signal as the TEMP badge — a state the
+   user must not miss while the window is open. */
+.titlebar .elev-toggle.on {
+  color: #f0a020;
+}
+
 /* Chat + expandable side panel */
 .body {
   flex: 1;

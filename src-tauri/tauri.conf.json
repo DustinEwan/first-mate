@@ -33,7 +33,9 @@
     "createUpdaterArtifacts": true,
     "resources": {
       "../AGENTS.md": "AGENTS.md",
+      "../skills/elevation/SKILL.md": "skills/elevation/SKILL.md",
       "../skills/filesystem/SKILL.md": "skills/filesystem/SKILL.md",
+      "../skills/powershell/SKILL.md": "skills/powershell/SKILL.md",
       "../skills/git-repo/SKILL.md": "skills/git-repo/SKILL.md",
       "../skills/git-repo/references/recipes.md": "skills/git-repo/references/recipes.md",
       "../skills/winapp/SKILL.md": "skills/winapp/SKILL.md"
