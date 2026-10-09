@@ -91,23 +91,33 @@ whether `winapp`/exec output spilled to `fm_out` should inherit the
 session's seal (it should — that's where the sensitive content actually
 lands).
 
-## 4. Sensitive-Info Obfuscation for Cloud Models
+## 4. Sensitive-Info Obfuscation
 
 **Problem.** Public models must never see credentials, addresses, health
-or financial data. Local models need none of this — so the feature is
-"when the resolved provider is remote, redact."
+or financial data — and the line is not "local vs remote". It is _who
+receives the data_. An agent on the same LAN is local and still a
+recipient you may not want reading your payroll; a hosted model reached
+through your own proxy is remote and still yours. So the control we
+expose is the user's intent toward the destination, never an inference
+drawn from an IP address.
+
+**The switch.** `Hide sensitive information`, on the provider — one
+checkbox that says what it does. Checked by default for every public
+provider; whether it also starts checked for user-added endpoints (making
+redaction opt-out everywhere) is the open call. `Spec::is_local` stays
+exactly what it is today: the hint that shows the Base URL field.
 
 **Design sketch.** A reversible tokenize pass on every outbound request
-when the resolved provider is remote: detect → tokenize → send;
-detokenize at the harness boundaries (display, tool execute, tool
-output inbound), never in the model. Detection stacks deterministic
-shape+checksum checks, a user-seeded entity registry, provenance marks,
-and an optional local-NER net; over-redaction is the accepted bias
-because detokenize restores truth everywhere the user can see. Full
-design: `docs/roadmap/REDACTION.md`.
+whose provider has the switch on: detect → tokenize → send; detokenize at
+the harness boundaries (display, tool execute, tool output inbound),
+never in the model. Detection stacks deterministic shape+checksum checks,
+a user-seeded entity registry, provenance marks, and an optional local-NER
+net; over-redaction is the accepted bias because detokenize restores truth
+everywhere the user can see. Full design: `docs/roadmap/REDACTION.md`.
 
-**Dependency:** profile model bindings (§1) decide when this runs; item 3
-decides what's worth protecting on disk instead.
+**Dependency:** profile model bindings (§1) decide which provider a turn
+uses, and that provider carries the switch; item 3 decides what's worth
+protecting on disk instead.
 
 ## 5. Privacy level — one slider over §3–4
 
@@ -116,7 +126,7 @@ decides what's worth protecting on disk instead.
 | Level                                      | Posture                                                                                         | Threat it answers                     |
 | ------------------------------------------ | ----------------------------------------------------------------------------------------------- | ------------------------------------- |
 | **L0 — local encryption only**             | §3 sealing on; nothing obfuscated in transit or on screen                                       | Stolen disk / other accounts          |
-| **L1 — + obfuscation to public providers** | §4 round-trip on for remote providers; chat log stores _redacted_ text                          | Provider-side exposure                |
+| **L1 — + obfuscation to untrusted receivers** | §4 round-trip on wherever the provider's switch is on; chat log stores _redacted_ text | Receiver-side exposure |
 | **L2 — + hidden on screen**                | Console renders obfuscated (tokens/blurs); click-to-reveal per item                             | Shoulder-surfing, screenshots, shares |
 | **L3 — + reveal requires passkey**         | Every reveal is a Windows Hello event; screenshots capture only obfuscated text; reveals logged | Unattended machine                    |
 
@@ -126,9 +136,9 @@ decides what's worth protecting on disk instead.
   _render_ time instead.
 - Global default; a profile can ratchet up but never down
   (`profile.privacy_level >= global`).
-- Local-model sessions skip §4 at every level (nothing leaves the
-  machine); L2+ still applies to rendering — the threat there is eyes,
-  not providers.
+- §4 runs wherever the provider's `Hide sensitive information` switch is
+  on — a LAN endpoint is a recipient like any other. L2+ still applies to
+  rendering regardless: the threat there is eyes, not receivers.
 - L3 reveal is per-item, not per-session: one Hello prompt per reveal
   is the point.
 
@@ -191,9 +201,11 @@ Dependency spine: **A → B → C → D → E → F → G**. Redaction first
 items hang off them); sealing before self-authored skills so the trust
 story stays coherent.
 
-### Phase A — Cloud redaction (§4)
+### Phase A — Sensitive-info redaction (§4)
 
-- [ ] Provider registry: resolve `kind = local | remote` per model — single trigger source
+- [ ] Trust registry: `hide_sensitive` on the resolved provider — single
+      trigger source, checked by default for public providers; an endpoint
+      address is never a privacy decision (`is_local` stays a Base-URL hint)
 - [ ] `redact.rs` layer 1: Luhn+BIN cards, IBAN mod-97, ABA mod-10, SWIFT, SSN validity, crypto checksums, API-key shapes/JWT, email/phone, `%USERPROFILE%` paths → `⟦CLASS_N⟧` tokens
 - [ ] Session-scoped token map; stream-safe detokenize (placeholder boundaries across SSE chunks)
 - [ ] Detokenize boundaries: display, tool/action execute, tool-output inbound redaction
