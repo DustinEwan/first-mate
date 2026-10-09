@@ -11,8 +11,8 @@ Windows applications.
 - The user asks to click, type, navigate, or read anything in a GUI app.
 - The user asks for a screenshot or for what an app is showing.
 - You need to verify the visible result of an action.
-- **A surface for the task already exists — use that surface instead of
-  writing a script for it.** Open the surface with `start <uri>` (cmd shell),
+- **A surface for the task already exists. Use that surface instead of writing
+  a script for the task.** Open the surface with `start <uri>` (cmd shell),
   then drive it with the commands below:
   - The web: `start <url>` opens the default browser. Read pages by
     screenshot, because you can see the image. Search through the address
@@ -62,7 +62,7 @@ winapp ui send-keys ctrl+t -a <app-name>
 winapp ui send-keys --target <selector> --via send-input --verbatim "literal text" -a <app-name>
 winapp ui send-keys enter -a <app-name>
 ```
-Named keys are enter, tab, and esc. A combo takes the form ctrl+shift+t. To
+Named keys are enter, tab, and esc. Write a combo as ctrl+shift+t. To
 TYPE literal text into a search box or an address bar, use `--verbatim` with
 `--via send-input`. Then send enter as a separate command.
 
@@ -76,12 +76,12 @@ winapp ui set-value <selector> <value> -a <app-name>
 winapp ui screenshot -a <app-name>
 ```
 The image attaches automatically right after the command. Look at it to judge
-UI state or to verify your last action. It also shows what the UIA tree does
-not expose.
+UI state or to verify your last action. The image also shows what the UIA tree
+does not expose.
 
 ## Cost (measured on this machine)
 Every winapp call pays a cold start (~0.1 s) and then walks the target's UIA
-tree from scratch. Nothing is cached between calls.
+tree from scratch. winapp caches nothing between calls.
 
 - Small apps: `inspect --depth 2` ≈ 0.3 s, `send-keys` ≈ 0.25 s.
 - Browsers (Zen/Firefox/Chromium): ≈ 2 s even at `--depth 2`, and ≈ 24 s at
@@ -102,26 +102,25 @@ On browsers, prefer `screenshot` over `inspect` and `click`. Keep
   `winapp ui <command> --help` once, then use that exact syntax. Never guess a
   second time.
 - Element selectors go stale after the UI changes. Re-inspect before you click
-  by slug. Never click the same selector from an older inspect result twice.
+  by slug. Do not click twice with a selector from an older inspect result.
 
 ## Input injection contract
 - BEFORE `click` or `send-keys --via send-input`, run `winapp ui focus
   <selector> -a <app>`. `focus` activates the window, focuses the element, and
-  verifies the foreground result. It returns an error when Windows refuses, so
-  you learn that before you act, not after.
+  verifies the foreground result. `focus` returns an error when Windows refuses,
+  so you learn of the refusal before you act, not after.
 - `click` refuses to run unless the target window is foreground. `focus` the
-  target. Never activate First Mate's own window to get around that check.
+  target. Never activate First Mate's own window to satisfy that check.
 - The `send-keys` default transport (`post-message`) is window-scoped and needs
   no foreground for classic Win32 and WinForms apps. XAML, WinUI, and UWP apps
   have no such window and IGNORE `post-message` with no error. Accelerators
   such as ctrl+t fire only through `--via send-input`. That transport is
-  OS-wide, so foreground is mandatory with it.
-- `set-value` needs no foreground. Prefer it over typing into a text box. Type
-  only when the control rejects ValuePattern.
+  OS-wide, so the target window must be foreground.
+- `set-value` needs no foreground. Prefer it over typing into a text box. Only
+  when the control rejects ValuePattern, type the text.
 - If keystrokes "didn't land", do NOT retype. Run `get-focused`, or run
   `list-windows`, which marks the foreground window. Fix the focus, then send
-  ONCE. Retyping after a send that landed only partly is how text gets
-  duplicated.
+  ONCE. Retyping after a partial send duplicates the text.
 
 ## Workflow
 1. Desktop app: `inspect` with `--depth` to find selectors. Browser: start
@@ -131,11 +130,11 @@ On browsers, prefer `screenshot` over `inspect` and `click`. Keep
    screenshot of a browser.
 
 ## Bootstrap
-The app only checks for this CLI at startup (`winapp --version`). It never
+The app only checks for this CLI at startup (`winapp --version`). The app never
 installs anything unless the user asks. The Setup wizard offers the `winget`
 command below on the user's behalf. If commands report winapp missing, the CLI
-is not installed. Point the user at Setup → Install winapp CLI. Run the command
-yourself only after the user agrees:
+is not installed. Point the user at Setup → Install winapp CLI. Only after the
+user agrees, run the command yourself:
 ```
 winget install Microsoft.WinAppCli --source winget --accept-package-agreements --accept-source-agreements --disable-interactivity
 ```

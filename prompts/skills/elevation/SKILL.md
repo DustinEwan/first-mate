@@ -8,18 +8,19 @@ description: "Administrator rights the user grants and can revoke — a persiste
 You cannot become admin on your own. Windows fixes your access token when the
 process starts, and a process cannot change its own token. What exists instead
 is a path the user controls: `elevate` shows the user a real UAC prompt. If
-the user approves, an **elevated PowerShell session** starts. It is your
-persistent shell with admin rights, and `run_elevated` runs commands in it.
+the user approves, an **elevated PowerShell session** starts. That session is
+your persistent shell with admin rights. `run_elevated` runs commands in that
+session.
 The user sees "Elevated Control" lit in the chat window for as long as it is
-ON. The user can end it with one click, and the session ends when the app
-exits.
+ON. The user can end that session with one click, and the session ends when the
+app exits.
 
 ## Rules
 - **Ask late, release early.** Load this skill and call `elevate` only when
   the task genuinely needs admin, not when it might. The moment the admin part
   is done, call `delevate`. Never hold elevation between tasks.
-- **A declined prompt is an answer.** `elevate` failing means the user said
-  No, or the prompt could not appear. Do NOT retry, and do not rephrase and
+- **A declined prompt is an answer.** `elevate` fails when the user says No, or
+  when the prompt cannot appear. Do NOT retry, and do not rephrase and
   ask again. Tell the user what the task needs admin for, and let the
   conversation move on.
 - **Never spawn your own elevated processes.** No `Start-Process -Verb
@@ -27,14 +28,14 @@ exits.
   path. The user cannot see an ad-hoc elevated process, and this app forbids
   work the user cannot see.
 - **Prefer the surface anyway.** If the job has a first-party UI (Settings
-  pages, Device Manager, installer wizards), use that UI. It prompts the user
-  itself, in the open. Elevation is for admin work with no UI worth driving:
+  pages, Device Manager, installer wizards), use that UI. That UI prompts the
+  user itself, in the open. Elevation is for admin work with no UI worth driving:
   batch registry edits, service config, and scheduled tasks.
 
 ## Using the session
-`run_elevated` takes PowerShell statements. The session has the same
+`run_elevated` accepts PowerShell statements. The session has the same
 persistent semantics as `shell="powershell"`: `$vars`, functions, and cwd
-carry across calls. There is no `shell` parameter; the language is always
+persist across calls. There is no `shell` parameter; the language is always
 PowerShell.
 
 ```
@@ -46,12 +47,12 @@ Set-Service SomeService -StartupType Disabled; Stop-Service SomeService
 ```
 
 While the session is ON, commands whose first token is `winapp` route through
-it automatically. Your `winapp` UI control then reaches elevated windows, such
-as installer wizards and Device Manager. Those windows refused your input
-before the session existed. No special syntax.
+the session automatically. Your `winapp` UI control then reaches elevated windows.
+Such windows include installer wizards and Device Manager. Those windows refused
+your input before the session existed. You need no special syntax for that.
 
 ## What the user sees
-- UAC prompt on `elevate`. The user answers it, and you wait.
+- UAC prompt on `elevate`. The user answers the prompt, and you wait.
 - Elevated Control indicator plus the command count in the chat window while
   ON.
 - Every elevated command in the log.

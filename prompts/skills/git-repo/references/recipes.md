@@ -26,8 +26,8 @@ git -C <repo> blame -L 40,60 -- src/main.rs
 git -C <repo> reflog -20
 ```
 
-A reflog entry is recoverable with `git -C <repo> show <sha>`. Suggest
-restoring it only after the user confirms.
+Recover a reflog entry with `git -C <repo> show <sha>`. Only after the user
+confirms, suggest that recovery.
 
 ## Is the tree clean enough to switch branches
 

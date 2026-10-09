@@ -23,9 +23,9 @@ git -C C:\repos\firstmate branch --show-current
 ## Rules
 - If `git` is not on PATH (`where git` finds nothing), Windows git is NOT
   installed. Say so and stop. Do NOT parse `.git` internals yourself.
-- NEVER run mutating commands (`commit`, `push`, `reset`, `checkout`, `clean`)
-  unless the user explicitly asked for that exact action.
-- Long output: cap it (`-10`, `--stat`) or pipe to `findstr /i <term>`.
+- Unless the user explicitly asked for that exact action, NEVER run a mutating
+  command (`commit`, `push`, `reset`, `checkout`, `clean`).
+- Long output: cap the size (`-10`, `--stat`) or pipe to `findstr /i <term>`.
 - To answer "Where are my repos?", call `search_files` for a `.git` directory
   name under the likely roots. Do not walk the whole disk.
 

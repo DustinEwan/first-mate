@@ -5,7 +5,7 @@ description: Machine inventory through the terminal — hardware, drivers, devic
 
 # PowerShell for Inventory
 
-Use the terminal for the jobs terminals are good at. That means finding out
+Use the terminal for the jobs terminals are good at. Those jobs are finding out
 what IS on the machine, and batch work that has no UI. `run_command` with
 `shell="powershell"` is ONE persistent session. `$vars`, functions, and cwd
 persist across calls. The command text IS PowerShell. NEVER wrap it in
@@ -45,5 +45,5 @@ task. Open the surface and let Windows ask the user (winapp).
 - Wide output: use `Format-Table -AutoSize | Out-String -Width 200`, or
   select only the properties you need.
 - Multi-line scripts, functions, and heredocs (`@'...'@`) persist in the
-  session. Define one, then reuse it across calls.
-- Processes: `tasklist | findstr /i <name>` beats pulling the full list.
+  session. Define a script once, then reuse that script across calls.
+- Processes: run `tasklist | findstr /i <name>`. Do not pull the full list.

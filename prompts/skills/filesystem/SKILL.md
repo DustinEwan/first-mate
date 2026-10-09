@@ -15,7 +15,7 @@ patterns it duplicates, such as `dir`, `type`, and `findstr`.
 ## Tools
 - `read_file(path, offset?, limit?)` — numbered lines (`N:TEXT`) with a
   `[path#TAG]` snapshot header. Use `offset` and `limit` to window a big
-  file. The footer names the next offset. Binary files are refused.
+  file. The footer names the next offset. The tool refuses binary files.
 - `edit_file(path, tag, ops)` — line-anchored edits against a snapshot you
   have read. `tag` is the `TAG` from that file's `[path#TAG]` header. A stale
   tag means the file changed under you. Re-read, re-anchor, and retry.
@@ -28,8 +28,8 @@ patterns it duplicates, such as `dir`, `type`, and `findstr`.
   the new `[path#TAG]`. Line numbers shift, so re-read before another edit.
 - `write_file(path, content, tag?)` — create a new file, or replace an
   existing one ENTIRELY. Overwriting a file you have read requires its
-  current `tag`. A file you never read is refused, because you may be about
-  to destroy content you still need. Read it first.
+  current `tag`. The tool refuses a file you never read, because you may be
+  about to destroy content you still need. Read that file first.
 - `list_dir(path)` — the entries, with directories ending in `/`.
 - `search_files(pattern, root)` — recursive, case-insensitive name substring
   match, capped at 200 paths. ALWAYS pass a narrow `root`, for example
@@ -44,10 +44,9 @@ patterns it duplicates, such as `dir`, `type`, and `findstr`.
   numbers.
 - To read many files or grep content, use `run_command` with
   `findstr /s /i /m "term" *.md` — `search_files` matches names only.
-- To filter processes, `run_command` with `tasklist | findstr /i <name>`
-  beats pulling the whole `list_processes()` CSV.
+- To filter processes, run `tasklist | findstr /i <name>` through `run_command`.
+  Do not pull the whole `list_processes()` CSV.
 - Writing into another user's profile or `C:\Program Files` needs elevation.
-  A permission error means stop and report. Do not retry.
-- Deleting: there is no delete tool. Use `del` or `Remove-Item` through
-  `run_command` only when the user explicitly asked to delete those exact
-  files.
+  When a write fails with a permission error, stop and report. Do not retry.
+- Deleting: no delete tool exists. Only when the user explicitly asks to delete
+  those exact files, use `del` or `Remove-Item` through `run_command`.
