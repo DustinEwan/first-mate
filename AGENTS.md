@@ -59,7 +59,7 @@ behavior. Most work in this repo is writing content rather than writing code.
 - **Prose follows the tone rules everywhere.** These rules govern every
   sentence in a comment, a doc, a prompt, and a commit body.
 
-  - Prose is written in Simplified Technical English.
+  - Prose shall be written in Simplified Technical English.
   - A sentence states one fact in at most 20 words.
   - A sentence is active, and it carries an explicit subject and verb.
   - One verb describes each action.
@@ -74,9 +74,9 @@ behavior. Most work in this repo is writing content rather than writing code.
     constraint, and the observable result.
   - Writing is concrete: the exact file, symbol, API, state field, edge case,
     and the check that proves the claim.
-  - Idiomatic shorthand is replaced with the mechanism it stood for.
-  - Ceremony, hedging, filler, and marketing are deleted. The subject, the word
-    "because", and any clause that limits a claim are never deleted.
+  - Idiomatic shorthand shall be replaced with the mechanism it stood for.
+  - Ceremony, hedging, filler, and marketing shall be deleted. The subject, the
+    word "because", and any clause that limits a claim shall never be deleted.
   - The deletions in checks 1 to 3 apply to docs and prompts, not to comments
     alone.
 
