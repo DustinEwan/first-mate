@@ -44,7 +44,7 @@ behavior. Most work in this repo is content, not code.
   3. No "what" comments. The reader of a comment knows the language, the
      framework, and the neighbouring files. If that reader understands the code
      without the comment, delete the comment.
-  4. Strictly why, and only what no type or test can carry. If a comment states
+  4. Strictly why, and only what no type or test can assert. If a comment states
      a contract, put the contract in a type. If a comment states a constraint,
      put the constraint in a test or an assertion. Keep a comment only for a
      reason no type can hold. No test can assert that reason. Write a reason
@@ -54,7 +54,7 @@ behavior. Most work in this repo is content, not code.
      comment that survives checks 1 to 4.
 
   If you cannot name the decision the comment protects, delete the comment. A
-  type or a test holds most such decisions.
+  type or a test records most such decisions.
 
 - **Prose rules apply everywhere.** Apply these rules to every sentence in a
   comment, a doc, a prompt, and a commit body. The section "Simplified
@@ -79,19 +79,25 @@ behavior. Most work in this repo is content, not code.
     the word "because", or a clause that limits a claim.
   - Apply checks 1 to 3 to docs and prompts, not to comments alone.
 
+- **Name the operation, and name the performer.** Put the entity that performs
+  the action in the subject. If the subject cannot perform the verb, the
+  sentence names a container, not an actor. Move the actor into the subject, or
+  say where the content lives. `The provider row carries a checkbox` fails,
+  because a row shows nothing. The Settings UI shows the checkbox.
+
 - **Gates are not optional.** Run `cargo test` and
   `cargo clippy --all-targets -- -D warnings` for every backend change. Run
   `npm run lint` for every frontend change. That script runs eslint and
   prettier. Follow Conventional Commits in every commit. `.githooks/commit-msg`
-  checks that. Write in the commit body what is true after the change. Do not
-  narrate how you found the problem in the commit body.
+  checks the message format. Write in the commit body what is true after the
+  change. Do not narrate how you found the problem in the commit body.
 - **Proof is what the running app shows.** Do not report a change as done until
   the running app shows the effect. Accept a screenshot, a process state, or a
   log line as proof. A clean build is not proof. A passing mock is not proof.
 
 ## Simplified Technical English rules
 
-ASD-STE100 Issue 9 Part 1 holds these rules:
+ASD-STE100 Issue 9 Part 1 states these rules:
 `https://www.asd-ste100.org/assets/files/ASD-STE100_ISSUE9.pdf`. The list cites
 the rules that decided wording in this repo. No tool checks these rules. A
 reviewer reads the prose.
@@ -129,7 +135,7 @@ reviewer reads the prose.
 - Colon and list length. Each item after a colon counts as a new sentence. The
   limit before the colon is 20 words in an instruction, and 25 words in
   description.
-- Part 2 Controlled dictionary. Part 1 holds the rules. Part 2 holds the
+- Part 2 Controlled dictionary. Part 1 states the rules. Part 2 states the
   approved words. Rule 1.8 accepts technical nouns from the subject field.
 
 ## Layout
