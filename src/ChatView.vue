@@ -515,25 +515,39 @@ function openSettings() {
   invoke("open_settings").catch((e) => console.error("open settings failed", e));
 }
 
-// Auto-scroll to bottom when new messages arrive. DynamicScroller measures
-// item sizes asynchronously, so right after a bulk load (opening a
-// conversation) scrollHeight still reflects estimates: jump to the last
-// item via the scroller API, then re-pin once real sizes settle.
+// Auto-scroll to bottom when new messages arrive. DynamicScroller
+// measures item sizes asynchronously: right after a bulk load (opening
+// a conversation, or the startup load while the window is still hidden)
+// scrollHeight is a small estimate that momentarily "settles" at the
+// estimated bottom long before real sizes land. So pin every frame
+// until scrollHeight has been stable for a while AND we are at the
+// bottom — touching the bottom once is not proof of arrival.
+let userScrollAbort = false;
 function scrollToBottom() {
   nextTick(() => {
     const el = scrollerRef.value?.$el as HTMLElement | undefined;
     if (!el) return;
     scrollerRef.value?.scrollToItem?.(messages.value.length - 1);
-    el.scrollTop = el.scrollHeight;
-    requestAnimationFrame(() => {
+    userScrollAbort = false;
+    let tries = 0;
+    let stable = 0;
+    let lastSh = -1;
+    const pin = () => {
       el.scrollTop = el.scrollHeight;
-      setTimeout(() => {
-        el.scrollTop = el.scrollHeight;
-      }, 150);
-    });
+      stable = el.scrollHeight === lastSh ? stable + 1 : 0;
+      lastSh = el.scrollHeight;
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= 2;
+      if (!userScrollAbort && !(stable > 20 && atBottom) && ++tries < 600) {
+        requestAnimationFrame(pin);
+      }
+    };
+    pin();
   });
 }
 watch(messages, scrollToBottom, { deep: true });
+// A wheel event means the user is taking over the scroll position;
+// stop pinning mid-settle rather than dragging them back down.
+window.addEventListener("wheel", () => (userScrollAbort = true));
 
 // Window-scoped shortcuts: Escape dismisses (wizard is Skip/Finish only),
 // Ctrl+N starts a conversation, Ctrl+Shift+N a temporary one.
