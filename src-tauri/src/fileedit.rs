@@ -46,10 +46,9 @@ pub(crate) fn line_diff(prev: &str, now: &str) -> String {
     out
 }
 
-/// Content hash of a file snapshot (FNV-1a, 4 hex chars). `read_file`
-/// stamps it on its output; `edit_file`/`write_file` demand it back, so an
-/// edit anchored to stale line numbers is rejected instead of silently
-/// corrupting the file.
+/// Content hash of a file snapshot (FNV-1a, 4 hex chars). An edit must carry
+/// the tag that `read_file` emitted for the same bytes. An edit anchored to
+/// stale line numbers is rejected, not applied blindly.
 pub(crate) fn snapshot_tag(bytes: &[u8]) -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in bytes {
@@ -58,8 +57,9 @@ pub(crate) fn snapshot_tag(bytes: &[u8]) -> String {
     format!("{:04X}", ((h >> 32) as u32 & 0xFFFF) as u16)
 }
 
-/// Last tag the model actually SAW per path (process-wide: one user, one
-/// app). Guards edits against files that changed since the model's read.
+/// Last tag the model saw per path. One process serves one user and one app,
+/// so a process-wide map is sufficient. The map guards edits against files
+/// that changed since the model read them.
 static SNAPSHOT_TAGS: std::sync::OnceLock<
     std::sync::Mutex<std::collections::HashMap<String, String>>,
 > = std::sync::OnceLock::new();
@@ -93,7 +93,8 @@ pub(crate) enum EditOp {
 }
 
 impl EditOp {
-    /// Inclusive line span the op touches (inserts anchor at their gap).
+    /// Inclusive line span the op touches. An insert anchors a gap and
+    /// touches one line.
     fn span(&self) -> (usize, usize) {
         match self {
             EditOp::Replace { lo, hi, .. } | EditOp::Cut { lo, hi } => (*lo, *hi),
@@ -111,8 +112,8 @@ fn parse_line(s: &str, op: &str) -> Result<usize, String> {
         .map_err(|_| format!("op '{op}': '{s}' is not a line number"))
 }
 
-/// Parse the newline-separated `ops` payload. PUT headers end with ':' and
-/// take the following '+'-prefixed lines as their verbatim body.
+/// PUT headers end with ':' and take the following '+'-prefixed lines as
+/// their verbatim body.
 pub(crate) fn parse_edit_ops(ops: &str) -> Result<Vec<EditOp>, String> {
     let lines: Vec<&str> = ops.split('\n').collect();
     let mut out = Vec::new();
@@ -179,9 +180,9 @@ pub(crate) fn parse_edit_ops(ops: &str) -> Result<Vec<EditOp>, String> {
     Ok(out)
 }
 
-/// Validate against `total` lines, then apply bottom-up so earlier line
-/// numbers stay valid while later ops are applied. Returns per-op summaries
-/// plus a unified-style diff (`-`/`+` lines) in original file order.
+/// Ops apply bottom-up, so an earlier line number stays valid while later
+/// ops are applied. Returns per-op summaries plus a unified-style diff
+/// (`-`/`+` lines) in original file order.
 pub(crate) fn apply_edit_ops(
     lines: &mut Vec<String>,
     ops: &[EditOp],
@@ -246,7 +247,8 @@ pub(crate) fn apply_edit_ops(
     Ok((summaries, diff))
 }
 
-/// A fence long enough to survive any backtick run inside `body`.
+/// A fence longer than any backtick run inside `body`, so a nested code
+/// fence cannot close the block early.
 pub(crate) fn fence_for(body: &str) -> &'static str {
     if body.contains("```") {
         "````"
@@ -295,8 +297,9 @@ pub(crate) fn result_tag(result: &str) -> Option<String> {
     (t.len() == 4).then_some(t)
 }
 
-/// The body of the first ``` ```diff ``` fence in `s` - the diff the
-/// `edit_file` result already carries; the ledger reuses it verbatim.
+/// The body of the first ``` ```diff ``` fence in `s`. The `edit_file`
+/// result already carries that diff, and the ledger reuses the diff
+/// verbatim.
 pub(crate) fn extract_diff_fence(s: &str) -> Option<String> {
     let marker = "```diff\n";
     let start = s.find(marker)? + marker.len();

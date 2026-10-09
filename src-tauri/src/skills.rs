@@ -1,12 +1,12 @@
 use crate::log::home_dir;
 
-/// Prompt content resolution — content is layered, never compiled in. For a
-/// file by name (`AGENTS.md`, `COMPACT.md`):
-/// - dev repo layout (`../src-tauri` present): the working copy wins, it
-///   is the content under test (`../prompts/<name>`)
-/// - installed: `~/.firstmate/<name>` OVERRIDES the packaged baseline
-///   (repo prompts/<name>, bundled next to the exe)
-/// - baseline fallbacks: cwd and the exe dir / its parent
+/// Prompt content lookup order. The first existing file wins, so this
+/// order is the override contract:
+/// - Dev repo layout (`../src-tauri` present): `../prompts/<name>` is the
+///   content under test and wins.
+/// - Installed: `~/.firstmate/<name>` OVERRIDES the packaged baseline.
+/// - Baseline: cwd, the exe dir, then the exe parent. The packaged copy of
+///   `prompts/<name>` sits next to the exe.
 fn prompt_path(name: &str) -> Option<std::path::PathBuf> {
     let dev = std::path::PathBuf::from(format!("../prompts/{name}"));
     if dev.is_file() && std::path::Path::new("../src-tauri").is_dir() {
@@ -28,33 +28,32 @@ fn prompt_path(name: &str) -> Option<std::path::PathBuf> {
     candidates.into_iter().find(|p| p.is_file())
 }
 
-/// A prompt content file's text, or `None` when no layer carries one. The
-/// binary ships NO prompt text, so a missing file means the behaviour that
-/// needs it is unconfigured — never that a compiled-in copy stood in.
+/// `None` when no layer carries the file. The binary ships NO prompt text,
+/// so a missing file means the behaviour that needs it is unconfigured.
 pub(crate) fn prompt_content(name: &str) -> Option<String> {
     prompt_path(name)
         .and_then(|p| std::fs::read_to_string(p).ok())
         .filter(|s| !s.trim().is_empty())
 }
 
-/// The system prompt is content, not code: it is AGENTS.md, discovered by
-/// `prompt_path`. With no AGENTS.md anywhere, the agent runs on the skill
-/// advertisements alone.
+/// The system prompt is AGENTS.md content, not a compiled-in string. With
+/// no AGENTS.md anywhere this returns an empty string, and the agent runs
+/// on the skill advertisements alone.
 #[tauri::command]
 pub(crate) fn get_system_prompt() -> String {
     prompt_content("AGENTS.md").unwrap_or_default()
 }
 
-/// Skills advertised to the frontend for system-prompt injection (stage 1
-/// of progressive disclosure, docs/SKILLS.md).
+/// Skills for the frontend to inject into the system prompt. This is stage
+/// 1 of progressive disclosure; see `docs/SKILLS.md`.
 #[tauri::command]
 pub(crate) fn list_skills() -> Vec<SkillInfo> {
     discover_skills()
 }
 
-/// A skill advertised to the model: name + description from SKILL.md
-/// frontmatter (Agent Skills spec, see docs/SKILLS.md). Tool availability
-/// is not advertised — it is revealed when the skill is loaded.
+/// A skill advertised to the model before the model loads it. Tool
+/// availability is absent by design: the tool set is revealed when the
+/// skill loads. Spec and design: `docs/SKILLS.md`.
 #[derive(serde::Serialize)]
 pub(crate) struct SkillInfo {
     pub(crate) name: String,
@@ -62,14 +61,14 @@ pub(crate) struct SkillInfo {
 }
 
 /// Directories scanned for `<skill>/SKILL.md`, highest precedence first.
-/// `discover_skills`/`skill_dir` resolve name clashes first-root-wins, so
-/// this ordering IS the override semantics:
-/// - dev repo layout (`../src-tauri` present): the working copy is the
-///   content under test and wins outright
-/// - `~/.firstmate/skills`: the user directory OVERRIDES packaged skills
-///   by name and EXTENDS the set with new ones
-/// - packaged baseline: `skills/` next to the exe (bundle resource) plus
-///   cwd and exe-parent fallbacks
+/// `discover_skills` and `skill_dir` resolve name clashes first-root-wins,
+/// so this order is the override contract:
+/// - Dev repo layout (`../src-tauri` present): the working copy is the
+///   content under test and wins.
+/// - `~/.firstmate/skills` OVERRIDES packaged skills by name and adds new
+///   ones.
+/// - Packaged baseline: `skills/` next to the exe, plus cwd and the exe
+///   parent fallbacks.
 fn skill_roots() -> Vec<std::path::PathBuf> {
     let mut candidates: Vec<std::path::PathBuf> = Vec::new();
     if std::path::Path::new("../src-tauri").is_dir() {
@@ -95,13 +94,10 @@ fn skill_roots() -> Vec<std::path::PathBuf> {
     roots
 }
 
-/// Parse `---` frontmatter. Returns (name, description, body). Only the
-/// two required Agent Skills spec fields matter to us — both are what
-/// stage 1 advertises. Any other frontmatter key (license, metadata,
-/// compatibility, ...) belongs to the spec and other clients; we ignore
-/// it. Values may be YAML double- or single-quoted (descriptions
-/// legitimately contain colons); quotes are stripped and inner quotes
-/// unescaped.
+/// Parse `---` frontmatter into (name, description, body). Other keys
+/// (license, metadata, compatibility) belong to the Agent Skills spec and
+/// to other clients, so this parser ignores them. Descriptions legitimately
+/// contain colons, so values may be YAML single- or double-quoted.
 pub(crate) fn parse_frontmatter(md: &str) -> (Option<String>, Option<String>, String) {
     let Some(rest) = md
         .strip_prefix("---")
@@ -126,8 +122,8 @@ pub(crate) fn parse_frontmatter(md: &str) -> (Option<String>, Option<String>, St
     (name, description, body)
 }
 
-/// Strip YAML quoting from a single-line scalar: `"..."` (backslash
-/// escapes) or `'...'` (doubled-quote escapes).
+/// Strip YAML quoting from a single-line scalar. `"..."` uses backslash
+/// escapes; `'...'` uses doubled quotes.
 fn unquote(v: &str) -> String {
     if let Some(s) = v.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
         s.replace("\\\"", "\"").replace("\\\\", "\\")
@@ -187,9 +183,9 @@ pub(crate) fn skill_dir(name: &str) -> Option<std::path::PathBuf> {
     None
 }
 
-/// The skill's instructions: SKILL.md minus frontmatter. This is what the
-/// model needs in context to use a capability — the fact that a skill was
-/// loaded is not the capability.
+/// The skill instructions: SKILL.md minus frontmatter. The loaded flag is not
+/// the capability. The model needs this body in context to use the tools the
+/// skill discloses.
 pub(crate) fn skill_body(name: &str) -> Option<String> {
     let dir = skill_dir(name)?;
     let md = std::fs::read_to_string(dir.join("SKILL.md")).ok()?;
@@ -198,8 +194,9 @@ pub(crate) fn skill_body(name: &str) -> Option<String> {
     (!body.is_empty()).then_some(body)
 }
 
-/// Resolve `"<skill>/<relative/path>"` to a real file, refusing anything
-/// that escapes the skill directory (traversal or symlink tricks).
+/// Resolve `"<skill>/<relative/path>"` to a real file. Paths that escape
+/// the skill directory are refused, including `..` traversal and symlink
+/// escapes.
 pub(crate) fn resolve_skill_resource(path: &str) -> Result<std::path::PathBuf, String> {
     if path.contains("..") {
         return Err("path traversal not allowed".into());
@@ -232,7 +229,6 @@ mod tests {
         assert_eq!(name.as_deref(), Some("demo"));
         assert_eq!(desc.as_deref(), Some("A demo skill."));
         assert_eq!(body, "# Body\nDo things.\n");
-        // No frontmatter: body passes through untouched.
         let (n2, d2, b2) = parse_frontmatter("plain text");
         assert!(n2.is_none() && d2.is_none());
         assert_eq!(b2, "plain text");
@@ -240,8 +236,8 @@ mod tests {
 
     #[test]
     fn quoted_descriptions_unescape() {
-        // Descriptions legitimately contain colons (`start ms-settings:`)
-        // and quotes; the YAML-valid quoted form must parse to plain text.
+        // Real descriptions contain colons and quotes. A YAML-quoted value
+        // must parse to plain text.
         let md = "---\nname: demo\ndescription: \"Open `start ms-settings:apps`, the user's \\\"main\\\" panel\"\n---\n\nBody\n";
         let (_, desc, _) = parse_frontmatter(md);
         assert_eq!(
@@ -252,7 +248,8 @@ mod tests {
 
     #[test]
     fn repo_skill_is_discoverable_and_loadable() {
-        // cargo test runs with cwd = src-tauri, so ../prompts/skills is the repo root.
+        // cargo test runs with cwd = src-tauri, so ../prompts/skills is
+        // the repo skill root.
         let skills = discover_skills();
         let git = skills.iter().find(|s| s.name == "git-repo").expect("git-repo skill");
         assert!(git.description.contains("git repositories"));
@@ -265,9 +262,7 @@ mod tests {
 
     #[test]
     fn winapp_skill_is_discoverable_with_cost_guidance() {
-        // winapp is a skill, not prompt-hardcoded: discovery must find it and
-        // the body must carry the measured latency guidance. It is pure
-        // behavior: it enables no tools (it drives run_command).
+        // winapp enables no tools of its own; it drives `run_command`.
         let skills = discover_skills();
         let win = skills
             .iter()
@@ -283,8 +278,8 @@ mod tests {
 
     #[test]
     fn powershell_skill_is_discoverable() {
-        // The terminal hand: inventory craft as a skill, not prompt text.
-        // Pure behavior: run_command does the work; the skill is craft.
+        // powershell enables no tools of its own; `run_command` does the
+        // work.
         let skills = discover_skills();
         let ps = skills
             .iter()
@@ -303,9 +298,9 @@ mod tests {
 
     #[test]
     fn system_prompt_comes_from_agents_md_not_the_binary() {
-        // cargo test runs with cwd = src-tauri (dev layout): the prompt is
-        // EXACTLY the repo file — the binary carries no prompt text, so
-        // any deviation means content crept into code.
+        // cargo test runs with cwd = src-tauri (dev layout). The binary
+        // carries no prompt text, so the prompt must equal the repo file
+        // byte for byte.
         let p = get_system_prompt();
         assert_eq!(p, std::fs::read_to_string("../prompts/AGENTS.md").unwrap());
         assert!(p.contains("file://"), "prompt must come from AGENTS.md");
@@ -313,10 +308,9 @@ mod tests {
 
     #[test]
     fn skill_root_precedence_is_dev_then_user_then_packaged() {
-        // First-root-wins name resolution makes this ordering the override
-        // contract: in the dev layout the repo working copy must be the
-        // first root, and the user directory must precede any packaged
-        // (exe-dir) root so it can override and extend it.
+        // First-root-wins name resolution makes this order the override
+        // contract. The dev working copy must be first. The user directory must
+        // precede any packaged root.
         let roots = skill_roots();
         assert_eq!(
             roots[0],
@@ -346,7 +340,6 @@ mod tests {
         assert!(resolve_skill_resource("git-repo/../secrets.txt").is_err());
         assert!(resolve_skill_resource("git-repo").is_err());
         assert!(resolve_skill_resource("no-such-skill/references/x.md").is_err());
-        // A real reference file resolves inside the skill dir.
         let f = resolve_skill_resource("git-repo/references/recipes.md").unwrap();
         assert!(f.is_file());
         assert!(f.starts_with(skill_dir("git-repo").unwrap().canonicalize().unwrap()));

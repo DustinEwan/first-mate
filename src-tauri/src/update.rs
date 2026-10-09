@@ -1,11 +1,10 @@
 //! Self-update via tauri-plugin-updater, served from GitHub Releases.
 //!
-//! On launch (after a short delay, so the tray exists) we check
-//! `latest.json`. When an update is found we notify via a toast and enable
-//! the tray menu's "Update" entry (renamed to "Update to X"); clicking it
-//! downloads, installs and restarts. The item is created up front but
-//! disabled — Windows menus mutate unreliably while open, so we only flip
-//! `enabled` and the title, never the item set.
+//! The first check runs on a delay, so the tray menu exists before the
+//! check updates the menu.
+//!
+//! Windows menus mutate unreliably while open, so the code changes only
+//! `enabled` and the title of the tray item. The item set never changes.
 
 use std::time::Duration;
 
@@ -13,12 +12,12 @@ use tauri::{menu::MenuItem, AppHandle, Manager};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_updater::UpdaterExt;
 
-/// Delay before the first update check — keeps launch snappy and lets the
-/// tray menu be built before we touch it.
+/// The first check waits. The tray menu must exist before the check updates
+/// the menu, and startup must stay fast.
 const CHECK_DELAY: Duration = Duration::from_secs(5);
 
-/// The tray "update" item, managed as state so the background check can
-/// enable/rename it when an update is found.
+/// The tray "update" menu item, held as app state. The background check
+/// needs the item to enable and rename the entry.
 pub(crate) struct UpdateItem(pub MenuItem<tauri::Wry>);
 
 pub(crate) fn spawn_check(app: &AppHandle) {
@@ -47,7 +46,8 @@ pub(crate) fn spawn_check(app: &AppHandle) {
     });
 }
 
-/// Tray menu "update" click: spawn the install so the handler returns.
+/// Tray menu "update" click. The install runs in a spawned task so the menu
+/// handler returns at once.
 pub(crate) fn handle_menu_click(app: &AppHandle) {
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {

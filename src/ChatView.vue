@@ -19,9 +19,8 @@ const escapeHtml = (s: string) =>
 const mdParser = new Marked(
   markedHighlight({
     langPrefix: "hljs language-",
-    // Tagged fences only; the return value is inserted verbatim, so the
-    // untagged/unknown path must escape the code itself (empty string would
-    // silently drop it).
+    // marked inserts the return value verbatim. Returning an empty string
+    // in the untagged path would silently drop the code, so escape it.
     highlight(code, lang) {
       if (lang && hljs.getLanguage(lang)) {
         return hljs.highlight(code, { language: lang }).value;
@@ -33,23 +32,24 @@ const mdParser = new Marked(
 mdParser.setOptions({ gfm: true, breaks: true, async: false });
 mdParser.use(
   markedKatex({
-    // Streaming: an unclosed $...$ mid-chunk stays literal text until the
-    // delimiter closes; bad TeX renders in error color instead of throwing.
+    // Stream chunks contain unclosed $...$ until the delimiter arrives.
+    // KaTeX must render bad TeX in error color instead of throwing.
     throwOnError: false,
     output: "html",
   }),
 );
-// Model output is untrusted: sanitize before it reaches v-html. file:// is
-// allowed through on purpose — clicks are intercepted (onContentClick) and
-// opened via the validated open_path command, never by the webview itself.
+// Model output is untrusted: sanitize before v-html. file:// stays
+// allowed because onContentClick intercepts clicks and routes them
+// through the validated open_path command, not the webview.
 const ALLOWED_URI =
   /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|file):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i;
 function renderMd(text: string): string {
   return DOMPurify.sanitize(mdParser.parse(text), { ALLOWED_URI_REGEXP: ALLOWED_URI });
 }
 
-// All link clicks leave the webview: http(s) -> system browser, file:// ->
-// Explorer/default app. Navigation inside the chat window is never allowed.
+// Every link click leaves the webview: http(s) opens the system browser,
+// file:// opens Explorer or the default app. The chat window never
+// navigates itself.
 async function onContentClick(e: MouseEvent) {
   const a = (e.target as HTMLElement).closest("a");
   if (!a) return;
@@ -64,9 +64,8 @@ async function onContentClick(e: MouseEvent) {
 
 const win = getCurrentWindow();
 
-// Structured facts about a tool call, produced by the backend. All glyphs,
-// layout, and wording below are UI presentation; the backend only ships
-// facts (plus a separate model-facing transcript it owns).
+// Backend-produced facts about one tool call. The backend also ships a
+// model-facing transcript; glyphs and wording in this file are UI-only.
 interface ToolReport {
   tool: string;
   subject: string;
@@ -90,14 +89,11 @@ interface Msg {
   id: number;
   text: string;
   cls: string;
-  // Tool ledger bookkeeping: which tool the line belongs to, and whether
-  // its result has landed (pending lines get replaced by the result block).
+  // Pending tool lines are replaced in place when the result arrives.
   toolName?: string;
   done?: boolean;
-  // Structured facts: rendered as sections of one bordered panel.
   tool?: ToolReport;
-  // Compaction bookkeeping: how many rows this divider folded into the brief.
-  // View-only — a reopened conversation shows the divider without a count.
+  // View-only: a reopened conversation shows the divider without a count.
   folded?: number;
 }
 
@@ -167,8 +163,6 @@ function reportFooter(r: ToolReport): string {
   return parts.length ? `${mark} ${parts.join(" · ")}` : mark;
 }
 
-// Provisional facts from call args, shown while the tool runs. The finished
-// report replaces it wholesale.
 const SUBJECT_ARG: Record<string, string> = {
   run_command: "command",
   read_file: "path",
@@ -219,7 +213,6 @@ const inputRef = ref<HTMLElement>();
 let liveMsgId = -1;
 const spinnerChar = ref("⠋");
 
-// Conversation persistence + side panel.
 interface ConvInfo {
   name: string;
   path: string;
@@ -231,15 +224,13 @@ interface ConvMsg {
   report?: ToolReport;
 }
 const panelOpen = ref(false);
-// First-run stepper: shown when no model is configured; tray can reopen it.
 const wizardOpen = ref(false);
 const conversations = ref<ConvInfo[]>([]);
 const convName = ref<string | null>(null);
 // Temporary conversations: never written to disk, vanish on New/restart.
 const tempChat = ref(false);
-// Elevated Control: the admin session's state, mirrored from Rust. The
-// toggle is the user's hand on it; the agent's elevate/delevate move it
-// too, via the elevation_changed event.
+// Rust owns the Elevated Control state. The agent moves the state with
+// elevate and delevate too, reported via elevation_changed events.
 const elevActive = ref(false);
 const elevCount = ref(0);
 
@@ -253,8 +244,8 @@ interface LlmSettings {
   model: string;
   api_key: string;
   base_url: string;
-  // Compaction (docs/COMPACTION.md): 0 = read the window off the model
-  // endpoint. Settings files written before compaction carry neither.
+  // Compaction (docs/COMPACTION.md): 0 in context_window means read the
+  // window size off the model endpoint.
   context_window?: number;
   compact_at_percent?: number;
 }
@@ -264,9 +255,9 @@ function addMsg(text: string, cls = "", extra: Partial<Msg> = {}) {
   messages.value.push({ id: nextId++, text, cls, ...extra });
 }
 
-// Divider expansion is view state, not transcript data: keeping it out of
-// `messages` means clicking a divider doesn't trip the deep
-// scroll-to-bottom watcher and drag the user back to the live edge.
+// Divider expansion is view state, not transcript data. Content in
+// `messages` fires the deep scroll watcher. A divider click would then
+// jump the view to the bottom.
 const openSummaries = ref(new Set<number>());
 
 function toggleSummary(id: number) {
@@ -274,10 +265,8 @@ function toggleSummary(id: number) {
   else openSummaries.value.add(id);
 }
 
-// The divider is written for the person reading the chat, not for the ledger:
-// plain words about what happened, with the mechanics (how many messages went
-// into the summary) left to the tooltip. It marks when the summarizing
-// happened, not a boundary — everything above it stays visible.
+// The divider marks when summarizing happened, not a content boundary.
+// Rows above the divider stay visible.
 function foldTitle(m: Msg): string {
   const folded = m.folded ? ` ${m.folded} earlier messages were folded into it.` : "";
   return openSummaries.value.has(m.id)
@@ -285,18 +274,16 @@ function foldTitle(m: Msg): string {
     : `Show the summary First Mate works from instead of those messages.${folded}`;
 }
 
-// What counts as the transcript: the turns the model saw (or produced).
-// `dim` notes and errors are UI-only, so they neither persist nor go back
-// on the wire. `summary` is a compaction divider: it persists as its own
-// row so a reopened conversation still shows what was summarized away.
+// `dim` notes and errors are UI-only: they never persist and never reach
+// the model. A `summary` divider persists so a reopened conversation
+// still shows the folded text.
 function isTranscriptRow(m: Msg): boolean {
   return ["user", "assistant", "tool", "summary"].includes(m.cls) && !!m.text.trim();
 }
 
 function persistConversation() {
-  if (tempChat.value) return; // temp chats live only in this window's memory
-  // The tool ledger persists too: a resumed conversation can see what was
-  // already inspected, verified, and executed instead of re-doing it.
+  if (tempChat.value) return;
+  // Tool reports persist so a resumed conversation sees work already done.
   const turns = messages.value
     .filter(isTranscriptRow)
     .map((m) => ({ role: m.cls, text: m.text, report: m.done ? m.tool : undefined }));
@@ -321,8 +308,8 @@ function refreshConversations() {
 function openConversation(c: ConvInfo) {
   invoke<ConvMsg[]>("load_conversation", { path: c.path })
     .then((msgs) => {
-      // role ↔ cls is 1:1, so a persisted "summary" row comes back as the
-      // compaction divider — not a chat bubble, and not dropped.
+      // Saved roles equal `cls` values 1:1. A persisted `summary` row
+      // therefore comes back as a divider, not a chat bubble.
       messages.value = msgs.map((m) => ({
         id: nextId++,
         text: m.text,
@@ -345,10 +332,9 @@ function newChat() {
   refreshBehavior();
 }
 
-// Prompt and skill ads are CONTENT: re-read them at every conversation
-// start so editing prompts/AGENTS.md or prompts/skills/ takes effect on the next chat —
-// closing the window only hides it, so a mount-once fetch would serve a
-// stale prompt for the life of the process.
+// Prompt and skill ads are content files. The window is hidden on close,
+// not destroyed, so a mount-once fetch would serve a stale prompt
+// indefinitely.
 function refreshBehavior() {
   invoke<string>("get_system_prompt").then((p) => {
     systemPromptBase.value = p;
@@ -384,7 +370,6 @@ function deleteConversation(c: ConvInfo) {
 }
 
 onMounted(() => {
-  // Restore the most recent conversation so chats survive restarts.
   refreshConversations().then(() => {
     if (conversations.value.length > 0) {
       openConversation(conversations.value[0]);
@@ -413,11 +398,8 @@ onMounted(() => {
     );
   });
   refreshBehavior();
-  // Focus the input when the window is shown/focused.
   nextTick(() => focusInput());
   listen("tauri://focus", () => focusInput());
-  // Show tool calls in real-time as the agent makes them: the pending panel
-  // is built from the call args (UI-side provisional facts).
   listen<{ name: string; args: Record<string, unknown> }>("tool_call", (event) => {
     const { name, args } = event.payload;
     const tool = pendingReport(name, args);
@@ -426,9 +408,8 @@ onMounted(() => {
       tool: { ...tool, status: undefined, tag: undefined },
     });
   });
-  // Replace the pending panel with the finished report. The transcript (the
-  // backend's model-facing flat form) becomes the persisted text; the UI
-  // renders only the structured facts.
+  // The flat model-facing transcript becomes the persisted text. The UI
+  // renders only the structured report.
   listen<{ name: string; transcript: string; report?: ToolReport }>("tool_result", (event) => {
     const { name, transcript, report } = event.payload;
     let matched = false;
@@ -440,13 +421,11 @@ onMounted(() => {
         break;
       }
     }
-    // Unmatched results are async announcements (e.g. a background job that
-    // finished after its turn): they get their own report so the model
-    // resumes with them as context.
+    // An unmatched result is an async announcement, e.g. a background job
+    // that finished after its turn. It becomes its own row so the model
+    // resumes with the announcement in context.
     if (!matched) addMsg(transcript, "tool", { toolName: name, done: true, tool: report });
   });
-  // Stream the assistant text in as it arrives, creating the live message on
-  // the first chunk.
   listen<{ text: string }>("stream_chunk", (event) => {
     if (liveMsgId < 0) {
       addMsg("", "assistant");
@@ -461,24 +440,24 @@ onMounted(() => {
       };
     }
   });
-  // A tool-call turn: finalize the current live message so the next turn
-  // streams into a fresh one.
+  // A tool turn ends the live message. The next turn streams into a new
+  // message.
   listen("stream_reset", () => {
     liveMsgId = -1;
   });
-  // Mid-run compaction (docs/COMPACTION.md): the backend folded the oldest
-  // rows of this run into a brief so the request stays inside the window. The
-  // divider lands after whatever tool rows have already streamed, so it marks
-  // when the fold happened rather than where the transcript begins: the rows
-  // above it stay in the view, and the newest tail stays on the wire under
-  // them. The saved `summary` row is what the next request resumes after.
+  // Mid-run compaction (docs/COMPACTION.md): the backend folded the
+  // oldest rows into a brief so the request fits the context window. The
+  // divider marks when the fold happened, not a transcript boundary.
+  // Rows above the divider stay visible. The next request resumes after
+  // the saved `summary` row.
   listen<{ summary: string; tokensBefore: number; dropped: number }>("compact", (event) => {
     addMsg(event.payload.summary, "summary", { folded: event.payload.dropped });
   });
 });
 
-// Behavior text comes from AGENTS.md (repo prompts/ or ~/.firstmate), loaded via
-// get_system_prompt; the Rust fallback applies only when no file exists.
+// Behavior text comes from AGENTS.md (repo prompts/ or ~/.firstmate),
+// loaded via get_system_prompt. The Rust fallback applies only when no
+// file exists.
 const systemPromptBase = ref("");
 
 interface SkillInfo {
@@ -488,7 +467,6 @@ interface SkillInfo {
 // Stage 1 of progressive disclosure (docs/SKILLS.md): advertise skills by
 // name + description; the agent loads bodies on demand via load_skill.
 const skillsAds = ref("");
-// Braille spinner for the standalone thinking indicator (a div, not a message).
 const BRAILLE = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 let spinnerInterval: number | null = null;
 
@@ -506,7 +484,6 @@ watch(isThinking, (thinking) => {
   }
 });
 
-// Enter submits; Shift+Enter inserts a newline (the textarea grows).
 function onInputKey(e: KeyboardEvent) {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
@@ -514,10 +491,9 @@ function onInputKey(e: KeyboardEvent) {
   }
 }
 
-// Capability is earned once per CONVERSATION, not once per request: the tool
-// ledger is the record of what this conversation loaded, so a skill loaded on
-// an earlier turn — or in a conversation resumed from disk — keeps its gated
-// tools unlocked. The backend re-checks this set at dispatch.
+// Capability is earned once per CONVERSATION, not per request. The tool
+// ledger records loaded skills, so gated tools stay unlocked across turns
+// and resumes. The backend re-checks the set at dispatch.
 function loadedSkills(): string[] {
   const names = new Set<string>();
   for (const m of messages.value) {
@@ -532,12 +508,12 @@ function loadedSkills(): string[] {
 async function submit() {
   const text = input.value.trim();
   if (!text) return;
-  // One active agent run at a time; Enter while running must not start a
-  // second concurrent loop.
+  // One agent run at a time. Enter while running must not start a second
+  // loop.
   if (isThinking.value) return;
   addMsg(text, "user");
-  // The row just added is the CURRENT message: it travels in `message`, so
-  // it must not also appear in the history.
+  // The row just added travels in `message`, so it must not repeat in
+  // `priorHistory`.
   const currentId = nextId - 1;
   input.value = "";
 
@@ -546,14 +522,12 @@ async function submit() {
     return;
   }
 
-  // The whole transcript goes on the wire: every turn the model has seen,
-  // minus the message just typed. No row cap — the backend windows by tokens
-  // and cuts at turn boundaries (docs/COMPACTION.md), so a count here would
-  // silently drop the user's task out from under the agent. The wire knows
-  // user/assistant/summary: the tool ledger rides along as assistant context
-  // ("🔧 name args -> result") so a resumed run knows what was already done,
-  // and a compaction divider rides along as the summary that replaced the
-  // rows above it.
+  // Send the whole transcript, minus the message just typed. No row cap
+  // here. The backend windows by tokens and cuts at turn boundaries
+  // (docs/COMPACTION.md). A row count here would drop the user's task.
+  // Tool rows travel as assistant text so a resumed run sees work
+  // already done. A `summary` row travels as the summary that replaced
+  // the rows above it.
   const priorHistory = messages.value
     .filter((m) => m.id !== currentId && isTranscriptRow(m))
     .map((m) => ({ role: m.cls === "tool" ? "assistant" : m.cls, content: m.text }));
@@ -571,14 +545,14 @@ async function submit() {
       priorHistory,
       systemPrompt: systemPromptBase.value + skillsAds.value,
       loadedSkills: loadedSkills(),
-      // Compaction knobs: 0 = read the window off the model endpoint; the
-      // percent is how much of it the agent may fill before summarizing.
+      // Compaction knobs: 0 means read the window off the model endpoint.
+      // The percent caps how full the window may get before summarizing.
       contextWindow: llmSettings.context_window ?? 0,
       compactAtPercent: llmSettings.compact_at_percent ?? 85,
     });
-    // The return value is the unstreamed remainder (e.g. the turn-cap note
-    // after a tool turn reset the live message). Only when nothing at all
-    // came back is the reply truly empty.
+    // The return value is the unstreamed remainder, e.g. a turn-cap note
+    // after a tool turn reset the live message. The reply is empty only
+    // when nothing came back at all.
     if (liveMsgId < 0) {
       if (final.trim()) addMsg(final, "assistant");
       else addMsg("(no response)", "dim");
@@ -596,8 +570,8 @@ async function submit() {
   }
 }
 
-// Ask the running agent loop to stop; it returns "(stopped)" at the next
-// turn/tool boundary.
+// The agent loop stops at the next turn/tool boundary and returns
+// "(stopped)".
 function stopRun() {
   invoke("stop_chat").catch((e) => console.error("stop failed", e));
 }
@@ -623,13 +597,11 @@ async function toggleElevation() {
   }
 }
 
-// Auto-scroll to bottom when new messages arrive. DynamicScroller
-// measures item sizes asynchronously: right after a bulk load (opening
-// a conversation, or the startup load while the window is still hidden)
-// scrollHeight is a small estimate that momentarily "settles" at the
-// estimated bottom long before real sizes land. So pin every frame
-// until scrollHeight has been stable for a while AND we are at the
-// bottom — touching the bottom once is not proof of arrival.
+// DynamicScroller measures item sizes asynchronously. After a bulk load,
+// scrollHeight is a small estimate that settles at the estimated bottom
+// before real sizes land. Pin every frame until scrollHeight is stable
+// and the view is at the bottom. Reaching the bottom once is not proof
+// of arrival.
 let userScrollAbort = false;
 function scrollToBottom() {
   nextTick(() => {
@@ -653,12 +625,10 @@ function scrollToBottom() {
   });
 }
 watch(messages, scrollToBottom, { deep: true });
-// A wheel event means the user is taking over the scroll position;
-// stop pinning mid-settle rather than dragging them back down.
+// A wheel event means the user controls the scroll position. Stop pinning
+// instead of pulling the view back to the bottom.
 window.addEventListener("wheel", () => (userScrollAbort = true));
 
-// Window-scoped shortcuts: Escape dismisses (wizard is Skip/Finish only),
-// Ctrl+N starts a conversation, Ctrl+Shift+N a temporary one.
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     if (wizardOpen.value) return; // dismissed only via Skip/Finish
@@ -711,7 +681,7 @@ window.addEventListener("keydown", (e) => {
                 :active="active"
                 :size-dependencies="[item.text, openSummaries.has(item.id)]"
               >
-                <!-- Safe by construction: renderMd() = marked -> DOMPurify.sanitize. -->
+                <!-- v-html is safe: renderMd() sanitizes with DOMPurify. -->
                 <!-- eslint-disable vue/no-v-html -->
                 <div
                   v-if="item.cls === 'assistant'"

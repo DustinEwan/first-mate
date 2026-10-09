@@ -1,7 +1,6 @@
 <script setup lang="ts">
-// First-run stepper: model setup and harness readiness, MUI-Stepper style
-// via Naive UI's n-steps. Shown when no model is configured; reopenable
-// from the tray ("Setup Wizard").
+// First-run stepper for model setup and harness readiness. The parent
+// opens the stepper when no model is configured; the tray can reopen it.
 import { invoke } from "@tauri-apps/api/core";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
@@ -24,7 +23,6 @@ const emit = defineEmits<{ done: [] }>();
 const step = ref(1);
 const hotkey = ref("");
 
-// --- Step 2: model -------------------------------------------------------
 interface LlmSettings {
   provider: string;
   model: string;
@@ -66,8 +64,8 @@ const providersReady = invoke<ProviderSpec[]>("list_providers").then((ps) => {
 
 const currentSpec = computed(() => providerSpecs.value.find((p) => p.id === provider.value));
 
-// Picking a provider prefills its endpoint (the watch below then auto-
-// discovers models) and its key hint. Select-only: restored settings stay.
+// Only the select calls this. Restoring saved settings assigns provider
+// directly, so stored values survive.
 function onProviderChange(id: string) {
   const spec = providerSpecs.value.find((p) => p.id === id);
   if (!spec) return;
@@ -76,14 +74,14 @@ function onProviderChange(id: string) {
   proxy.value = false;
 }
 
-// Un-proxing restores the roster default so a stale proxy URL can't linger
-// in the value that gets saved.
+// Clearing Proxy restores the roster default, so a stale proxy URL never
+// reaches the saved settings.
 function onProxyChange(checked: boolean) {
   if (!checked && currentSpec.value) baseUrl.value = currentSpec.value.base;
 }
 
-// Hosted endpoints are fixed by the roster; only user-owned ones (local
-// engines, custom URLs) or an explicit proxy override expose Base URL.
+// The roster fixes hosted endpoints. Base URL appears only for local
+// engines or an explicit proxy override.
 const showBaseUrl = computed(
   () => !!currentSpec.value && (currentSpec.value.isLocal || proxy.value),
 );
@@ -104,8 +102,8 @@ async function refreshModels() {
       baseUrl: baseUrl.value,
       apiKey: apiKey.value,
     });
-    // Populate the dropdown with something: preselect the first discovery
-    // so the step is complete on arrival; the user may override.
+    // Preselect the first discovered model so the step is valid on
+    // arrival; the user may override.
     if (!model.value && models.value.length > 0) {
       model.value = models.value[0];
     }
@@ -116,8 +114,7 @@ async function refreshModels() {
   }
 }
 
-// Auto-detect: once provider + base URL are both present, discover models
-// shortly after typing settles (debounced so mid-URL keystrokes don't fire).
+// The debounce keeps mid-URL keystrokes from firing discovery calls.
 let detectTimer: ReturnType<typeof setTimeout> | null = null;
 watch([provider, baseUrl], ([p, u]) => {
   if (detectTimer) clearTimeout(detectTimer);
@@ -139,7 +136,6 @@ async function saveModel() {
   await invoke("save_settings", { settings });
 }
 
-// --- Step 3: harness ------------------------------------------------------
 interface BootstrapStatus {
   winapp: string | null;
   winget: boolean;
@@ -162,7 +158,8 @@ async function installWinapp() {
   installing.value = true;
   try {
     await invoke<string>("install_winapp");
-    // Poll until the CLI answers; the install itself announces in the ledger.
+    // The install announces progress in the ledger. Poll until the CLI
+    // answers.
     poll = setInterval(async () => {
       await checkHarness();
       if (boot.value?.winapp) {
@@ -190,7 +187,7 @@ onMounted(async () => {
   baseUrl.value = s.llm.base_url;
   apiKey.value = s.llm.api_key;
   model.value = s.llm.model;
-  // A hosted row saved with a non-default endpoint was proxied.
+  // A saved non-default endpoint on a hosted provider means Proxy was on.
   const spec = ps.find((p) => p.id === s.llm.provider);
   proxy.value = !!spec && !spec.isLocal && s.llm.base_url !== "" && s.llm.base_url !== spec.base;
   if (provider.value && baseUrl.value) refreshModels();

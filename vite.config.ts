@@ -1,17 +1,15 @@
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
-// @ts-expect-error type error without @types/node package
+// @ts-expect-error the import fails type-checking without @types/node
 import process from "node:process";
 const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
 export default defineConfig(() => ({
   plugins: [vue()],
-  // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
-  //
-  // 1. prevent Vite from obscuring rust errors
+  // Vite clearing the terminal would hide cargo errors.
   clearScreen: false,
-  // 2. tauri expects a fixed port, fail if that port is not available
+  // Tauri expects a fixed port. Fail if the port is unavailable.
   server: {
     port: 1420,
     strictPort: true,
@@ -24,12 +22,11 @@ export default defineConfig(() => ({
         }
       : undefined,
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
+      // Cargo rebuilds rewrite src-tauri; watching it would trigger reloads.
       ignored: ["**/src-tauri/**"],
     },
   },
   build: {
-    // Build both the main console and the settings window.
     rollupOptions: {
       input: {
         index: "index.html",

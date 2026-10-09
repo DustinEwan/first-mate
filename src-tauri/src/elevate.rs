@@ -1,19 +1,20 @@
 //! Elevated Control: a consented, visible, revocable admin capability.
 //!
-//! A process can never raise its own integrity level — Windows fixes the
-//! token at creation. So elevation is a PROXY: this app (MEDIUM) asks
-//! ShellExecute `runas` to start an elevated PowerShell SESSION (HIGH)
-//! behind the real UAC prompt the user answers. Commands that need admin
-//! are sent to it over a named pipe and run in one persistent runspace —
-//! the elevated twin of the medium-IL psrep session. `delevate` (user
-//! toggle or agent tool) makes it exit; the helper also dies with the app
-//! (watchdog + pipe disconnect), so elevation never outlives the consent
-//! that opened it.
+//! A process can never raise its own integrity level. Windows sets the access
+//! token when the process is created. Elevation therefore runs in a separate
+//! process. This app runs at MEDIUM integrity. It calls ShellExecute `runas`,
+//! which shows the real UAC prompt. Answering that prompt starts a PowerShell
+//! session at HIGH integrity. Commands that need admin travel over a named
+//! pipe to that session and run in one persistent runspace. That session is
+//! the elevated equivalent of the medium-IL `psrep` session.
 //!
-//! Trust model: the pipe accepts exactly one client, verified as this
-//! same executable; every command is logged. This is the sanctioned door;
-//! ad-hoc RunAs scripting in the shell stays forbidden because it is
-//! invisible.
+//! `delevate` ends the session, from the user toggle or the agent tool. A
+//! watchdog and the pipe disconnect also end it when this app exits. An
+//! elevated session never outlives the UAC consent that opened it.
+//!
+//! The pipe accepts exactly one client, verified as this same executable.
+//! Every command is logged. Ad-hoc `RunAs` scripting from the shell stays
+//! forbidden, because the user cannot see a process started that way.
 
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
@@ -22,8 +23,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
-/// The duplex pipe to the elevated helper. Windows carries the real
-/// client; other platforms compile the module but can never hold one.
+/// The duplex pipe to the elevated helper. Windows provides the real client
+/// type. Other platforms compile this module but can never hold a pipe.
 #[cfg(windows)]
 type PipeHandle = named_pipe::PipeClient;
 #[cfg(not(windows))]
@@ -36,9 +37,9 @@ pub(crate) struct HelperSession {
     commands: AtomicU32,
 }
 
-/// One request, one response line — the whole wire protocol. Reading is
-/// byte-by-byte on purpose: a BufReader could swallow the start of the
-/// NEXT response out of the socket buffer.
+/// One request, one response line. That is the whole wire protocol. Reading
+/// is byte-by-byte on purpose: a `BufReader` would swallow the start of the
+/// next response out of the pipe buffer.
 fn round_trip(pipe: &mut (impl Read + Write), req: &Request) -> Result<String, String> {
     pipe.write_all(format!("{req}\n").as_bytes())
         .map_err(|e| format!("pipe write: {e}"))?;
@@ -98,10 +99,11 @@ fn nonce() -> String {
     format!("{:016x}", RandomState::new().build_hasher().finish())
 }
 
-/// True when a shell command should route through the elevated session
-/// automatically: winapp drives other apps' windows, and when the session
-/// is ON it must run at HIGH IL or UIPI silently refuses its input against
-/// elevated targets. First-token match only — `echo winapp` is not winapp.
+/// A shell command routes through the elevated session when its first token
+/// is `winapp`. `winapp` drives other applications' windows. When the session
+/// is ON, `winapp` must run at HIGH integrity. Otherwise UIPI silently refuses
+/// its input against elevated windows. Only the first token counts, so
+/// `echo winapp` does not route.
 pub(crate) fn is_winapp_call(command: &str) -> bool {
     command
         .split_whitespace()
@@ -110,11 +112,12 @@ pub(crate) fn is_winapp_call(command: &str) -> bool {
 }
 
 /// The elevated helper: a persistent PowerShell runspace fed JSON-line
-/// requests over a named pipe. Written to the First Mate tmp dir at
-/// elevate() time — CONTENT, visible and auditable, not compiled behavior.
-/// Guards, in order: only the First Mate executable may connect (PID ->
-/// image path); a watchdog kills the helper the moment the app is gone;
-/// every command runs with a hard timeout via async invocation.
+/// requests over a named pipe. The app writes this text to the First Mate tmp
+/// dir inside `elevate()`. The user can read the code that runs with admin
+/// rights, rather than trusting a compiled binary. Three guards apply:
+/// - Only the First Mate executable may connect, checked from PID to image path.
+/// - A watchdog kills the helper when the app exits.
+/// - Every command runs under a hard timeout through async invocation.
 #[cfg(windows)]
 const HELPER_SCRIPT: &str = r#"
 param([string]$Nonce, [int]$AppPid, [string]$AppExe)
@@ -258,9 +261,9 @@ fn set_session(app: &AppHandle, session: Option<Arc<HelperSession>>) {
     let _ = app.emit("elevation_changed", &payload);
 }
 
-/// The helper died (crash, kill, logoff): clear the session so the toggle
-/// and the tools agree — but only if it is still the SAME session, so a
-/// concurrent fresh `elevate` is never wiped.
+/// The helper died from a crash, a kill, or a logoff. Clear the session so the
+/// toggle and the tools agree. Clear it only when the stored session is still
+/// this same helper, so a concurrent fresh `elevate` is never wiped.
 fn mark_dead(app: &AppHandle, dead: &Arc<HelperSession>) {
     let state = app.state::<ElevationState>();
     let mut guard = state.0.lock().unwrap();
@@ -272,8 +275,8 @@ fn mark_dead(app: &AppHandle, dead: &Arc<HelperSession>) {
     }
 }
 
-/// Shared core of the `elevate` tool and the window toggle: write the
-/// helper script, fire the real UAC prompt, connect and verify the pipe.
+/// The `elevate` tool and the window toggle share this path, so both show the
+/// user the same UAC prompt.
 pub(crate) fn elevate_core(app: &AppHandle) -> Result<String, String> {
     if let Some(s) = active_session(app) {
         return Ok(format!(
@@ -292,7 +295,7 @@ pub(crate) fn elevate_core(app: &AppHandle) -> Result<String, String> {
         let nonce = nonce();
         let app_pid = std::process::id();
         let script = write_helper_script()?;
-        // Err here means: the prompt could not be shown, or the user said No.
+        // Err here means the prompt could not be shown, or the user said No.
         let app_exe = std::env::current_exe()
             .map_err(|e| format!("cannot locate own executable: {e}"))?;
         let helper_pid =
@@ -300,8 +303,8 @@ pub(crate) fn elevate_core(app: &AppHandle) -> Result<String, String> {
         let path = pipe_path(&nonce);
         let mut last_err = String::from("helper never answered");
         for _ in 0..50 {
-            // A concurrent elevate won: our helper finds no client and
-            // self-exits on its connect deadline — do not overwrite.
+            // A concurrent `elevate` won the race. Its helper finds no client
+            // and self-exits at its connect deadline. Do not overwrite.
             if active_session(app).is_some() {
                 return Ok("elevated session is already ON".into());
             }
@@ -335,8 +338,8 @@ fn write_helper_script() -> Result<std::path::PathBuf, String> {
     Ok(path)
 }
 
-/// Connect, then prove the other side is the helper with a ping before
-/// trusting the session.
+/// Connect, then ping the other side. The session is trusted only after that
+/// ping answers.
 #[cfg(windows)]
 fn open_session(path: &str, pid: u32) -> Result<HelperSession, String> {
     let mut client =
@@ -381,9 +384,9 @@ pub(crate) fn delevate_core(app: &AppHandle, by_agent: bool) -> String {
     }
 }
 
-/// Send one command to the helper and wait for its result. Blocking; call
-/// via spawn_blocking. Any pipe failure means the helper is gone: the
-/// session is cleared so the toggle and the tools agree.
+/// This blocks, so call it through `spawn_blocking`. Any pipe failure means the
+/// helper is gone, so the session is cleared and the toggle and the tools
+/// agree.
 fn run_elevated_blocking(
     app: &AppHandle,
     command: &str,
@@ -433,9 +436,8 @@ fn run_elevated_blocking(
     })
 }
 
-/// ShellExecute `runas` on the system PowerShell running the helper script.
-/// Returns the helper PID (for the banner) or Err when the user declined
-/// the UAC prompt (or it could not be shown).
+/// Returns the helper PID for the elevated banner. Err means the user declined
+/// the UAC prompt, or the prompt could not be shown.
 #[cfg(windows)]
 fn spawn_powershell_elevated(
     script: &std::path::Path,
@@ -478,13 +480,12 @@ fn spawn_powershell_elevated(
     Ok(pid)
 }
 
-// The #[tauri::command] wrappers for elevate/delevate/elevation_status
-// live in lib.rs, NOT here: command glue references the tauri IPC/webview
-// machinery, and because a module links as one object, keeping the glue
-// here would drag the whole GUI stack (and its comctl32 manifest
-// requirement) into every binary that touches a single pure function —
-// including the unit-test exe. This module stays light: pure logic, the
-// pipe protocol, and plain AppHandle helpers.
+// The command glue for elevate, delevate, and elevation_status lives in
+// lib.rs. A module links as one object file. Command glue in this module
+// would make every caller link the GUI stack. The caller would also inherit
+// the comctl32 manifest requirement. That includes the unit-test exe. This
+// module stays light: pure logic, the pipe protocol, and plain AppHandle
+// helpers.
 
 #[derive(Serialize)]
 pub(crate) struct ElevStatus {

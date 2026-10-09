@@ -1,7 +1,7 @@
-//! Provider roster. The rows live in `providers.json` (embedded at compile
-//! time); this module only parses and indexes them. Adding a provider means
-//! editing the JSON — no Rust changes. Request building switches on `Api`
-//! and `Auth` only; there is no per-provider code.
+//! Provider roster. The rows live in `providers.json`, embedded at compile
+//! time. Adding a provider means editing that JSON, never Rust. Request
+//! building switches on `Api` and `Auth` only, so no code branch may test a
+//! provider id.
 
 use std::sync::OnceLock;
 
@@ -19,7 +19,6 @@ pub(crate) enum Api {
     Ollama,
 }
 
-/// How the request carries credentials.
 #[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Auth {
@@ -40,15 +39,16 @@ pub(crate) struct Spec {
     pub label: String,
     pub api: Api,
     pub auth: Auth,
-    /// Default endpoint; empty = user must supply one (custom).
+    /// Default endpoint. An empty base means the user must supply a base
+    /// URL.
     pub base: String,
-    /// Placeholder text for the key field.
     pub key_hint: String,
-    /// True when an empty key is valid (local engines).
+    /// An empty API key is valid for this provider. Local engines have no
+    /// key.
     #[serde(default)]
     pub key_optional: bool,
-    /// True when the endpoint is user-owned (local engine or custom URL):
-    /// the UI shows the Base URL field only for these rows.
+    /// The endpoint is user-owned: a local engine or a custom URL. The UI
+    /// shows the Base URL field only for these rows.
     #[serde(default)]
     pub is_local: bool,
 }
@@ -66,13 +66,10 @@ pub(crate) fn catalog() -> &'static [Spec] {
     rows()
 }
 
-/// Look up one provider by id.
 pub(crate) fn lookup(id: &str) -> Option<&'static Spec> {
     rows().iter().find(|s| s.id == id)
 }
 
-/// True when `base` already ends at a versioned root (`/v1`, `/v4`, …), so
-/// request paths append only `/chat/completions` / `/models`.
 pub(crate) fn base_is_versioned(base: &str) -> bool {
 
     base.rsplit('/').next().is_some_and(|seg| {
@@ -81,8 +78,9 @@ pub(crate) fn base_is_versioned(base: &str) -> bool {
     })
 }
 
-/// Request root: the base itself when it already ends at a version segment,
-/// else base + `/v1`. Paths (`/chat/completions`, `/models`) append to this.
+/// A base that ends at a version segment (`/v1`, `/v4`) is already a complete
+/// request root. Such a base takes only `/chat/completions` and `/models`
+/// appended. Any other base gets a `/v1` segment inserted.
 pub(crate) fn root(base: &str) -> String {
     if base_is_versioned(base) {
         base.to_string()
@@ -107,8 +105,8 @@ mod tests {
                 s.id
             );
         }
-        // Local rows own their endpoint: the UI only shows Base URL for
-        // them, so each must carry a default (custom is the user's entry).
+        // The UI shows the Base URL field only for local rows, so each
+        // local row must carry a default base. `custom` is the user's entry.
         for id in ["ollama", "lm-studio", "llama-cpp", "custom"] {
             let s = lookup(id).unwrap_or_else(|| panic!("{id} missing from roster"));
             assert!(s.is_local, "{id} must be marked isLocal");
@@ -118,7 +116,7 @@ mod tests {
                 assert!(!s.base.is_empty(), "{} is local but has no default base", s.id);
             }
         }
-        // The three protocol families the app routes must all be present.
+        // The roster must carry every protocol family the app routes.
         for api in [Api::Openai, Api::Anthropic, Api::Gemini] {
             assert!(catalog().iter().any(|s| s.api == api), "roster lacks api {api:?}");
         }

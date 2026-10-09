@@ -20,8 +20,8 @@ interface LlmSettings {
   model: string;
   api_key: string;
   base_url: string;
-  // Compaction (docs/COMPACTION.md): 0 = read the window off the model
-  // endpoint. Settings files written before compaction carry neither.
+  // Compaction (docs/COMPACTION.md): 0 in context_window means read the
+  // window size off the model endpoint.
   context_window?: number;
   compact_at_percent?: number;
 }
@@ -30,8 +30,8 @@ const provider = ref("");
 const baseUrl = ref("");
 const apiKey = ref("");
 const model = ref("");
-// Compaction knobs. Nullable because the input can be cleared; a cleared or
-// missing value means the default (0 = auto-detect, 85% of the window).
+// Nullable because the input can be cleared. A cleared or missing value
+// means the default: 0 = auto-detect, 85 percent of the window.
 const contextWindow = ref<number | null>(0);
 const compactAtPercent = ref<number | null>(85);
 const models = ref<string[]>([]);
@@ -60,8 +60,8 @@ const showBaseUrl = computed(
   () => !!currentSpec.value && (currentSpec.value.isLocal || proxy.value),
 );
 
-// Prefill endpoint + key hint when the user picks a provider. Fired only by
-// the select, so loading saved settings never clobbers a custom base URL.
+// Only the select calls this, so loading saved settings never overwrites
+// a custom base URL.
 function onProviderChange(id: string) {
   const spec = providerSpecs.value.find((p) => p.id === id);
   if (!spec) return;
@@ -70,13 +70,13 @@ function onProviderChange(id: string) {
   proxy.value = false;
 }
 
-// Un-proxing restores the roster default so a stale proxy URL can't linger
-// in the value that gets saved.
+// Clearing Proxy restores the roster default, so a stale proxy URL never
+// reaches the saved settings.
 function onProxyChange(checked: boolean) {
   if (!checked && currentSpec.value) baseUrl.value = currentSpec.value.base;
 }
 
-// Include the current model in the options even if it's not in the discovered list.
+// A saved model may be absent from discovery; keep it selectable.
 function modelOptions() {
   const opts = models.value.map((m) => ({ label: m, value: m }));
   if (model.value && !models.value.includes(model.value)) {
@@ -85,9 +85,8 @@ function modelOptions() {
   return opts;
 }
 
-// Load the saved settings into the form. Providers load first so the proxy
-// state can be inferred: a hosted row saved with a non-default endpoint was
-// configured through the proxy checkbox.
+// Proxy state needs the provider roster: a hosted provider with a
+// non-default saved endpoint means Proxy was on.
 Promise.all([
   invoke<ProviderSpec[]>("list_providers"),
   invoke<{ llm: LlmSettings }>("get_settings"),

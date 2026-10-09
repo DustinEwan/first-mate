@@ -1,15 +1,16 @@
 use tauri::Manager;
 
-/// Summon hotkey. Change here; it's registered once in `run`.
+/// Summon hotkey. `run` registers `HOTKEY` once, so this constant is the
+/// only place to change the binding.
 pub(crate) const HOTKEY: &str = "Super+Alt+Space";
 
-/// Expose the summon hotkey to the frontend so the UI always shows the real binding.
+/// Expose the summon hotkey to the frontend. The UI then shows the real
+/// binding instead of a copy.
 #[tauri::command]
 pub(crate) fn get_hotkey() -> &'static str {
     HOTKEY
 }
 
-/// LLM configuration, persisted as part of the app settings.
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 #[serde(default)]
 struct LlmSettings {
@@ -17,11 +18,12 @@ struct LlmSettings {
     model: String,
     api_key: String,
     base_url: String,
-    /// Context window in tokens; 0 = ask the endpoint, which reports
-    /// `max_model_len` (llama.cpp) or nothing. Silent endpoints fall back to
-    /// `context::DEFAULT_WINDOW_TOKENS`.
+    /// Context window in tokens. A value of 0 means: ask the endpoint,
+    /// which reports `max_model_len` (llama.cpp) or nothing. An endpoint
+    /// that reports nothing falls back to `context::DEFAULT_WINDOW_TOKENS`.
     context_window: u32,
-    /// Compact once the request reaches this share of the window.
+    /// Compaction starts when the request reaches this percentage of the
+    /// context window.
     compact_at_percent: u8,
 }
 

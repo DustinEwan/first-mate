@@ -1,17 +1,17 @@
 use crate::fileedit::{base_name, clip_chars, clip_lines, extract_diff_fence, fence_for, result_tag};
 
-/// What a tool call DID - pure facts, no presentation. The frontend renders
-/// these fields into its report panel; `transcript()` serializes them into
-/// the flat model-facing form persisted to `.chat` and resumed as context.
-/// The UI never renders the transcript; the transcript never sees a glyph
-/// decision made for the UI.
+/// Facts about one tool call, with no presentation. The frontend renders
+/// these fields in the report panel. `transcript()` serializes the same
+/// fields into the flat model-facing form persisted to `.chat` and resumed
+/// as context. The transcript must stay independent of UI presentation
+/// choices.
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub(crate) struct ToolReport {
     pub(crate) tool: String,
-    /// What was acted on: command, path, pid, pattern...
+    /// The target of the call: a command, path, pid, or pattern.
     pub(crate) subject: String,
-    /// Secondary info in the tool's own notation: read window ("2-4"),
-    /// edit op headers, search root...
+    /// Per-tool detail in the tool's own notation: a read window, edit op
+    /// headers, or a search root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) detail: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -52,8 +52,8 @@ pub(crate) struct ReportBody {
 }
 
 impl ToolReport {
-    /// The model-facing flat form. This is conversation CONTENT (it is what
-    /// a resumed model re-reads), not UI markup.
+    /// The flat model-facing form. A resumed model re-reads the output as
+    /// conversation content. UI markup must not appear in the output.
     pub(crate) fn transcript(&self) -> String {
         let mut out = self.headline();
         if let Some(b) = &self.body {
@@ -138,8 +138,8 @@ impl ToolReport {
         if let (Some(n), Some(u)) = (&self.count, &self.unit) {
             meta.push(format!("{n} {u}"));
         }
-        // The pid identifies WHICH background job finished; for foreground
-        // tools it is already the subject.
+        // A status marks a background completion, so the footer names the
+        // job by pid. A foreground tool already carries the pid as subject.
         if let (Some(pid), Some(_)) = (self.pid, &self.status) {
             meta.push(format!("pid {pid}"));
         }
@@ -151,7 +151,6 @@ impl ToolReport {
     }
 }
 
-/// Extract the facts of a finished tool call from its args and result.
 pub(crate) fn tool_report(
     name: &str,
     args: &serde_json::Value,
@@ -160,7 +159,8 @@ pub(crate) fn tool_report(
 ) -> ToolReport {
     let ok = !result.starts_with("Error");
     let s = |k: &str| match args.get(k) {
-        // Numeric args (pids) stringify; string args pass through unquoted.
+        // `Value::to_string` would quote a JSON string, so string args come
+        // from `as_str`; numeric args such as pids stringify.
         Some(v) => v
             .as_str()
             .map(str::to_string)
@@ -300,7 +300,6 @@ mod tests {
 
     #[test]
     fn tool_reports_carry_facts_and_transcript_not_presentation() {
-        // run_command: facts + model-facing transcript.
         let r = tool_report(
             "run_command",
             &serde_json::json!({ "command": "echo  hi", "shell": "powershell" }),
@@ -310,7 +309,6 @@ mod tests {
         assert_eq!(r.subject, "echo hi");
         assert_eq!(r.shell.as_deref(), Some("powershell"));
         assert_eq!(r.transcript(), "$ echo hi [powershell]\n```\nhi\n```\n✅ 1.4s");
-        // edit_file: op headers + anchor tag as facts, diff body, new tag.
         let edit_result = "edited C:\\x\\notes.md: PUT 3.3 -> 1 line(s)\n```diff\n-for\n+EDITED\n```\n[C:\\x\\notes.md#F926] - line numbers shifted";
         let r = tool_report(
             "edit_file",
@@ -330,7 +328,8 @@ mod tests {
             !r.transcript().contains("+EDITED\n+EDITED"),
             "op body must not be duplicated"
         );
-        // write_file: byte count fact, content never in the report.
+        // The report carries a byte count. File content must never appear
+        // in the report.
         let r = tool_report(
             "write_file",
             &serde_json::json!({ "path": "C:\\x\\d.md", "content": "secret stuff" }),
@@ -341,7 +340,6 @@ mod tests {
         let t = r.transcript();
         assert!(t.starts_with("✎ d.md (12 bytes)") && !t.contains("secret"), "{t}");
         assert!(t.contains("#ABCD"), "{t}");
-        // read_file: window fact, line count, no body.
         let r = tool_report(
             "read_file",
             &serde_json::json!({ "path": "C:\\x\\d.md", "offset": 2, "limit": 3 }),
@@ -351,7 +349,6 @@ mod tests {
         assert_eq!(r.detail.as_deref(), Some("2-4"));
         assert!(r.body.is_none());
         assert_eq!(r.transcript(), "→ d.md:2-4\n✅ 0.0s · 3 lines");
-        // Failure: error fact, ❌ footer, clipped error body.
         let r = tool_report(
             "run_command",
             &serde_json::json!({ "command": "dir" }),
@@ -367,7 +364,7 @@ mod tests {
                 && t.ends_with("❌ Blocked: duplicates list_dir 0.0s"),
             "{t}"
         );
-        // Numeric args stringify (pid 42, not "\"42\"" and not missing).
+        // A numeric pid must stringify as 42, not as a quoted JSON value.
         let r = tool_report("kill_command", &serde_json::json!({ "pid": 42 }), "killed", 0);
         assert_eq!(r.subject, "42");
         assert_eq!(r.pid, Some(42));

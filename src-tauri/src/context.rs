@@ -1,17 +1,17 @@
-//! Context-window management: deciding which of the conversation goes on
-//! the wire. Design and evidence: `docs/COMPACTION.md`.
+//! Context-window management: which parts of the conversation are sent
+//! to the provider. Design and evidence: `docs/COMPACTION.md`.
 //!
-//! Three rules drive this module. The unit is tokens, never message rows —
-//! a row budget silently drops the user's task when the rows are tool-heavy.
-//! A request begins at a user turn, never mid-turn. And compaction spends
-//! the provider's prefix cache, so it fires only when the window demands it
-//! and prunes in chunks big enough to be worth the churn.
+//! The unit is tokens, never message rows: a row budget silently drops the
+//! user's task when the rows are tool-heavy. A request begins at a user
+//! turn, never mid-turn. Compaction spends the provider's prefix cache.
+//! Compaction fires only when the window demands it. Pruning works in
+//! chunks large enough to be worth that churn.
 
 use serde_json::Value;
 
-/// Window assumed when neither the user nor the endpoint gives one. Low
-/// enough to stay inside small local models, high enough not to summarize
-/// a hosted model's history every other turn.
+/// Used when neither the user nor the endpoint gives a window. The value
+/// stays inside small local models and avoids summarizing a hosted
+/// model's history every other turn.
 pub(crate) const DEFAULT_WINDOW_TOKENS: u32 = 32_768;
 
 /// Never prune inside this many newest tokens: the evidence for what the
@@ -22,35 +22,33 @@ pub(crate) const KEEP_RECENT_TOKENS: usize = 20_000;
 /// when it frees at least this much.
 const MIN_PRUNE_SAVINGS_TOKENS: usize = 2_000;
 
-/// A fold costs a summariser call and the same prefix-cache miss, so dropping
-/// a handful of rows is not worth one. Measured on a 6k window: one fold
-/// traded a call for 259 tokens.
+/// A fold costs a summariser call and the same prefix-cache miss that
+/// pruning costs. Dropping a handful of rows does not repay that cost.
+/// Measured on a 6k window: one fold traded a call for 259 tokens.
 pub(crate) const MIN_FOLD_SAVINGS_TOKENS: usize = 1_000;
 
-/// A screenshot is charged as a fixed allowance, not by base64 length: the
-/// encoded bytes are not text tokens, and every vision backend bills the
+/// Charge a screenshot as a fixed allowance, not by base64 length. The
+/// encoded bytes are not text tokens. Every vision backend bills one
 /// image as a few hundred to a couple thousand tokens.
 const IMAGE_TOKENS: usize = 1_200;
 
-/// The tool registry is sent whole on every request (docs/SKILLS.md), so it
-/// occupies the window whether or not a tool is ever called.
+/// The tool registry is sent whole on every request (docs/SKILLS.md). The
+/// registry occupies the window whether or not a tool is ever called.
 pub(crate) fn tools_tokens() -> usize {
     estimate_text(crate::tooldefs::agent_tools().to_string().len())
 }
 
-/// Rough tokens from a character count. Text is ~4 chars/token; the error
-/// runs both ways and is small against the budget it is compared with.
+/// Text averages ~4 chars/token. The error runs both ways and is small
+/// against the budget it is compared with.
 fn estimate_text(chars: usize) -> usize {
     chars / 4
 }
 
-/// Estimated tokens of a bare string — the system prompt, the tool registry.
 pub(crate) fn estimate_str(s: &str) -> usize {
     estimate_text(s.chars().count())
 }
 
-/// Estimated tokens of a message list, counting image parts as an allowance
-/// rather than their encoded length.
+/// Image parts count as a fixed allowance, not as their encoded length.
 pub(crate) fn estimate_tokens(msgs: &[Value]) -> usize {
     msgs.iter()
         .map(|m| match m.get("content") {
@@ -73,33 +71,33 @@ pub(crate) fn estimate_tokens(msgs: &[Value]) -> usize {
         .sum()
 }
 
-/// `percent` of `window`, clamped so a bad setting can neither disable
-/// compaction nor fire it on an empty window.
+/// Clamp `percent` so a bad setting can neither disable compaction nor
+/// fire it on an empty window.
 pub(crate) fn threshold_tokens(window: u32, percent: u8) -> usize {
     let percent = u64::from(percent.clamp(10, 100));
     ((u64::from(window) * percent) / 100) as usize
 }
 
-/// Where a fold lands, which is NOT where it starts: trimming a request to
-/// exactly the threshold leaves it over the line again on the next tool
-/// result, and every fold costs a summariser call. The headroom below the
-/// threshold is what keeps a long run from folding on every turn.
+/// The fold target is NOT the threshold. Trimming a request to exactly the
+/// threshold leaves it over the line again on the next tool result. Every
+/// fold costs a summariser call. The headroom below the threshold keeps a
+/// long run from folding on every turn.
 pub(crate) fn target_tokens(threshold: usize) -> usize {
     threshold / 4 * 3
 }
 
-/// The line a compaction marks in the system prompt; `Some` replaces it, so
-/// a second compaction never stacks on the first.
+/// The line a compaction marks in the system prompt. A new brief replaces
+/// the section, so a second compaction never stacks on the first.
 const SUMMARY_HEADER: &str = "## Earlier conversation summary";
 
-/// Closes the folded brief so `get_summary` can recover it: a second
-/// compaction folds the first one forward instead of replacing it.
+/// Closes the folded brief so `get_summary` can recover it. A second
+/// compaction folds the first brief forward instead of replacing it.
 const SUMMARY_TRAILER: &str = "Use this brief as established fact: the transcript below begins where it ends.";
 
-/// Fold a brief into a system prompt held as a string. It belongs there
-/// rather than in a message: it is framing, not a turn, and it keeps the
-/// history a clean sequence of user/assistant/tool rows. `Some` replaces any
-/// earlier brief; `None` leaves the prompt exactly as it was written.
+/// The brief belongs in the system prompt, not in a message. The brief is
+/// framing, not a turn. The history stays a clean sequence of
+/// user/assistant/tool rows. `Some` replaces any earlier brief. `None`
+/// leaves the prompt exactly as it was written.
 pub(crate) fn summary_into(prompt: &str, summary: Option<&str>) -> String {
     let head = head_of(prompt);
     match summary.map(str::trim).filter(|s| !s.is_empty()) {
@@ -108,7 +106,6 @@ pub(crate) fn summary_into(prompt: &str, summary: Option<&str>) -> String {
     }
 }
 
-/// The same fold for a caller holding a system message rather than a string.
 pub(crate) fn set_summary(system: &mut Value, summary: Option<&str>) {
     let Some(prompt) = prompt_of(system) else {
         return;
@@ -123,7 +120,6 @@ pub(crate) fn set_summary(system: &mut Value, summary: Option<&str>) {
     }
 }
 
-/// The brief currently folded into a system prompt, if any.
 pub(crate) fn get_summary(system: &Value) -> Option<String> {
     let prompt = prompt_of(system)?;
     let (_, rest) = prompt.split_once(SUMMARY_HEADER)?;
@@ -133,15 +129,14 @@ pub(crate) fn get_summary(system: &Value) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-/// Everything before the folded brief — the prompt as it was written.
 fn head_of(prompt: &str) -> &str {
     prompt
         .split_once(format!("\n\n{SUMMARY_HEADER}").as_str())
         .map_or(prompt, |(head, _)| head)
 }
 
-/// The prompt text, whether the caller holds a bare string or a message
-/// object: the request builders hold objects, the chat paths hold strings.
+/// Callers hold the prompt two ways: the request builders hold message
+/// objects, the chat paths hold bare strings.
 fn prompt_of(system: &Value) -> Option<String> {
     match system {
         Value::String(s) => Some(s.clone()),
@@ -150,20 +145,18 @@ fn prompt_of(system: &Value) -> Option<String> {
     }
 }
 
-/// True when a row begins a turn. Screenshot attachments also arrive as
-/// `user` rows mid-turn, which is harmless: cutting there is still legal and
-/// still leaves the tool round intact.
+/// Screenshot attachments also arrive as `user` rows mid-turn. A cut at
+/// such a row is still legal and still leaves the tool round intact.
 fn is_turn_start(m: &Value) -> bool {
     m.get("role").and_then(|r| r.as_str()) == Some("user")
 }
 
 /// Index of the first row to keep when the history must fit `budget`.
 ///
-/// Walks newest→oldest, then extends back to the turn the cut landed in, so
-/// the oldest kept row is always a user row. Trimming forward instead would
-/// drop the instruction the rest of the request obeys — the bug this
-/// replaces. The overshoot past `budget` is one turn, which the threshold's
-/// reserve absorbs.
+/// The oldest kept row is always a user row. A cut that lands mid-turn
+/// would drop the instruction the rest of the request obeys. The
+/// overshoot past `budget` is one turn, which the threshold's reserve
+/// absorbs.
 pub(crate) fn turn_anchored_cut(msgs: &[Value], budget: usize) -> usize {
     if msgs.is_empty() {
         return 0;
@@ -179,7 +172,7 @@ pub(crate) fn turn_anchored_cut(msgs: &[Value], budget: usize) -> usize {
         first = i;
     }
     if first == msgs.len() {
-        // Even the last row busts the budget; send it rather than nothing.
+        // Even the last row exceeds the budget; send it rather than nothing.
         first = msgs.len() - 1;
     }
     while first > 0 && !is_turn_start(&msgs[first]) {
@@ -188,15 +181,15 @@ pub(crate) fn turn_anchored_cut(msgs: &[Value], budget: usize) -> usize {
     first
 }
 
-/// The rows a run keeps when it has outgrown the window: `(head, tail)`,
-/// with rows `..head` and `tail..` kept and the middle folded into the brief.
+/// The rows a run keeps when the run has outgrown the window: `(head, tail)`.
+/// Rows `..head` and `tail..` are kept. The middle is folded into the brief.
 ///
-/// Inside a run there is usually ONE turn — a long tool loop answering one
-/// request — so `turn_anchored_cut` would anchor back to that turn's first
-/// row, cut nothing, and let the request go out oversized. Dropping whole
-/// tool rounds out of the middle is the only cut that is both legal (no
-/// `tool` row orphaned from the call that produced it) and real. The opening
-/// row is kept unconditionally: it is the instruction the rest obeys.
+/// A run usually holds ONE turn: a long tool loop answering one request.
+/// `turn_anchored_cut` would anchor back to that turn's first row, cut
+/// nothing, and let the request go out oversized. Dropping whole tool rounds
+/// out of the middle is the only cut that is both legal and effective. Legal
+/// means no `tool` row is orphaned from the call that produced it. The opening
+/// row is kept unconditionally, because it is the instruction the rest obeys.
 pub(crate) fn middle_out_cut(msgs: &[Value], budget: usize) -> (usize, usize) {
     if msgs.is_empty() {
         return (0, 0);
@@ -229,27 +222,28 @@ fn is_skill_result(name: &str) -> bool {
 }
 
 /// How much of the newest history pruning may not touch: the reference
-/// window, capped at half the threshold. The cap matters — on a small-window
-/// model a fixed 20k protection covers the entire conversation, so the
-/// cheapest compaction step is unreachable exactly where the window hurts.
+/// window, capped at half the threshold. Without the cap, a fixed 20k
+/// protection covers the entire conversation on a small-window model. The
+/// cheapest compaction step then becomes unreachable on the small-window
+/// models that need it most.
 pub(crate) fn prune_protect_tokens(threshold: usize) -> usize {
     KEEP_RECENT_TOKENS.min(threshold / 2)
 }
 
-/// The savings a prune pass must clear before it rewrites anything, scaled to
-/// the window: a fixed 2k floor is unreachable on a 6k model, so oversized
-/// requests would slip past the cheapest compaction step.
+/// The savings a prune pass must clear before it rewrites anything,
+/// scaled to the window. A fixed 2k floor is unreachable on a 6k model,
+/// so oversized requests would slip past the cheapest compaction step.
 pub(crate) fn prune_savings_floor(threshold: usize) -> usize {
     MIN_PRUNE_SAVINGS_TOKENS.min(threshold / 4)
 }
 
 /// Replace old tool bodies with a one-line marker, keeping the message
-/// itself — a `tool` row must stay paired with its `tool_call`.
+/// itself. A `tool` row must stay paired with its `tool_call`.
 ///
-/// Monotone by construction (a row old enough to prune stays old as the run
-/// grows), so the cached prefix is churned once rather than every turn.
-/// Returns the tokens freed, or 0 with nothing rewritten when the savings do
-/// not clear `floor` — the caller's economics, which follow the window.
+/// Pruning is monotone. A row old enough to prune stays old as the run
+/// grows. The cached prefix is churned once rather than every turn.
+/// Returns the tokens freed, or 0 with nothing rewritten when the savings
+/// do not clear `floor`.
 pub(crate) fn prune_old_tool_bodies(msgs: &mut [Value], protect: usize, floor: usize) -> usize {
     // Which tool each `tool` row answers, so skill bodies can be spared.
     let mut names: std::collections::HashMap<String, String> = std::collections::HashMap::new();
@@ -266,8 +260,8 @@ pub(crate) fn prune_old_tool_bodies(msgs: &mut [Value], protect: usize, floor: u
         }
     }
 
-    // Rows newer than `protect` tokens are off limits: index `prunable` and
-    // onward is the protected suffix. A history that never exceeds the
+    // Rows newer than `protect` tokens may not be touched: index `prunable`
+    // and onward is the protected suffix. A history that never exceeds the
     // window is protected whole.
     let mut used = 0usize;
     let mut prunable = 0usize;
@@ -279,9 +273,10 @@ pub(crate) fn prune_old_tool_bodies(msgs: &mut [Value], protect: usize, floor: u
         }
     }
 
-    // Markers are computed before anything is rewritten: a pass that cannot
-    // pay for the cache miss must leave the request untouched, not elide the
-    // transcript and then report that it did nothing.
+    // Markers are computed before anything is rewritten. A pass that cannot
+    // free enough tokens to justify the cache miss must leave the request
+    // untouched. Such a pass must not elide the transcript and then report
+    // that it did nothing.
     let mut marks: Vec<(usize, String)> = Vec::new();
     let mut freed = 0usize;
     for (i, m) in msgs[..prunable].iter().enumerate() {
@@ -367,8 +362,8 @@ mod tests {
 
     #[test]
     fn the_history_cut_lands_on_a_user_turn() {
-        // Two tool-heavy turns, each opened by the instruction the row
-        // window used to drop.
+        // Two tool-heavy turns, each opened by the instruction the cut
+        // must preserve.
         let mut msgs = vec![user("restructure the log pipeline")];
         for i in 0..20 {
             msgs.push(assistant("working"));
@@ -423,8 +418,8 @@ mod tests {
             "short",
             "the protected newest row is untouched"
         );
-        // A big window keeps the reference protection and the reference floor;
-        // a small one must be able to earn its cache miss at all.
+        // A big window keeps the reference protection and the reference floor.
+        // A small window must be able to reach its cache miss at all.
         assert_eq!(
             prune_protect_tokens(threshold_tokens(200_000, 85)),
             KEEP_RECENT_TOKENS
@@ -476,7 +471,7 @@ mod tests {
         );
         assert_eq!(recent[0]["content"].as_str().unwrap().len(), 40_000);
 
-        // Old, but not worth a cache miss.
+        // Old rows below the savings floor do not earn a cache miss.
         let mut small = vec![tool("c2", &"z".repeat(2_000))];
         assert_eq!(
             prune_old_tool_bodies(&mut small, 0, MIN_PRUNE_SAVINGS_TOKENS),
@@ -496,7 +491,6 @@ mod tests {
         assert_eq!(text.matches(SUMMARY_HEADER).count(), 1);
         assert!(text.starts_with("You are First Mate."));
         assert_eq!(get_summary(&system).as_deref(), Some("second brief"));
-        // Clearing leaves the prompt exactly as it was.
         set_summary(&mut system, None);
         assert_eq!(system["content"], "You are First Mate.");
         assert_eq!(get_summary(&system), None);

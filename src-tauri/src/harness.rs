@@ -3,7 +3,6 @@ use crate::exec::{AppNotifier, spawn_background_notify};
 /// Version string if a CLI resolves on PATH and exits 0 for `--version`.
 pub(crate) async fn cli_version(name: &str) -> Option<String> {
     let mut cmd = tokio::process::Command::new(name);
-    // tokio::process::Command has an inherent creation_flags on Windows.
     #[cfg(windows)]
     cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     let out = cmd
@@ -23,12 +22,12 @@ fn cli_available(name: &str) -> impl std::future::Future<Output = bool> {
     async move { cli_version(&name).await.is_some() }
 }
 
-/// What the setup wizard shows for harness readiness.
+/// Harness readiness, shown by the Setup wizard.
 #[derive(serde::Serialize)]
 pub(crate) struct BootstrapStatus {
     /// winapp CLI version, or None when missing.
     winapp: Option<String>,
-    /// Whether the unattended install channel exists at all.
+    /// Whether winget exists, so the wizard can offer an unattended install.
     winget: bool,
 }
 
@@ -48,8 +47,9 @@ pub(crate) async fn install_winapp(app: tauri::AppHandle) -> Result<String, Stri
     .await
 }
 
-/// The official non-interactive install for the winapp CLI, run only when
-/// the user clicks Install in the Setup wizard (or explicitly asks the agent).
+/// The official non-interactive install command for the winapp CLI. It runs
+/// only when the user clicks Install in the Setup wizard, or explicitly asks
+/// the agent to install.
 fn winapp_install_cmd() -> tokio::process::Command {
     let mut cmd = tokio::process::Command::new("winget");
     cmd.args([
@@ -81,7 +81,8 @@ mod tests {
         let argv: Vec<_> = cmd.as_std().get_args().map(|a| a.to_string_lossy().into_owned()).collect();
         assert_eq!(argv[0], "install");
         assert_eq!(argv[1], "Microsoft.WinAppCli");
-        // Fully unattended: no agreements prompts, no interactive source picks.
+        // The install must run unattended: no agreement prompt, no
+        // interactive source choice.
         assert!(argv.contains(&"--accept-package-agreements".to_string()));
         assert!(argv.contains(&"--accept-source-agreements".to_string()));
         assert!(argv.contains(&"--disable-interactivity".to_string()));

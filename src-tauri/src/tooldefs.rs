@@ -1,5 +1,5 @@
 
-/// The tools the agent can call, in OpenAI function-calling format.
+/// The registry in OpenAI function-calling format, not the lmkit format.
 pub(crate) fn agent_tools() -> serde_json::Value {
     serde_json::json!([
         {
@@ -160,10 +160,11 @@ pub(crate) fn agent_tools() -> serde_json::Value {
                 }
             }
         },
-        // Skill-gated tools ride every request (static array), so their
-        // schemas must be self-describing: minimal prose that names the
-        // skill whose instructions govern them. The dispatch gate refuses
-        // until then; the SKILL.md remains the real documentation.
+        // Skill-gated tools ride every request, because the tool array is
+        // static. Their schemas must therefore be self-describing: minimal
+        // prose that names the skill whose instructions govern them. The
+        // dispatch gate refuses the tool until that skill is loaded. The
+        // SKILL.md file stays the real documentation.
         {
             "type": "function",
             "function": {
@@ -198,11 +199,11 @@ pub(crate) fn agent_tools() -> serde_json::Value {
     ])
 }
 
-/// Client policy, not Agent Skills spec: skill *content* never names
-/// tools — the spec has no tool concept. These tools carry their usage
-/// rules inside a skill's instructions, so the dispatch gate in
-/// `execute.rs` refuses them until that skill is loaded into the
-/// conversation; the refusal teaches the model the path.
+/// Client policy, not the Agent Skills spec. The spec has no tool concept, so
+/// a portable SKILL.md cannot require a tool. These tools carry their usage
+/// rules inside a skill's instructions. The dispatch gate in `execute.rs`
+/// refuses them until that skill is loaded. The refusal message teaches the
+/// model the path.
 pub(crate) fn skill_required(tool: &str) -> Option<&'static str> {
     match tool {
         "read_file" | "edit_file" | "write_file" | "list_dir" | "search_files" | "list_processes" => {
@@ -224,7 +225,6 @@ pub(crate) fn tool_schema(name: &str) -> Option<serde_json::Value> {
         })
 }
 
-/// Convert OpenAI-format tool schemas to lmkit types.
 pub(crate) fn to_tool_defs(values: &[serde_json::Value]) -> Vec<lmkit::ToolDefinition> {
     use lmkit::{FunctionDefinition, ToolDefinition};
     values
@@ -255,8 +255,8 @@ mod tests {
 
     #[test]
     fn gated_tools_name_their_owning_skill() {
-        // The gate map must agree with the registry: every gated tool
-        // exists, and the agent's standing capability is never gated.
+        // The gate map must agree with the registry. Every gated tool exists,
+        // and the agent's standing capability is never gated.
         for t in [
             "read_file",
             "edit_file",
@@ -286,8 +286,8 @@ mod tests {
 
     #[test]
     fn full_registry_is_disclosed_every_request() {
-        // Static tool array: no per-run schema mutation, so provider
-        // prefix caching stays warm across the whole conversation.
+        // The tool array is static, so nothing mutates the schema per run.
+        // Provider prefix caching stays warm across the whole conversation.
         let all = agent_tools().as_array().expect("tool array").clone();
         let names: Vec<&str> = all
             .iter()

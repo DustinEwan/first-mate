@@ -1,9 +1,9 @@
 use crate::log::log;
 
-/// Open a URL or filesystem path in the user's default handler — the ONLY
-/// sanctioned way anything leaves the webview (browser for http/https,
-/// default app for file://). Rejects anything else (powershell schemes,
-/// arbitrary executables-by-scheme, command injection).
+/// Open a URL or filesystem path in the user's default handler. This is the
+/// ONLY path by which anything leaves the webview. http and https open the
+/// browser. `file://` opens the default app for the file type. Every other
+/// scheme is refused, so a caller cannot name an executable or a shell command.
 #[tauri::command]
 pub(crate) fn open_path(target: String) -> Result<(), String> {
     let result = open_path_inner(&target);
@@ -18,9 +18,11 @@ fn open_path_inner(target: &str) -> Result<(), String> {
     shell_open(&resolve_open_target(target)?)
 }
 
-/// Scheme gate + normalization: file:// -> existing backslash path, http(s) ->
-/// verbatim URL. Everything else refused. No cmd/explorer argv is ever built,
-/// so URL metacharacters (& | ^) are ordinary data, not injection vectors.
+/// Gate the scheme, then normalize it. `file://` becomes an existing path
+/// with backslashes. `http(s)` is returned verbatim. Every other scheme is
+/// refused. No `cmd` or `explorer` argv string is ever built. URL
+/// metacharacters (`&`, `|`, `^`) therefore stay data and cannot inject a
+/// command.
 fn resolve_open_target(target: &str) -> Result<String, String> {
     let t = target.trim();
     if let Some(rest) = t.strip_prefix("file://") {
@@ -29,8 +31,10 @@ fn resolve_open_target(target: &str) -> Result<String, String> {
         if decoded.contains('"') {
             return Err("path contains a quote character".to_string());
         }
-        // file:///C:/x -> C:\x ; file://server/share -> \\server\share (UNC).
-        // Handlers get backslashes: forward slashes break naive argv parsers.
+        // file:///C:/x -> C:\x
+        // file://server/share -> \\server\share (UNC)
+        // The default handler receives backslashes. A forward slash breaks
+        // naive argv parsers.
         let is_unc = !t.starts_with("file:///");
         let winpath = decoded.replace('/', "\\");
         let winpath = if is_unc {
@@ -50,9 +54,9 @@ fn resolve_open_target(target: &str) -> Result<String, String> {
     Err(format!("refusing to open: {t}"))
 }
 
-/// ShellExecuteW — the same call Explorer's own UI uses. Unlike explorer.exe's
-/// broken argv parser (which opens Documents on input it can't parse) or
-/// `cmd /c start` (quote/metacharacter hell), it takes the path as data.
+/// ShellExecuteW, the call Explorer's own UI uses. ShellExecuteW takes the
+/// path as data. `explorer.exe` opens Documents when its argv parser rejects
+/// the input, and `cmd /c start` re-parses quotes and metacharacters.
 #[cfg(windows)]
 fn shell_open(target: &str) -> Result<(), String> {
     use windows::core::PCWSTR;
@@ -74,7 +78,7 @@ fn shell_open(target: &str) -> Result<(), String> {
     if code > 32 {
         Ok(())
     } else if code == 31 {
-        // SE_ERR_NOASSOC: no handler — Windows showed the Open With dialog.
+        // SE_ERR_NOASSOC: Windows has shown its own Open With dialog.
         Ok(())
     } else {
         Err(format!("ShellExecute failed (code {code})"))
@@ -86,7 +90,8 @@ fn shell_open(target: &str) -> Result<(), String> {
     Err(format!("no default handler support on this platform: {target}"))
 }
 
-/// Minimal percent-decoding for file:// paths (%20 etc.); leaves '+' alone.
+/// Percent-decoding for `file://` paths (%20 and similar). A '+' stays a
+/// literal '+'; a '+' is not a space.
 fn percent_decode(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -114,13 +119,13 @@ mod tests {
         assert!(resolve_open_target("javascript:alert(1)").is_err());
         assert!(resolve_open_target("powershell.exe -c calc").is_err());
         assert!(resolve_open_target("file:///C:/nope/nothing-here-xyzzy.txt").is_err());
-        // URL metacharacters are data for ShellExecuteW, not injection vectors;
-        // query strings must survive untouched.
+        // URL metacharacters are data for ShellExecuteW. A query string
+        // must survive the gate untouched.
         assert_eq!(
             resolve_open_target("https://example.com/&calc|x").unwrap(),
             "https://example.com/&calc|x"
         );
-        // file:// paths are normalized to backslashes for handler argv parsers.
+        // Handlers receive a file:// path as a backslash path.
         assert_eq!(
             resolve_open_target("file:///C:/Windows/System32/drivers/etc/hosts").unwrap(),
             "C:\\Windows\\System32\\drivers\\etc\\hosts"

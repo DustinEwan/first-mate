@@ -1,11 +1,11 @@
-//! Packaging invariants checked against the repo, not the built binary:
-//! every packaged skill must exist with parseable identity frontmatter,
-//! and the installer resource list must cover them.
+//! Packaging invariants, checked against the repo rather than the built
+//! binary. Every packaged skill must exist with identity frontmatter, and
+//! the installer resource list must cover every packaged file.
 
 use std::path::Path;
 
 fn repo_root() -> &'static Path {
-    // CARGO_MANIFEST_DIR = src-tauri; prompt content lives one level up.
+    // CARGO_MANIFEST_DIR is src-tauri; prompt content lives one level up.
     Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap()
 }
 
@@ -68,8 +68,8 @@ fn installer_packages_every_skill_file() {
 
 #[test]
 fn installer_packages_the_prompt_content() {
-    // The binary ships no prompt text, so every prompt file the runtime reads
-    // has to travel with the installer — including the compaction brief rules.
+    // The binary ships no prompt text. Every prompt file the runtime reads
+    // must travel with the installer.
     let conf = std::fs::read_to_string(repo_root().join("src-tauri").join("tauri.conf.json"))
         .expect("tauri.conf.json");
     for name in ["AGENTS.md", "COMPACT.md"] {

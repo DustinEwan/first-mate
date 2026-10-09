@@ -12,10 +12,9 @@ use crate::route::route_to_tool;
 use crate::skills::{discover_skills, parse_frontmatter, resolve_skill_resource, skill_dir};
 use crate::tooldefs::skill_required;
 
-/// Execute a tool by name with JSON arguments. Returns the result as a
-/// string. `app` enables background-job completion announcements;
-/// `loaded` is the set of skills loaded into this conversation (the
-/// dispatch gate's input).
+/// `app` enables background-job completion announcements; `loaded`
+/// is the set of skills loaded into this conversation (the dispatch
+/// gate's input).
 pub(crate) async fn execute_tool(
     app: &tauri::AppHandle,
     loaded: &std::collections::HashSet<String>,
@@ -24,8 +23,8 @@ pub(crate) async fn execute_tool(
     seen: &mut HashMap<String, String>,
 ) -> Result<String, String> {
     log(&format!("TOOL CALL: {} args={}", name, args));
-    // The elevation tools need the app handle (managed state + window
-    // events), so they are dispatched here, not in the headless core.
+    // The elevation tools need the app handle (managed state,
+    // window events), so they dispatch here, not in the headless core.
     let result = match name {
         "elevate" | "delevate" | "run_elevated" => execute_elevation(app, name, args).await,
         _ => {
@@ -41,8 +40,8 @@ pub(crate) async fn execute_tool(
     result.map(|r| budget_output(seen, format!("{}{}", name, args), r))
 }
 
-/// Test / headless convenience: no notifier, so completions are recorded
-/// but never announced.
+/// Test / headless convenience: completions are never announced and
+/// no skill is loaded, so gated tools refuse.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) async fn execute_tool_inner(name: &str, args: &serde_json::Value) -> Result<String, String> {
     execute_tool_notify(
@@ -55,7 +54,8 @@ pub(crate) async fn execute_tool_inner(name: &str, args: &serde_json::Value) -> 
     .await
 }
 
-/// The elevation trio: UAC consent, the persistent admin session, release.
+/// Dispatch for the three elevation tools: UAC consent, the
+/// persistent admin session, and release.
 async fn execute_elevation(
     app: &tauri::AppHandle,
     name: &str,
@@ -93,9 +93,9 @@ async fn execute_tool_notify(
     name: &str,
     args: &serde_json::Value,
 ) -> Result<String, String> {
-    // Dispatch gate (client policy, not spec): a tool whose usage rules
-    // live in a skill's instructions refuses until that skill is loaded —
-    // the refusal teaches the model the path.
+    // This is the dispatch gate, a client policy rather than a spec rule. A
+    // tool whose usage rules live in a skill's instructions is refused until
+    // that skill is loaded. The refusal text teaches the model the load path.
     if let Some(skill) = skill_required(name) {
         if !loaded.contains(skill) {
             return Err(format!(
@@ -113,9 +113,10 @@ async fn execute_tool_notify(
                      quoting, no truncation)."
                 ));
             }
-            // Elevated Control ON: winapp runs in the elevated session, so
-            // it drives elevated windows too (UIPI refuses MEDIUM input
-            // against HIGH targets — silently). First-token match only.
+            // Elevated Control ON: winapp runs in the elevated
+            // session, so it drives elevated windows too. UIPI
+            // refuses MEDIUM input against HIGH targets silently.
+            // The check matches only the first token.
             if let Some(app) = app {
                 if elevation_active(app) && is_winapp_call(command) {
                     log("RUN winapp via elevated session");
@@ -139,14 +140,16 @@ async fn execute_tool_notify(
                 }
             }
             if shell == "powershell" && !background {
-                // Preferred path: the persistent session. $vars, functions,
-                // and cwd carry across tool calls, and every call skips a
-                // ~0.5s powershell startup.
+                // The persistent session is the preferred path.
+                // Variables, functions, and cwd carry across tool
+                // calls, and each call skips a ~0.5s powershell
+                // startup.
                 match ps_session_exec(command, cwd.map(str::to_string), cmd_timeout()).await {
                     PsRun::Done { stdout, code, stderr } => {
                         return if code == 0 {
-                            // Non-terminating errors exit 0 with the problem
-                            // only on stderr — surface it, never swallow it.
+                        // Non-terminating errors exit 0 and appear
+                        // only on stderr. Surface stderr; never
+                        // swallow an error.
                             if stderr.trim().is_empty() {
                                 Ok(stdout)
                             } else {
@@ -168,11 +171,11 @@ async fn execute_tool_notify(
             }
             let mut script_path: Option<std::path::PathBuf> = None;
             let mut cmd = if shell == "powershell" {
-                // The command is DATA, never a quoted argv fragment: write
-                // it verbatim to a scratch .ps1 (UTF-8 BOM so Windows
-                // PowerShell 5.1 decodes non-ASCII) and run it with -File.
-                // This kills the cmd -> powershell -> Add-Type quote
-                // nesting failure class entirely: zero quoting layers.
+                // The command is DATA, never a quoted argv fragment. Write the
+                // command verbatim to a scratch .ps1 and run it with -File. The
+                // UTF-8 BOM makes Windows PowerShell 5.1 decode non-ASCII. Zero
+                // quoting layers remove the quote-nesting failure class that
+                // spans cmd, powershell, and Add-Type.
                 let script = fm_tmp_dir().join(format!(
                     "cmd-{}-{}.ps1",
                     std::process::id(),
@@ -196,10 +199,9 @@ async fn execute_tool_notify(
                 c.arg(&script);
                 c
             } else if needs_shell(command) {
-                // Pipes, &&, redirection, cmd built-ins: run via cmd.exe.
-                // /S /C "..." strips only the outermost quotes, so inner
-                // quotes survive (plain /C mangles them). raw_arg avoids
-                // Rust re-escaping the string.
+                // /S /C "..." strips only the outermost quotes, so
+                // inner quotes survive; plain /C mangles them.
+                // raw_arg keeps Rust from re-escaping the string.
                 log(&format!("RUN via cmd shell: {}", command));
                 let mut c = tokio::process::Command::new("cmd.exe");
                 c.raw_arg("/S")
@@ -207,7 +209,7 @@ async fn execute_tool_notify(
                     .raw_arg(format!("\"{}\"", command));
                 c
             } else {
-                // Direct launch: quotes are parsed by us, so multi-word
+                // This branch parses quotes itself, so multi-word
                 // quoted arguments reach the program intact.
                 let argv = parse_command(command);
                 let (program, rest) = match argv.split_first() {
@@ -274,7 +276,7 @@ async fn execute_tool_notify(
             let text = String::from_utf8_lossy(&bytes);
             let lines: Vec<&str> = text.split('\n').collect();
             let total = lines.len();
-            // 1-based inclusive start; default whole file up to 2000 lines.
+            // The offset is a 1-based inclusive start line.
             let start = args
                 .get("offset")
                 .and_then(|v| v.as_u64())
@@ -307,9 +309,10 @@ async fn execute_tool_notify(
             let path = args.get("path").and_then(|c| c.as_str()).unwrap_or("");
             let content = args.get("content").and_then(|c| c.as_str()).unwrap_or("");
             if tokio::fs::try_exists(path).await.unwrap_or(false) {
-                // Overwrite guard: the model must have READ this file and
-                // must echo its current snapshot tag. The current tag is
-                // deliberately not leaked in the error.
+                // Overwrite guard: the model must have read this
+                // file and must echo its current snapshot tag. The
+                // error must not leak the current tag; a leaked tag
+                // would defeat the read requirement.
                 let bytes = tokio::fs::read(path).await.map_err(|e| e.to_string())?;
                 let current = snapshot_tag(&bytes);
                 let tag = args.get("tag").and_then(|c| c.as_str()).unwrap_or("");
@@ -429,8 +432,6 @@ async fn execute_tool_notify(
     }
 }
 
-/// Recursive name search: case-insensitive substring, depth- and
-/// result-capped, hidden entries skipped.
 fn search_files_walk<'a>(
     root: &'a std::path::Path,
     pattern: &'a str,
@@ -474,10 +475,10 @@ mod tests {
 
     #[tokio::test]
     async fn powershell_shell_mode_survives_quote_hell() {
-        // Exactly the payload class that died in the cmd -> powershell ->
-        // Add-Type chain: single-quoted string with an escaped quote and
-        // embedded double quotes, plus $ interpolation. As script DATA
-        // there is no quoting layer left to corrupt it.
+        // This payload mixes a single-quoted string with an escaped
+        // quote, embedded double quotes, and $ interpolation. The
+        // payload survives only as script DATA with zero quoting
+        // layers.
         let cmd = "$name = 'world''s \"best\"'\nWrite-Output \"hello $name\"\n";
         let out = execute_tool_inner(
             "run_command",
@@ -522,7 +523,7 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.contains("Blocked") && err.contains("list_dir"), "{err}");
-        // Before the owning skill loads, the same command runs normally.
+        // Without the owning skill loaded, run_command does not intercept.
         let ok = execute_tool_inner("run_command", &serde_json::json!({ "command": "echo dir" }))
             .await
             .unwrap();
@@ -546,7 +547,6 @@ mod tests {
         let tag = out.lines().next().unwrap();
         assert!(tag.starts_with('[') && tag.contains("#") && tag.ends_with(']'), "{tag}");
         assert!(out.contains("1:alpha") && out.contains("4:delta"), "{out}");
-        // Windowed read with continuation pointer.
         let win = fs_call(
             "read_file",
             serde_json::json!({ "path": &p, "offset": 2, "limit": 2 }),
@@ -556,7 +556,6 @@ mod tests {
         assert!(win.contains("2:bravo") && win.contains("3:charlie"), "{win}");
         assert!(!win.contains("1:alpha") && !win.contains("4:delta"), "{win}");
         assert!(win.contains("use offset 4 to continue"), "{win}");
-        // Same content -> same tag; edited content -> different tag.
         let again = fs_call("read_file", serde_json::json!({ "path": &p }))
             .await
             .unwrap();
@@ -607,7 +606,6 @@ mod tests {
             .await
             .unwrap();
         let tag = tag_of(&read);
-        // Bottom-up: replace line 4, cut 2-3, insert before 1.
         let res = fs_call(
             "edit_file",
             serde_json::json!({
@@ -623,13 +621,12 @@ mod tests {
             res.contains("```diff\n+HEAD\n-l2\n-l3\n-l4\n+FOUR\n```"),
             "{res}"
         );
-        // Result reports the new snapshot, and a re-read agrees.
         let new_tag = tag_of(&res);
         let again = fs_call("read_file", serde_json::json!({ "path": &p }))
             .await
             .unwrap();
         assert_eq!(tag_of(&again), new_tag);
-        // The OLD tag is now refused: stale anchors must not corrupt.
+        // A stale tag is refused, so an outdated anchor cannot corrupt the file.
         let err = fs_call(
             "edit_file",
             serde_json::json!({ "path": &p, "tag": &tag, "ops": "CUT 1.=1" }),
@@ -668,7 +665,7 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.contains("unknown op"), "{err}");
-        // Untouched by the rejected attempts.
+        // A rejected edit must leave the file untouched.
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "a\nb\nc\n");
         std::fs::remove_file(&p).ok();
     }
@@ -677,7 +674,7 @@ mod tests {
     async fn write_file_requires_read_before_overwrite() {
         let p = temp_path("guard.txt");
         std::fs::remove_file(&p).ok();
-        // New file: no tag needed, result is meaningful.
+        // A brand-new file needs no tag.
         let res = fs_call(
             "write_file",
             serde_json::json!({ "path": &p, "content": "v1\n" }),
@@ -685,7 +682,8 @@ mod tests {
         .await
         .unwrap();
         assert!(res.contains("wrote 3 bytes"), "{res}");
-        // Existing file, no tag: refused, and the current tag is NOT leaked.
+        // An existing file with no tag is refused. The error must
+        // not leak the current tag.
         let err = fs_call(
             "write_file",
             serde_json::json!({ "path": &p, "content": "v2\n" }),
@@ -694,7 +692,6 @@ mod tests {
         .unwrap_err();
         assert!(err.contains("read_file") && !err.contains(&tag_of(&res)), "{err}");
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "v1\n");
-        // Read it, then overwrite with the fresh tag.
         let tag = tag_of(&fs_call("read_file", serde_json::json!({ "path": &p }))
             .await
             .unwrap());
@@ -705,7 +702,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "v2\n");
-        // External change invalidates the tag we just saw.
+        // An external change invalidates the last-seen tag.
         std::fs::write(&p, "external\n").unwrap();
         let err = fs_call(
             "write_file",
@@ -728,10 +725,10 @@ mod tests {
         }
     }
 
-    /// One replay of a full agent session against the real machine:
-    /// skill-gated tools execute -> persistent PowerShell session keeps
-    /// state and cwd -> interceptor refuses duplicated shell -> read/edit/write guard
-    /// chain -> slow command auto-backgrounds -> completion is announced.
+    /// One replay of a full agent session against the real machine. Skill-gated
+    /// tools execute. The persistent PowerShell session keeps state and cwd. The
+    /// interceptor refuses duplicated shell. The read/edit/write guard chain
+    /// holds. A slow command auto-backgrounds, and the completion is announced.
     #[tokio::test]
     async fn composite_agent_session_replay() {
         let dir = std::env::temp_dir().join(format!("fm-e2e-{}", std::process::id()));
@@ -739,8 +736,8 @@ mod tests {
         let dpath = dir.to_string_lossy().to_string();
         let fpath = dir.join("notes.md").to_string_lossy().to_string();
 
-        // Activation state: the filesystem skill is loaded in this run, so
-        // its gated tools execute; the refusal path is tested separately.
+        // The filesystem skill is loaded in this run, so its gated
+        // tools execute. The refusal path has its own test.
         let loaded: std::collections::HashSet<String> =
             ["filesystem".to_string()].into_iter().collect();
         let loaded = &loaded;
@@ -752,7 +749,7 @@ mod tests {
             async move { execute_tool_notify(None, n, loaded, &name, &args).await }
         };
 
-        // Persistent session: state survives between calls, cwd sticks.
+        // The persistent session keeps state and cwd across calls.
         call(
             "run_command",
             serde_json::json!({ "command": "$x = 21 * 2", "shell": "powershell", "cwd": &dpath }),
@@ -769,13 +766,12 @@ mod tests {
         .unwrap();
         assert!(r.contains("x=42") && r.to_lowercase().contains("fm-e2e"), "{r}");
 
-        // Interceptor: the fs tools are disclosed, so `dir` is refused.
+        // The filesystem skill is loaded, so the interceptor refuses `dir`.
         let err = call("run_command", serde_json::json!({ "command": "dir" }))
             .await
             .unwrap_err();
         assert!(err.contains("Blocked") && err.contains("list_dir"), "{err}");
 
-        // Create -> read -> edit -> guarded overwrite.
         let w = call(
             "write_file",
             serde_json::json!({ "path": &fpath, "content": "# Notes\nline two\nline three\n" }),
@@ -799,7 +795,7 @@ mod tests {
             std::fs::read_to_string(&fpath).unwrap(),
             "# Notes\nline TWO\nline three\n"
         );
-        // Stale tag (the pre-edit one) cannot clobber the file.
+        // The stale pre-edit tag cannot overwrite the file.
         let err = call(
             "write_file",
             serde_json::json!({ "path": &fpath, "content": "gone\n", "tag": &t }),
@@ -809,7 +805,8 @@ mod tests {
         assert!(err.contains("changed") || err.contains("read_file"), "{err}");
         assert!(std::fs::read_to_string(&fpath).unwrap().contains("line TWO"));
 
-        // Slow foreground command: adopted into the background, never polled.
+        // A slow foreground command is adopted into the background
+        // and must not be polled.
         std::env::set_var("FIRSTMATE_AUTO_BG_SECS", "1");
         let r = call(
             "run_command",
@@ -835,7 +832,7 @@ mod tests {
         call("kill_command", serde_json::json!({ "pid": pid }))
             .await
             .unwrap();
-        // Even a killed job announces - the model learns it stopped.
+        // A killed job must also announce; the model learns the job stopped.
         let mut kill_noted = false;
         for _ in 0..80 {
             if !rec.0.lock().unwrap().is_empty() {
@@ -847,7 +844,7 @@ mod tests {
         assert!(kill_noted, "killed job must announce its exit");
         rec.0.lock().unwrap().clear();
 
-        // background:true job -> completion lands in the notifier.
+        // A background:true job reports completion through the notifier.
         let r = call(
             "run_command",
             serde_json::json!({ "command": "ping -n 2 127.0.0.1", "background": true }),
@@ -883,8 +880,8 @@ mod tests {
 
     #[tokio::test]
     async fn gated_tool_refuses_until_its_skill_is_loaded() {
-        // Dispatch gate: with no skill loaded, gated tools refuse and the
-        // refusal names the path; ungated capability executes normally.
+        // With no skill loaded, gated tools refuse and the refusal
+        // names the skill path. Ungated tools execute normally.
         let err = execute_tool_inner("list_dir", &serde_json::json!({ "path": "." }))
             .await
             .expect_err("filesystem tools must refuse before the skill loads");

@@ -1,13 +1,14 @@
 use crate::log::{home_dir, log};
 use crate::report::ToolReport;
 
-/// One persisted turn. Only user/assistant turns round-trip.
+/// One persisted turn: role, text, and an optional report. Any role
+/// round-trips, `tool` included.
 #[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct ConvMsg {
     role: String,
     text: String,
-    /// Structured facts for tool turns: the UI renders these on resume;
-    /// `text` is the model-facing transcript.
+    /// Structured facts for a tool turn. The UI re-renders these fields on
+    /// resume. The `text` field is the model-facing transcript.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     report: Option<ToolReport>,
 }
@@ -23,8 +24,8 @@ fn conv_dir() -> std::path::PathBuf {
     home_dir().join(".firstmate").join("conversations")
 }
 
-/// Filesystem-safe conversation filename stem: no path separators or Windows
-/// reserved characters, capped at 48 chars.
+/// Filesystem-safe conversation filename stem. The result holds no path
+/// separator, no Windows reserved character, and at most 48 characters.
 fn sanitize_conv_name(name: &str) -> String {
     let cleaned: String = name
         .chars()
@@ -43,8 +44,9 @@ fn sanitize_conv_name(name: &str) -> String {
     }
 }
 
-/// Prelude format: the FIRST LINE is the conversation name, so listing a
-/// directory needs no JSON parsing; the rest is JSONL of `ConvMsg`.
+/// The first line is the conversation name; the rest is JSONL of `ConvMsg`.
+/// Listing a directory reads only that first line, so listing needs no JSON
+/// parsing.
 fn serialize_conversation(name: &str, msgs: &[ConvMsg]) -> String {
     let mut out = format!("{}\n", name);
     for m in msgs {
@@ -64,7 +66,7 @@ fn parse_conversation(raw: &str) -> (String, Vec<ConvMsg>) {
     (name, msgs)
 }
 
-/// Resolve a stored path, refusing anything outside the conversations dir.
+/// Resolve a stored path. A path outside the conversations dir is refused.
 fn resolve_conv_path(path: &str) -> Result<std::path::PathBuf, String> {
     let full = std::path::Path::new(path)
         .canonicalize()
@@ -96,7 +98,6 @@ pub(crate) fn list_conversations() -> Vec<ConvInfo> {
         if path.extension().and_then(|e| e.to_str()) != Some("chat") {
             continue;
         }
-        // Scan the prelude only: first line is the name.
         let Ok(raw) = std::fs::read_to_string(&path) else {
             continue;
         };
@@ -127,8 +128,9 @@ pub(crate) fn load_conversation(path: String) -> Result<Vec<ConvMsg>, String> {
     Ok(parse_conversation(&raw).1)
 }
 
-/// Delete a conversation file. The path goes through the same containment
-/// check as load: only files inside the conversations dir can be removed.
+/// Delete a conversation file. The path passes the containment check that
+/// `load_conversation` uses, so only a file inside the conversations dir can
+/// be removed.
 #[tauri::command]
 pub(crate) fn delete_conversation(path: String) -> Result<(), String> {
     let full = resolve_conv_path(&path)?;
@@ -175,7 +177,8 @@ mod tests {
         assert_eq!(back.len(), 3);
         assert_eq!(back[1].role, "tool");
         assert!(back[1].text.starts_with("→ x"));
-        // Facts survive the round trip: the UI re-renders from them, no parsing.
+        // Structured facts survive the round trip. The UI re-renders them
+        // without parsing text.
         let r = back[1].report.as_ref().unwrap();
         assert_eq!(r.subject, "C:\\x");
         assert_eq!(r.count, Some(2));
@@ -188,7 +191,7 @@ mod tests {
             ConvMsg { role: "assistant".into(), text: "hello".into(), report: None },
         ];
         let ser = serialize_conversation("My chat", &msgs);
-        // Scanning needs only the first line.
+        // Listing a directory needs only the first line.
         assert_eq!(ser.lines().next(), Some("My chat"));
         let (name, back) = parse_conversation(&ser);
         assert_eq!(name, "My chat");
@@ -206,8 +209,8 @@ mod tests {
 
     #[test]
     fn delete_cannot_escape_conversations_dir() {
-        // Anything outside the conversations dir is refused before any
-        // remove_file runs: existing file elsewhere, traversal, missing file.
+        // Everything outside the conversations dir is refused before any
+        // remove_file runs: a file elsewhere, a traversal, a missing file.
         assert!(resolve_conv_path("C:\\Windows\\win.ini").is_err());
         assert!(resolve_conv_path("..\\..\\settings.json").is_err());
         assert!(resolve_conv_path("no-such-file-here").is_err());

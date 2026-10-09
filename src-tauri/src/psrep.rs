@@ -1,37 +1,30 @@
 use crate::exec::{MAX_BG_OUTPUT, cmd_timeout};
 
-// ---------------------------------------------------------------------------
-// Persistent PowerShell session
-// ---------------------------------------------------------------------------
-//
 // One long-lived `powershell.exe` owned by a dedicated worker thread. Each
-// command is script TEXT written to the child's stdin (data, never argv)
-// followed by a unique run-marker line; a REPL inside the child executes the
-// accumulated text as one scriptblock and answers with a sentinel line
-// carrying the exit status. `$vars`, functions, and cwd persist across
-// tool calls, and there is zero quoting nesting: the command never passes
-// through another interpreter's argument parser.
+// command is script text written to the child's stdin as data, never argv,
+// followed by a unique run-marker line. A REPL inside the child executes the
+// accumulated text as one scriptblock. The REPL answers with a sentinel line
+// carrying the exit status. `$vars`, functions, and cwd persist across tool
+// calls. The command never passes through another interpreter's argument
+// parser, so no quoting nesting exists.
 //
 // Failure semantics:
-// - Broken: the command demonstrably never ran (spawn/write failure) ->
+// - Broken: the command demonstrably never ran (spawn/write failure). The
 //   caller may safely fall back to one-shot `powershell -File`.
-// - TimedOut / died mid-command: the command may have partially run ->
-//   the session is killed, partial output is returned, and NOTHING is
-//   re-run (no duplicated side effects).
+// - TimedOut / died mid-command: the command may have partially run. The
+//   session is killed. Partial output is returned. NOTHING is re-run, so no
+//   side effect is duplicated.
 
-/// The REPL script that owns the session child's stdin loop. It reads
-/// lines until it sees a `__FM_RUN_*` marker, dot-sources everything
-/// collected (so assignments land in session scope), then answers
+/// The REPL script that owns the session child's stdin loop. The REPL reads
+/// lines until it sees a `__FM_RUN_*` marker. The REPL dot-sources everything
+/// collected, so assignments land in session scope. The REPL then answers
 /// `__FM_END_<id>:<ok as int>:<$LASTEXITCODE>`. Success is tracked with an
-/// explicit flag because `$?` resets to True once a try/catch completes —
-/// a caught `throw` must still report failure — and it also folds in the
-/// final `$?` so non-terminating cmdlet errors (missing paths etc.) fail.
-/// Protocol variables carry the `$__fm_` prefix: dot-sourcing shares
-/// session scope, so a user script assigning common names used to be able
-/// to clobber the protocol state (live incident: `$id =
-/// [WindowsIdentity]::GetCurrent()` mangled the sentinel id, the harness
-/// never matched its line, and the session soft-locked until the
-/// timeout cap).
+/// explicit flag. `$?` resets to True once a try/catch completes, so a caught
+/// `throw` must still report failure. The flag also folds in the final `$?`,
+/// so non-terminating cmdlet errors (missing paths, for example) fail.
+/// Protocol variables carry the `$__fm_` prefix. Dot-sourcing shares session
+/// scope. A user script that assigns a common name would clobber the protocol
+/// state.
 const PS_REPL: &str = r#"[Console]::OutputEncoding=[Text.Encoding]::UTF8;[Console]::InputEncoding=[Text.Encoding]::UTF8;while($true){$__fm_c=[Console]::In.ReadLine();if($null -eq $__fm_c){break};$__fm_b=New-Object System.Collections.ArrayList;while($__fm_c -notlike '__FM_RUN_*'){[void]$__fm_b.Add($__fm_c);$__fm_c=[Console]::In.ReadLine();if($null -eq $__fm_c){break}};if($null -eq $__fm_c){break};$__fm_id=$__fm_c.Substring(9);$__fm_ok=$true;try{. ([scriptblock]::Create(($__fm_b -join [Environment]::NewLine)))}catch{Write-Error $_;$__fm_ok=$false};$__fm_ok=$__fm_ok -and $?;Write-Host "__FM_END_$($__fm_id):$([int]$__fm_ok):$LASTEXITCODE"}"#;
 
 struct PsCommand {
@@ -48,8 +41,8 @@ enum PsMsg {
 }
 
 enum PsReply {
-    /// Command completed: stdout, exit code, stderr (stderr is buffered
-    /// separately, so cross-stream interleaving is not preserved).
+    /// stderr is buffered separately, so cross-stream interleaving is not
+    /// preserved.
     Done { stdout: String, code: i32, stderr: String },
     /// Command never ran; one-shot fallback is safe.
     Broken { note: String },
@@ -190,16 +183,16 @@ fn ps_handle(cmd: PsCommand, seq: u64, state: &mut Option<PsState>) {
     let id = format!("{}_{seq}", st.nonce);
     let mut script = String::new();
     if let Some(dir) = &cmd.cwd {
-        // Session cwd: persists into later commands (a feature, matching
-        // how a human uses one shell for a task).
+        // Session cwd persists into later commands by design.
         script.push_str(&format!("Set-Location -LiteralPath '{}'\n", dir.replace('\'', "''")));
     }
     script.push_str(&cmd.text);
     if !script.ends_with('\n') {
         script.push('\n');
     }
-    // No trailing underscores: the REPL derives the id via Substring(9),
-    // and the echoed `__FM_END_<id>:` must match Rust's sentinel exactly.
+    // The REPL derives the id via `Substring(9)`, so the id has no trailing
+    // underscores. The echoed `__FM_END_<id>:` must match Rust's sentinel
+    // exactly.
     script.push_str(&format!("__FM_RUN_{id}\n"));
     if st.stdin.write_all(script.as_bytes()).and_then(|_| st.stdin.flush()).is_err() {
         let _ = st.child.kill();
@@ -209,11 +202,11 @@ fn ps_handle(cmd: PsCommand, seq: u64, state: &mut Option<PsState>) {
         });
         return;
     }
-    // Match on the sentinel PREFIX, not the exact id: the id round-trips
-    // through user-script scope and could still be clobbered by an
-    // assignment. The worker serializes commands and every failure path
-    // kills+respawns the child with a fresh line channel, so any
-    // `__FM_END_` line on this channel belongs to the in-flight command.
+    // Match on the sentinel PREFIX, not the exact id. The id round-trips
+    // through user-script scope, so an assignment could still clobber it. The
+    // worker serializes commands. Every failure path kills and respawns the
+    // child with a fresh line channel. Any `__FM_END_` line on this channel
+    // therefore belongs to the in-flight command.
     let deadline = std::time::Instant::now() + cmd.timeout;
     let mut out = String::new();
     let mut disconnected = false;
@@ -223,7 +216,7 @@ fn ps_handle(cmd: PsCommand, seq: u64, state: &mut Option<PsState>) {
         if remaining.is_zero() {
             break;
         }
-        // Short slices so a user stop can interrupt a wedged command.
+        // Short slices so a user stop can interrupt a stuck command.
         let slice = remaining.min(std::time::Duration::from_millis(250));
         match st.lines.recv_timeout(slice) {
             Ok(line) => {
@@ -253,11 +246,11 @@ fn ps_handle(cmd: PsCommand, seq: u64, state: &mut Option<PsState>) {
             }
             Err(_) => {
                 if std::time::Instant::now() >= deadline {
-                    break; // deadline
+                    break;
                 }
-                // A user stop must interrupt a wedged command: this wait
-                // loop is the only thing blocking the agent loop, and
-                // CHAT_STOP is otherwise checked only between calls.
+                // A user stop must interrupt a stuck command. This wait loop is
+                // the only thing blocking the agent loop, and CHAT_STOP is
+                // otherwise checked only between calls.
                 if crate::llm::CHAT_STOP.load(std::sync::atomic::Ordering::SeqCst) {
                     stopped = true;
                     break;
@@ -265,16 +258,16 @@ fn ps_handle(cmd: PsCommand, seq: u64, state: &mut Option<PsState>) {
             }
         }
     }
-    // No sentinel: the command timed out, or the child exited mid-command.
-    // If the child EXITED, its process exit code is the command's own
-    // result: a command calling `exit N` (or a bare `exit`) tears down the
-    // REPL host and Windows reports N as the process code. A real crash
-    // honestly surfaces as a large nonzero code with partial output.
+    // No sentinel: the command timed out, or the child exited mid-command. If
+    // the child EXITED, the child's process exit code is the command's own
+    // result. A command that calls `exit N`, or a bare `exit`, tears down the
+    // REPL host. Windows then reports N as the process exit code. A crash
+    // produces a large nonzero code with partial output.
     let mut status = st.child.try_wait().ok().flatten();
     if status.is_none() && disconnected {
-        // stdout EOF can land microseconds before the process-exit record;
-        // give the OS a moment so `exit N` reports N instead of a false
-        // timeout (the common case; a hung-but-closed pipe is not a thing).
+        // stdout EOF can arrive microseconds before the process-exit record.
+        // Give the OS a moment, so `exit N` reports N instead of a false
+        // timeout.
         for _ in 0..40 {
             std::thread::sleep(std::time::Duration::from_millis(50));
             status = st.child.try_wait().ok().flatten();
@@ -330,9 +323,9 @@ pub(crate) async fn ps_session_exec(
     {
         return PsRun::Broken { note: "session worker thread gone".into() };
     }
-    // The worker enforces each command's own deadline, but a command may
-    // additionally queue behind one wedged predecessor (killed at its own
-    // cap). The margin covers the worst case: full foreground cap + slack.
+    // The worker enforces each command's own deadline. A command can also queue
+    // behind one stuck predecessor, which is killed at its own cap. The margin
+    // covers the worst case: full foreground cap plus slack.
     let margin = timeout + cmd_timeout() + std::time::Duration::from_secs(30);
     let joined = tokio::task::spawn_blocking(move || reply_rx.recv_timeout(margin)).await;
     match joined {
@@ -341,8 +334,9 @@ pub(crate) async fn ps_session_exec(
         }
         Ok(Ok(PsReply::Broken { note })) => PsRun::Broken { note },
         Ok(Ok(PsReply::TimedOut { partial, note })) => PsRun::TimedOut { partial, note },
-        // Reply never arrived: the command may or may not have run, so
-        // this is TimedOut (never re-run), NOT Broken (safe fallback).
+        // The reply never arrived, so the command may or may not have run. The
+        // status is TimedOut, which forbids re-running. The status is NOT
+        // Broken, which permits a safe fallback.
         _ => PsRun::TimedOut {
             partial: String::new(),
             note: "session reply lost (worker wedged or died)".into(),
@@ -350,7 +344,7 @@ pub(crate) async fn ps_session_exec(
     }
 }
 
-#[allow(dead_code)] // called from tests; production keeps the session for app lifetime
+#[allow(dead_code)] // production keeps the session for the app lifetime
 /// Test-only: tear the session down so a test cannot leak a powershell.exe.
 pub(crate) async fn ps_session_shutdown() {
     let taken = PS_QUEUE.lock().unwrap().take();
@@ -369,13 +363,12 @@ mod tests {
     use super::*;
     use crate::execute::execute_tool_inner;
 
-    /// One test fn on a current-thread runtime: the session is global, so
-    /// its lifecycle checks must not interleave with each other.
+    /// One test fn on a current-thread runtime. The session is global, so its
+    /// lifecycle checks must not interleave with each other.
     #[tokio::test]
     async fn ps_session_persists_state_and_survives_failures() {
         use std::time::Duration;
         let t = Duration::from_secs(60);
-        // 1. State persists across separate tool-level calls.
         let a = ps_session_exec("$fmTestVar = 6 * 7", None, t).await;
         assert!(matches!(a, PsRun::Done { code: 0, .. }), "spawn+assign: {a:?}");
         let b = ps_session_exec("Write-Output \"val=$fmTestVar\"", None, t).await;
@@ -385,7 +378,6 @@ mod tests {
             }
             other => panic!("expected Done, got {other:?}"),
         }
-        // 2. Multiline script with a real multi-line construct (here-string).
         let c = ps_session_exec(
             "$here = @'\nline one\nline two\n'@\nWrite-Output $here",
             None,
@@ -398,7 +390,6 @@ mod tests {
             }
             other => panic!("here-string: {other:?}"),
         }
-        // 3. A failing command reports failure but does NOT kill the session.
         let d = ps_session_exec("throw 'boom'", None, t).await;
         match d {
             PsRun::Done { code, stderr, .. } => {
@@ -409,7 +400,6 @@ mod tests {
         }
         let e = ps_session_exec("Write-Output alive", None, t).await;
         assert!(matches!(e, PsRun::Done { code: 0, .. }), "session survives throw: {e:?}");
-        // 4. cwd param applies and persists in the session.
         let f = ps_session_exec("", Some("C:\\Windows".into()), t).await;
         assert!(matches!(f, PsRun::Done { code: 0, .. }), "set-location: {f:?}");
         let g = ps_session_exec("(Get-Location).Path", None, t).await;
@@ -419,8 +409,6 @@ mod tests {
             }
             other => panic!("cwd persist: {other:?}"),
         }
-        // 5. Timeout kills the session (no re-run), and the next call
-        //    transparently respawns.
         let h = ps_session_exec("Start-Sleep -Seconds 30", None, Duration::from_secs(2)).await;
         match h {
             PsRun::TimedOut { note, .. } => assert!(note.contains("timed out"), "{note}"),
@@ -428,9 +416,6 @@ mod tests {
         }
         let i = ps_session_exec("Write-Output respawned", None, t).await;
         assert!(matches!(i, PsRun::Done { code: 0, .. }), "respawn: {i:?}");
-        // 6. Protocol vars survive clobbering (live incident: `$id =
-        //    [WindowsIdentity]::GetCurrent()` mangled the sentinel id and
-        //    soft-locked the session until the timeout cap).
         let j = ps_session_exec(
             "$id = [Security.Principal.WindowsIdentity]::GetCurrent()\n$c = 'x'\n$b = 'y'\n$ok = $false\nWrite-Output survived",
             None,
@@ -441,8 +426,6 @@ mod tests {
             PsRun::Done { stdout, code: 0, .. } => assert!(stdout.contains("survived")),
             other => panic!("protocol-var clobber must complete, got {other:?}"),
         }
-        // 7. A user stop interrupts a wedged command immediately instead
-        //    of waiting out the timeout cap.
         crate::llm::stop_chat();
         let k = ps_session_exec("Start-Sleep -Seconds 30", None, t).await;
         crate::llm::CHAT_STOP.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -450,7 +433,6 @@ mod tests {
             PsRun::TimedOut { note, .. } => assert!(note.contains("stopped by user"), "{note}"),
             other => panic!("stop must interrupt, got {other:?}"),
         }
-        // 8. Through the tool surface: session failure surfaces as tool error.
         let bad = execute_tool_inner(
             "run_command",
             &serde_json::json!({ "command": "exit 3", "shell": "powershell" }),

@@ -37,9 +37,8 @@ pub(crate) fn parse_command(cmd: &str) -> Vec<String> {
     args
 }
 
-/// True when the command uses shell features (pipes, `&&`, redirection,
-/// cmd built-ins) that require running through `cmd.exe` instead of
-/// launching the program directly.
+/// True when the command uses shell features that require `cmd.exe`. Shell
+/// features are pipes, `&&`, redirection, and cmd built-ins.
 pub(crate) fn needs_shell(cmd: &str) -> bool {
     if cmd.contains(['|', '&', '>', '<', '^', '%', '(', ')']) {
         return true;
@@ -53,14 +52,15 @@ pub(crate) fn needs_shell(cmd: &str) -> bool {
     )
 }
 
-/// Spill names are millisecond-granular, so two spills in the same millisecond
-/// (parallel tool calls, or the test harness) would write the same path and
-/// silently hand back the other call's file; this counter makes each name unique.
+/// Spill names have millisecond granularity. Two spills in the same
+/// millisecond would write the same path and hand back the wrong
+/// file. This counter keeps each spill name unique.
 static SPILL_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// Cap tool output over `max` chars: spill the FULL text to
-/// `~/.firstmate/output/` and return head + pointer + tail. Nothing is
-/// unrecoverably lost — `read_file` the pointer path for any omitted middle.
+/// Cap tool output over `max` chars. The FULL text spills to
+/// `~/.firstmate/output/`; the result keeps head + pointer + tail.
+/// `read_file` on the pointer path recovers any omitted middle, so
+/// nothing is unrecoverably lost.
 fn truncate_if_over(s: String, max: usize) -> String {
     let count = s.chars().count();
     if count <= max {
@@ -91,10 +91,9 @@ fn truncate_if_over(s: String, max: usize) -> String {
     format!("{head}{pointer}{tail}")
 }
 
-/// Keep tool output from exploding the context. An identical repeat result
-/// collapses to a pointer; a changed repeat returns only the line diff
-/// against the previous output; oversized output is truncated. `seen` maps
-/// tool call -> full result, per chat run.
+/// Keep one tool result from filling the whole context window. `seen` maps a
+/// tool call to its full result. The caller passes one map across a chat run,
+/// so repeat calls are detected.
 pub(crate) fn budget_output(seen: &mut HashMap<String, String>, key: String, result: String) -> String {
     const MAX: usize = 8000;
     if let Some(prev) = seen.get(&key) {
@@ -125,10 +124,10 @@ pub(crate) fn budget_output(seen: &mut HashMap<String, String>, key: String, res
     truncate_if_over(result, MAX)
 }
 
-/// Hard cap for one run_command. Detached grandchildren (e.g. `start /b
-/// gh auth login`) inherit the output pipes and can hold them open forever;
-/// without a cap the agent loop soft-locks waiting for EOF.
-/// Override with FIRSTMATE_CMD_TIMEOUT_SECS.
+/// Hard cap for one run_command. Detached grandchildren (e.g.
+/// `start /b gh auth login`) inherit the output pipes and can hold
+/// them open forever. Without the cap, the agent loop soft-locks
+/// waiting for EOF. Override with FIRSTMATE_CMD_TIMEOUT_SECS.
 pub(crate) fn cmd_timeout() -> std::time::Duration {
     let secs = std::env::var("FIRSTMATE_CMD_TIMEOUT_SECS")
         .ok()
@@ -138,16 +137,16 @@ pub(crate) fn cmd_timeout() -> std::time::Duration {
     std::time::Duration::from_secs(secs)
 }
 
-/// Spawn with a deadline. On timeout the direct child dies (kill_on_drop),
-/// the process tree is swept, and an actionable error is returned - a tool
-/// call must always come back so the agent loop can never wedge.
+/// Spawn with a deadline. On timeout, the direct child dies (kill_on_drop) and
+/// the process tree is swept. A tool call must always return, so the agent loop
+/// can never stall on a child that will not exit.
 #[cfg_attr(not(test), allow(dead_code))]
 async fn exec_capped(
     cmd: &mut tokio::process::Command,
     timeout: std::time::Duration,
 ) -> Result<std::process::Output, String> {
-    // wait_with_output only captures streams piped at spawn time; the old
-    // Command::output() set this implicitly, spawn() does not.
+    // wait_with_output only captures streams piped at spawn time;
+    // spawn() does not pipe them.
     cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
@@ -175,10 +174,10 @@ async fn exec_capped(
     }
 }
 
-/// A command the agent started with `background: true`. The app owns the
-/// pipes and drains them continuously, so the child can never block on a
-/// full pipe or hold the agent loop hostage; the agent drives the lifecycle
-/// via get_command_output / kill_command.
+/// A command the agent started with `background: true`. The app owns
+/// the pipes and drains them continuously, so the child can never
+/// block on a full pipe. The agent drives the lifecycle via
+/// get_command_output / kill_command.
 pub(crate) struct BgJob {
     pub(crate) command: String,
     pub(crate) stdout: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
@@ -235,16 +234,16 @@ fn evict_bg_jobs(reg: &mut std::collections::HashMap<u32, BgJob>) {
             (*pid, running, j.started)
         })
         .collect();
-    // Finished and old die first; running jobs survive longest.
     by_age.sort_by_key(|(_, running, started)| (*running, *started));
     for (pid, _, _) in by_age.iter().skip(MAX_BG_JOBS - 1) {
         reg.remove(pid);
     }
 }
 
-/// Foreground grace period before a command is auto-backgrounded. Beyond
-/// this, waiting is a wasted agent turn: the job goes to the background and
-/// its completion is announced in the conversation ledger by itself.
+/// Foreground grace period before a command is auto-backgrounded.
+/// Waiting past this point wastes an agent turn. The job moves to
+/// the background and announces its completion in the ledger by
+/// itself.
 fn auto_bg_secs() -> u64 {
     std::env::var("FIRSTMATE_AUTO_BG_SECS")
         .ok()
@@ -253,14 +252,14 @@ fn auto_bg_secs() -> u64 {
         .unwrap_or(20)
 }
 
-/// Announces a finished background job into the conversation: the frontend
-/// appends it as a ledger line, so the model sees the outcome on the NEXT
-/// user turn without ever polling.
+/// Announces a finished background job into the conversation. The frontend
+/// appends the notification as a ledger line. The model sees the outcome on
+/// the NEXT user turn, without polling.
 ///
-/// Deliberately abstract over `AppHandle`: the test binary only references
-/// `NoopNotifier`, so the linker's /OPT:REF never pulls the tauri machinery
-/// (and its comctl32-v6 imports, which need an app manifest the test exe
-/// lacks) into unit tests.
+/// The trait keeps `AppHandle` out of the test binary. Tests reference only
+/// `NoopNotifier`, so the linker never pulls the tauri machinery into unit
+/// tests. That machinery carries comctl32-v6 imports, which need an app
+/// manifest the test exe lacks.
 pub(crate) trait BgNotifier: Send + Sync {
     fn announce(&self, pid: u32, command: &str, status: &str, out: &str, err: &str);
 }
@@ -316,8 +315,6 @@ impl BgNotifier for AppNotifier {
     }
 }
 
-/// Convenience wrapper (tests / headless): completions are recorded in the
-/// registry but never announced.
 #[cfg_attr(not(test), allow(dead_code))]
 async fn spawn_background(
     cmd: tokio::process::Command,
@@ -357,7 +354,7 @@ pub(crate) async fn spawn_background_notify(
                 Err(e) => format!("wait error: {e}"),
             };
             *status.lock().unwrap() = s.clone();
-            // Give the pump tasks a beat to flush their final chunk.
+            // Wait briefly so the pump tasks flush their final chunk.
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             let out = String::from_utf8_lossy(&jout.lock().unwrap()).to_string();
             let err = String::from_utf8_lossy(&jerr.lock().unwrap()).to_string();
@@ -385,10 +382,11 @@ pub(crate) async fn spawn_background_notify(
     ))
 }
 
-/// Run a foreground command with an auto-background escape: if it outlives
-/// `auto_bg_secs`, it is registered as a background job (same pid, same
-/// pipes — nothing is killed or re-run) and the tool returns immediately
-/// with the never-poll contract. Completion lands in the ledger by itself.
+/// Run a foreground command with an auto-background escape. If the command
+/// outlives `auto_bg_secs`, it becomes a background job. The job keeps the
+/// same pid and the same pipes. Nothing is killed and nothing is re-run. The
+/// tool returns immediately with the never-poll contract. Completion lands in
+/// the ledger by itself.
 pub(crate) async fn exec_or_background(
     notifier: std::sync::Arc<dyn BgNotifier>,
     mut cmd: tokio::process::Command,
@@ -414,7 +412,8 @@ pub(crate) async fn exec_or_background(
     .await
     {
         Ok(Ok(status)) => {
-            // Streams are EOF (child exited); let the pumps flush.
+            // The child exited, so the streams are at EOF. Wait
+            // briefly so the pumps flush.
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             if let Some(p) = &script_path {
                 let _ = std::fs::remove_file(p);
@@ -438,8 +437,9 @@ pub(crate) async fn exec_or_background(
             Err(format!("spawn failed: {e}"))
         }
         Err(_) => {
-            // Still running: adopt into the background registry WITHOUT
-            // touching the process, and announce on completion.
+            // The command is still running. Adopt it into the
+            // background registry WITHOUT touching the process, and
+            // announce on completion.
             let pid = child.id().unwrap_or(0);
             let status = std::sync::Arc::new(std::sync::Mutex::new("running".to_string()));
             {
@@ -473,8 +473,8 @@ pub(crate) async fn exec_or_background(
                     },
                 );
             }
-            // The scratch script belongs to the running job now; tmp/ is
-            // LRU-trimmed, so it cannot leak.
+            // The scratch script belongs to the running job now.
+            // tmp/ is LRU-trimmed, so the file cannot leak.
             Ok(format!(
                 "still running after {}s → moved to background (pid {pid}). \
                  Its completion is announced automatically in the conversation — do NOT poll; \
@@ -536,9 +536,9 @@ mod tests {
             .unwrap();
         let text = String::from_utf8_lossy(&out.stdout).to_string()
             + &String::from_utf8_lossy(&out.stderr);
-        // If quotes survive, clap parses one selector and winapp fails on the
-        // unknown app name; if cmd mangles them, clap rejects the split
-        // tokens ("'3.8' was not matched") before the app lookup happens.
+        // If quotes survive, clap parses one selector and winapp
+        // fails on the unknown app name. If cmd mangles the quotes,
+        // clap rejects the split tokens before the app lookup runs.
         assert!(
             !text.contains("was not matched"),
             "quotes were mangled by cmd: {text}"
@@ -553,7 +553,7 @@ mod tests {
         assert_eq!(first, out);
         let second = budget_output(&mut seen, "cmd".into(), out.clone());
         assert!(second.contains("identical to your earlier call"));
-        // Changed output after an action still comes through fully.
+        // Dedup must not swallow output that changed after an action.
         let changed = "y".repeat(50);
         let third = budget_output(&mut seen, "cmd".into(), changed.clone());
         assert_eq!(third, changed);
@@ -591,7 +591,6 @@ mod tests {
         assert!(out.starts_with("[changes vs your earlier call]"));
         assert!(out.contains("- tab B"));
         assert!(out.contains("+ tab B2"));
-        // Unchanged lines are omitted entirely.
         assert!(!out.contains("tab A"));
         assert!(!out.contains("tab C"));
     }
@@ -608,9 +607,9 @@ mod tests {
 
     #[test]
     fn hung_command_is_killed_at_the_cap() {
-        // The soft-lock shape: the process keeps stdout open and never
-        // exits (here ping -n 3600; in the wild, `start /b gh auth login`).
-        // The call must return with an error, not wait for EOF forever.
+        // The process keeps stdout open and never exits, like the
+        // detached `start /b gh auth login` grandchild. The call
+        // must return an error instead of waiting for EOF forever.
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -624,8 +623,9 @@ mod tests {
                 .expect_err("hanging command must not return Ok");
             assert!(err.contains("timed out"), "{err}");
             assert!(t0.elapsed() < std::time::Duration::from_secs(30));
-            // The child must actually be dead, not orphaned holding pipes.
-            // PID-scoped so parallel ping tests can't interfere.
+            // The child must be dead, not orphaned while holding pipes. The
+            // tasklist filter is PID-scoped, so parallel ping tests cannot
+            // interfere.
             let pid: u32 = err
                 .split("killed pid ")
                 .nth(1)
@@ -709,14 +709,13 @@ mod tests {
 
     #[test]
     fn foreground_command_captures_stdout_both_paths() {
-        // Regression: exec_capped once spawned without piping stdio, so
-        // wait_with_output returned empty output for every success.
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();
         rt.block_on(async {
-            // cmd-shell branch (built-in).
+            // This call exercises the cmd-shell branch: `echo` is
+            // a cmd built-in.
             let out = execute_tool_inner(
                 "run_command",
                 &serde_json::json!({"command": "echo CAPTURED_FOREGROUND"}),
@@ -724,7 +723,7 @@ mod tests {
             .await
             .unwrap();
             assert!(out.contains("CAPTURED_FOREGROUND"), "shell path lost stdout: {out:?}");
-            // Direct branch (real binary with a quoted argument).
+            // This call exercises the direct branch with a quoted argument.
             let out = execute_tool_inner(
                 "run_command",
                 &serde_json::json!({"command": "tasklist /FI \"IMAGENAME eq svchost.exe\" /NH"}),
@@ -779,7 +778,7 @@ mod tests {
             .collect::<String>()
             .parse()
             .expect("pid in notice");
-        // The SAME process is adopted by the registry, not restarted.
+        // The registry adopts the same process instead of restarting it.
         let out = execute_tool_inner("get_command_output", &serde_json::json!({ "pid": pid }))
             .await
             .unwrap();

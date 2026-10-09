@@ -8,9 +8,8 @@ use crate::report::tool_report;
 use crate::route::looks_like_unexecuted_intent;
 use crate::tooldefs::{agent_tools, to_tool_defs};
 
-/// User interrupt for the running agent loop. The tool loop is uncapped
-/// (real work takes many turns), so the stop button is the brake: checked
-/// between turns and between tool calls.
+/// The tool loop has no turn cap, so a stop request is the only bound on
+/// it. The loop checks this flag between turns and between each tool call.
 pub(crate) static CHAT_STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn chat_stop_requested() -> bool {
@@ -25,7 +24,8 @@ pub(crate) fn stop_chat() {
     }
 }
 
-/// Build a serializable view of the request (ChatRequest itself doesn't impl Serialize).
+/// Convert a request to JSON. `lmkit::ChatRequest` does not implement
+/// `Serialize`.
 fn request_to_json(
     history: &[lmkit::ChatMessage],
     tools: &[lmkit::ToolDefinition],
@@ -72,20 +72,15 @@ fn request_to_json(
     serde_json::json!({ "messages": msgs, "tools": tools_arr })
 }
 
-/// A prior conversation turn sent by the frontend so the agent has memory
-/// across chat_with_llm invocations.
+/// `chat_with_llm` holds no conversation state between calls. The frontend
+/// therefore resends the transcript on every call, one row per turn.
 #[derive(serde::Deserialize, Clone)]
 pub(crate) struct HistoryItem {
     role: String,
     content: String,
 }
 
-/// Send a message to the LLM and return the response.
-/// OpenAI-compatible endpoints (custom/openai/ollama) use the native client,
-/// which supports image parts so screenshots are actually visible to the
-/// model. lmkit handles Anthropic only (text-only chat).
-/// Everything one chat turn needs, assembled once by the command and moved
-/// into whichever provider path runs.
+/// One chat turn's inputs, moved whole into whichever provider path runs.
 struct ChatParams {
     provider: String,
     base_url: String,
@@ -94,19 +89,19 @@ struct ChatParams {
     message: String,
     prior_history: Vec<HistoryItem>,
     system_prompt: String,
-    /// Skills already loaded in this conversation, derived by the frontend
-    /// from the tool ledger. Seeds the dispatch gate, so capability earned
-    /// earlier in a conversation holds on every later turn.
+    /// Loaded skills, sent by the frontend from the tool ledger. The list
+    /// seeds the dispatch gate, so tools unlocked on an earlier turn stay
+    /// unlocked.
     loaded_skills: Vec<String>,
-    /// Tokens the model can hold; 0 = ask the endpoint (docs/COMPACTION.md).
+    /// Tokens the model can hold. 0 means ask the endpoint
+    /// (docs/COMPACTION.md).
     context_window: u32,
-    /// Share of that window at which the history gets compacted.
     compact_at_percent: u8,
 }
 
-// The 11 parameters are the IPC contract with the frontend (one JSON field
-// each); collapsing them would change the wire format. Grouping happens in
-// ChatParams below.
+// Each parameter is one JSON field in the frontend IPC contract, so the
+// flat signature is required. ChatParams groups the fields for the
+// provider paths.
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub(crate) async fn chat_with_llm(
@@ -135,8 +130,8 @@ pub(crate) async fn chat_with_llm(
         context_window,
         compact_at_percent,
     };
-    // Native-protocol providers go through lmkit (it owns the Messages and
-    // generateContent wire formats); everything else is OpenAI-compatible.
+    // lmkit owns the Anthropic and Gemini wire formats, so those providers
+    // use it. Every other provider speaks the OpenAI-compatible HTTP API.
     let api = provider_catalog::lookup(&params.provider).map(|s| s.api);
     if matches!(api, Some(Api::Anthropic) | Some(Api::Gemini)) {
         chat_via_lmkit(app, params).await
@@ -145,17 +140,15 @@ pub(crate) async fn chat_with_llm(
     }
 }
 
-/// Skills this conversation already loaded ride in the system prompt.
+/// The tool ledger records which skills loaded, not what their `SKILL.md`
+/// said. A resumed conversation regains the gated tools without the rules
+/// that govern them.
 ///
-/// The persisted ledger records THAT a skill was loaded — the dispatch gate
-/// unlocks its tools from that line — but not WHAT it said: the SKILL.md
-/// body was a tool result that never persisted. Without this, a resumed
-/// conversation gets the tool back and loses the rules that govern it.
+/// A mutated system prompt costs a fresh prefill on every turn. The
+/// prompt must be built once per run, before the first request.
 ///
-/// Sorted, deduped, and built once per run before the first request, so the
-/// prompt prefix stays byte-stable while the run streams (a mutated system
-/// prompt costs a fresh prefill every turn). A skill loaded mid-run needs no
-/// injection here: its body arrives in that turn's tool result.
+/// A skill loaded mid-run needs no injection here: its body arrives in
+/// that turn's tool result.
 fn system_prompt_with_skills(base: &str, loaded: &[String]) -> String {
     let mut names: Vec<&str> = loaded
         .iter()
@@ -173,16 +166,17 @@ fn system_prompt_with_skills(base: &str, loaded: &[String]) -> String {
     out
 }
 
-/// The brief rules are content, not code: `prompts/COMPACT.md`, layered like
-/// AGENTS.md so the memory policy is editable without a rebuild. With no copy
-/// at any layer there is nothing to instruct the summarizer, so folding is
-/// skipped and the oversized request goes out instead — and the log says why.
+/// The brief rules are content, not code. They live in `prompts/COMPACT.md`,
+/// layered like `AGENTS.md`, so the memory policy is editable without a
+/// rebuild. With no copy at any layer, nothing instructs the summarizer.
+/// Folding is skipped. The oversized request goes out instead. The log
+/// records that choice.
 fn brief_rules() -> Option<String> {
     crate::skills::prompt_content("COMPACT.md")
 }
 
-/// The window this run must fit, and who said so: the user's setting beats
-/// the endpoint's report, which beats the fallback.
+/// The window this run must fit, and who said so. The user's setting beats
+/// the endpoint's report. The endpoint's report beats the fallback.
 async fn resolve_window(
     provider: &str,
     base: &str,
@@ -208,9 +202,9 @@ fn history_msgs(rows: &[HistoryItem]) -> Vec<serde_json::Value> {
 
 /// Where the persisted transcript begins, and where the kept tail begins.
 ///
-/// A `summary` row is framing, not a turn: it belongs in the system prompt,
-/// and everything it already compressed never goes back on the wire. What is
-/// left is cut by tokens, and only ever at a turn boundary.
+/// A `summary` row is framing, not a turn. The row belongs in the system
+/// prompt. Everything the summary already compressed never goes back on the
+/// wire. What is left is cut by tokens, and only ever at a turn boundary.
 fn plan_history(prior: &[HistoryItem], keep_budget: usize) -> (Option<String>, usize, usize) {
     let mut summary = None;
     let mut start = 0usize;
@@ -228,12 +222,12 @@ fn plan_history(prior: &[HistoryItem], keep_budget: usize) -> (Option<String>, u
 /// The instruction the conversation is working under: its first user row,
 /// unless the rows being folded already carry it.
 ///
-/// The brief rules require the request as the first line, and a summarizer
-/// cannot copy a line it was never shown. The in-run cut keeps the opening
-/// row on the wire, so that row is exactly what the dropped middle lacks;
-/// the pre-run cut on a later fold sees only the previous brief, so the
-/// request would otherwise be re-paraphrased each time until it drifts.
-/// Every fold is therefore handed the original text, not the last summary.
+/// The brief rules require the request as the first line. A summarizer cannot
+/// copy a line it was never shown. The in-run cut keeps the opening row on the
+/// wire, so the dropped middle lacks that line. The pre-run cut on a later fold
+/// sees only the previous brief. Without the pin, the request would be
+/// re-paraphrased on every fold until it drifts. Every fold is therefore handed
+/// the original text, not the last summary.
 fn pinned_opening(
     rows: &[serde_json::Value],
     drop_start: usize,
@@ -249,7 +243,6 @@ fn pinned_opening(
     Some(row_text(row)).filter(|s| !s.trim().is_empty())
 }
 
-/// The text of a wire row, whether the content is a string or content parts.
 fn row_text(m: &serde_json::Value) -> String {
     match m.get("content") {
         Some(serde_json::Value::String(s)) => s.clone(),
@@ -262,8 +255,6 @@ fn row_text(m: &serde_json::Value) -> String {
     }
 }
 
-/// The summarizer's input: the instruction it must carry, the brief it is
-/// updating, and the rows being folded.
 fn brief_transcript(
     opening: Option<&str>,
     previous: Option<&str>,
@@ -304,8 +295,8 @@ fn brief_transcript(
         };
         out.push_str(&format!("[{label}] {text}\n"));
     }
-    // The brief is bounded by its own request: keep the opening (the task)
-    // and the tail (what is pending), drop the middle.
+    // The brief is bounded by its own request. Keep the opening (the task)
+    // and the tail (what is pending). Drop the middle.
     let max = 60_000;
     let count = out.chars().count();
     if count <= max {
@@ -316,8 +307,8 @@ fn brief_transcript(
     format!("{head}\n[...middle of the dropped transcript omitted...]\n{tail}")
 }
 
-/// One non-streaming call that compresses dropped rows into the brief the
-/// next turn has instead of them.
+/// One non-streaming call. The next turn carries the brief instead of the rows
+/// it replaced.
 async fn summarize_http(
     client: &reqwest::Client,
     url: &str,
@@ -356,7 +347,8 @@ async fn summarize_http(
         .ok_or_else(|| "no summary in the response".to_string())
 }
 
-/// lmkit-backed chat (text-only; used for Anthropic).
+/// The lmkit-backed path: text only, no image parts. Anthropic and Gemini
+/// route here.
 async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, String> {
     let ChatParams {
         provider,
@@ -385,8 +377,8 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
     if model.is_empty() {
         return Err("no model selected".into());
     }
-    // Rules for already-loaded skills join the prompt before it is logged,
-    // so sys_len below is what actually goes on the wire.
+    // Rules for already-loaded skills join the prompt before the prompt is
+    // logged. The logged sys_len is therefore the value that goes on the wire.
     let system_prompt = system_prompt_with_skills(&system_prompt, &loaded_skills);
 
     // Resolved before the endpoint handle takes ownership of the
@@ -399,7 +391,6 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
         provider, base, model, message.len(), system_prompt.len(), prior_history.len()
     ));
 
-    // Map the provider string to a lmkit Provider.
     let provider_enum = match provider.as_str() {
         "ollama" => Provider::Ollama,
         "anthropic" => Provider::Anthropic,
@@ -416,18 +407,18 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
     };
     let llm = create_chat_provider(&config).map_err(|e| e.to_string())?;
 
-    // Static tool array: the full registry on every request. Availability
-    // is not schema-gated — the dispatch gate in execute.rs enforces the
-    // skill contract, and the identical array keeps provider prefix
-    // caching warm (docs/SKILLS.md).
+    // Every request carries the full registry, because the tool array is
+    // static. Availability is not schema-gated: the dispatch gate in
+    // `execute.rs` enforces the skill contract. The identical array also keeps
+    // provider prefix caching warm (docs/SKILLS.md).
     let active: Vec<serde_json::Value> = agent_tools()
         .as_array()
         .expect("tool array")
         .clone();
 
-    // The persisted transcript is windowed the same way on every provider:
-    // the brief stands in for whatever is too old to send, and the tail is cut
-    // only at a turn boundary (docs/COMPACTION.md).
+    // Every provider windows the persisted transcript the same way. The brief
+    // stands in for rows too old to send. The tail is cut only at a turn
+    // boundary (docs/COMPACTION.md).
     let threshold = context::threshold_tokens(window, compact_at_percent);
     let overhead = context::tools_tokens();
     let keep_budget =
@@ -495,7 +486,6 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
         prior_history.len() - kept_from
     ));
 
-    // Build the conversation history: system prompt, the kept tail, new message.
     let mut history: Vec<ChatMessage> = vec![ChatMessage::system(system_prompt)];
     for h in &prior_history[kept_from..] {
         match h.role.as_str() {
@@ -506,12 +496,13 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
     }
     history.push(ChatMessage::user(message));
 
-
-    // Per-run memory of tool results for output budgeting (dedupe/truncate).
+    // Tool results are remembered for this run only, so a repeat can be
+    // deduped or truncated.
     let mut seen: HashMap<String, String> = HashMap::new();
-    // The gate's state for THIS conversation: seeded from the ledger the
-    // frontend sent, so a skill loaded on an earlier turn keeps its gated
-    // tools unlocked; a skill loaded during this run joins the set too.
+    // The dispatch gate's state for THIS conversation. The set starts from the
+    // ledger the frontend sent. A skill loaded on an earlier turn therefore
+    // keeps its gated tools unlocked. A skill loaded during this run joins the
+    // set too.
     let mut loaded_skills: std::collections::HashSet<String> =
         loaded_skills.into_iter().collect();
     let mut turn = 0;
@@ -522,7 +513,7 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
             let _ = app.emit("stream_done", serde_json::json!({}));
             return Ok("(stopped)".to_string());
         }
-        // Identical every turn: the tool array never changes mid-run.
+        // The tool array never changes mid-run, so this is identical per turn.
         let tools: Vec<ToolDefinition> = to_tool_defs(&active);
         log(&format!("TURN {}: history_msgs={} tools={}", turn, history.len(), tools.len()));
         let request = ChatRequest {
@@ -530,7 +521,6 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
             tools: Some(tools.clone()),
             ..Default::default()
         };
-        // Serialize the request once; log the head, and dump the full body on error.
         let req_json = match serde_json::to_string(&request_to_json(&history, &tools)) {
             Ok(j) => j,
             Err(e) => {
@@ -545,7 +535,6 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
             req_json.chars().take(300).collect::<String>()
         ));
 
-        // Stream the response, accumulating text and tool-call deltas.
         let mut text = String::new();
         let mut deltas: Vec<ToolCallDelta> = Vec::new();
         let mut stream = match llm.complete_stream(&request).await {
@@ -574,7 +563,6 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
             turn, text.len(), deltas.len(), history.len()
         ));
 
-        // Tool-call turn: execute, feed back, loop.
         let calls = merge_tool_call_deltas(&deltas);
         if !calls.is_empty() {
             let _ = app.emit("stream_reset", serde_json::json!({}));
@@ -628,8 +616,8 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
             continue;
         }
 
-        // Text-only intent without a tool call: nudge once so "Let me
-        // verify X" is actually followed by the verification.
+        // A reply that declares an action but calls no tool gets one nudge.
+        // The nudge makes "Let me verify X" produce the verification.
         if !nudged && calls.is_empty() && looks_like_unexecuted_intent(&text) {
             nudged = true;
             log(&format!("INTENT NUDGE: turn {turn} declared action without a tool call: {text:?}"));
@@ -651,13 +639,12 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
             continue;
         }
 
-        // Final turn: emit done, return.
         let _ = app.emit("stream_done", serde_json::json!({}));
         return Ok(text);
     }
 }
 
-/// Accumulated streaming tool call (OpenAI wire shape).
+/// One tool call accumulated across streamed deltas, in the OpenAI wire shape.
 #[derive(Default)]
 struct CallAcc {
     id: String,
@@ -665,7 +652,6 @@ struct CallAcc {
     args: String,
 }
 
-/// Merge one streamed `tool_calls[]` delta into the accumulator list.
 fn merge_tool_call_delta(calls: &mut Vec<CallAcc>, tc: &serde_json::Value) {
     let idx = tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
     while calls.len() <= idx {
@@ -688,8 +674,8 @@ fn merge_tool_call_delta(calls: &mut Vec<CallAcc>, tc: &serde_json::Value) {
     }
 }
 
-/// If a tool result reports a saved screenshot, return its path. Handles
-/// winapp's variants: `Saved composite: <path>`, `Saved: <path>`, and
+/// If a tool result reports a saved screenshot, return its path. winapp uses
+/// three phrasings: `Saved composite: <path>`, `Saved: <path>`, and
 /// `Screenshot of "X" ... saved to <path> (WxH, NNNKB)`.
 fn extract_screenshot_path(result: &str) -> Option<String> {
     for line in result.lines() {
@@ -707,8 +693,8 @@ fn extract_screenshot_path(result: &str) -> Option<String> {
     None
 }
 
-/// Native OpenAI-compatible chat: streaming, tool calls, and image parts so
-/// screenshots the agent captures are attached and actually seen.
+/// The native OpenAI-compatible path. It streams, handles tool calls, and sends
+/// image parts, so the agent sees the screenshots it captures.
 async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String, String> {
     let ChatParams {
         provider,
@@ -733,10 +719,9 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
         return Err("no model selected".into());
     }
     let url = format!("{}/chat/completions", provider_catalog::root(base));
-    // Already-loaded skills come back with their instructions attached.
     let system_prompt = system_prompt_with_skills(&system_prompt, &loaded_skills);
-    // The window this run must fit, then the persisted transcript cut to it:
-    // the brief stands in for the rows that no longer fit (docs/COMPACTION.md).
+    // The persisted transcript is cut to the window this run must fit. The brief
+    // stands in for the rows dropped to make it fit (docs/COMPACTION.md).
     let client = reqwest::Client::new();
     let (window, window_src) =
         resolve_window(&provider, base, &api_key, &model, context_window).await;
@@ -770,9 +755,9 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
                 summary = Some(b);
                 kept_from = start + cut;
             }
-            // No brief, no cut: dropping rows with nothing standing in for
-            // them would lose the task silently. An oversized request the
-            // endpoint refuses is at least visible.
+            // No brief means no cut. Dropping rows with nothing standing in
+            // for them would lose the task silently. An oversized request that
+            // the endpoint refuses is at least visible.
             Err(e) => log(&format!(
                 "COMPACT: summary call failed ({e}); sending the full history"
             )),
@@ -803,17 +788,17 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
     }
     msgs.push(serde_json::json!({ "role": "user", "content": message }));
 
-    // Static full registry; the dispatch gate in execute.rs enforces the
-    // skill contract.
+    // The full registry rides every request. The dispatch gate in `execute.rs`
+    // enforces the skill contract.
     let tools: Vec<serde_json::Value> = agent_tools().as_array().expect("tool array").clone();
     let mut seen: HashMap<String, String> = HashMap::new();
-    // Seeded from the conversation ledger, then extended by this run's loads.
     let mut loaded_skills: std::collections::HashSet<String> =
         loaded_skills.into_iter().collect();
     let mut turn = 0;
     let mut nudged = false;
-    // The endpoint's own count of the last request, and how long `msgs` was
-    // when it was taken. Silence is fine: the char estimate stands alone.
+    // The endpoint's own token count for the last request, and the length of
+    // `msgs` when it was taken. Most endpoints report nothing, and the char
+    // estimate then stands alone.
     let mut measured: Option<usize> = None;
     let mut measured_at = 0usize;
     loop {
@@ -822,12 +807,12 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
             let _ = app.emit("stream_done", serde_json::json!({}));
             return Ok("(stopped)".to_string());
         }
-        // The run itself can outgrow the window: 8 KB tool results and
-        // screenshots pile up turn by turn. Prune first — no model call, and
-        // the spill pointers keep what it elides recoverable — then fold the
-        // oldest whole turns into the brief.
-        // The measured count floors the estimate: only the rows appended
-        // since that request are still guesses.
+        // The run itself can outgrow the window, because 8 KB tool results and
+        // screenshots accumulate turn by turn. Prune first: pruning costs no
+        // model call, and the spill pointers keep the elided text recoverable.
+        // Then fold the oldest whole turns into the brief.
+        // The measured count floors the estimate. Only the rows appended since
+        // that request are still guesses.
         let est = {
             let local = context::estimate_tokens(&msgs) + overhead;
             match measured {
@@ -862,9 +847,9 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
                     let dropped = msgs[1 + head..1 + tail].to_vec();
                     let freed = context::estimate_tokens(&dropped);
                     if freed < context::MIN_FOLD_SAVINGS_TOKENS {
-                        // What the budget would drop is mostly short rows from
-                        // the newest turn: a summariser call and a cold prefix
-                        // cache buy nothing here, so send the oversized turn.
+                        // The budget would drop mostly short rows from the
+                        // newest turn. A summarizer call would cost a call and
+                        // free almost nothing, so send the oversized turn.
                         log(&format!(
                             "COMPACT: ~{est} tokens over the window, only ~{freed} recoverable — not worth a summariser call"
                         ));
@@ -945,7 +930,6 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
             ));
         }
 
-        // Parse the SSE stream: text deltas and tool-call deltas.
         let mut stream = resp.bytes_stream();
         let mut buf = String::new();
         let mut text = String::new();
@@ -969,9 +953,9 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
                     ));
                     continue;
                 };
-                // A usage block rides the final chunk on endpoints that
-                // report one; most OpenAI-compatible servers stay silent
-                // unless asked, so absence is normal, not an error.
+                // A usage block rides the final chunk on endpoints that report
+                // one. Most OpenAI-compatible servers stay silent unless asked,
+                // so absence is normal rather than an error.
                 if let Some(p) = v.pointer("/usage/prompt_tokens").and_then(|p| p.as_u64()) {
                     measured = Some(p as usize);
                 }
@@ -1049,8 +1033,8 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
                 msgs.push(serde_json::json!({
                     "role": "tool", "tool_call_id": call.id, "content": result
                 }));
-                // Vision loop: if the command saved a screenshot, attach the
-                // image so the model actually sees it on the next turn.
+                // If the command saved a screenshot, attach the image so the
+                // model sees it on the next turn.
                 if let Some(path) = extract_screenshot_path(&result) {
                     match tokio::fs::read(&path).await {
                         Ok(bytes) => {
@@ -1088,7 +1072,7 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
             continue;
         }
 
-        // Text-only intent without a tool call: nudge once (see lmkit path).
+        // Nudge once per run. The lmkit path applies the same rule.
         if !nudged && looks_like_unexecuted_intent(&text) {
             nudged = true;
             log(&format!("INTENT NUDGE: turn {turn} declared action without a tool call: {text:?}"));
@@ -1123,15 +1107,15 @@ mod tests {
             row("user", "task two"),
             row("assistant", "done"),
         ];
-        // A starved budget drops the older TURN, never half of one: the kept
-        // tail begins at a user row, so the request still carries its
-        // instruction. This is the bug the old 30-row window shipped.
+        // A starved budget drops a whole older turn, never half of one. The
+        // kept tail begins at a user row, so the request still carries its
+        // instruction.
         let (summary, start, cut) = plan_history(&prior, 10);
         assert_eq!(summary, None);
         assert_eq!((start, cut), (0, 2));
         assert_eq!(prior[start + cut].role, "user");
 
-        // A saved brief is framing, not a turn: it goes to the system prompt
+        // A saved brief is framing, not a turn. It goes to the system prompt,
         // and everything it already compressed stays off the wire.
         let with_brief = vec![
             row("user", &format!("ancient {long}")),
@@ -1154,10 +1138,10 @@ mod tests {
     #[test]
     fn the_summarizer_is_shown_the_instruction_it_must_carry() {
         let long = "x".repeat(400);
-        // The in-run shape: the cut keeps the opening row on the wire, so the
-        // middle being folded holds no instruction at all. This is the fold
-        // that produced a brief reading "user request: not explicit in
-        // transcript" — the summarizer was never given the line to copy.
+        // The in-run shape: the cut keeps the opening row on the wire. The
+        // middle being folded therefore holds no instruction at all. Without
+        // the pin, the summarizer invents a placeholder for a request it never
+        // saw.
         let wire = vec![
             serde_json::json!({"role": "user", "content": "count the fonts folder"}),
             serde_json::json!({"role": "assistant", "content": format!("listing {long}")}),
@@ -1178,8 +1162,8 @@ mod tests {
         );
         assert!(t.contains("[tool] 338 entries"), "the folded rows follow it: {t}");
 
-        // The pre-run shape: the cut is a prefix, so when it swallows the
-        // opening row the dropped material already carries it.
+        // The pre-run shape: the cut is a prefix. When it swallows the opening
+        // row, the dropped material already carries the instruction.
         let ledger = history_msgs(&[row("user", "count the fonts folder"), row("assistant", "did it")]);
         assert_eq!(pinned_opening(&ledger, 0, 1), None);
         assert_eq!(
@@ -1191,9 +1175,8 @@ mod tests {
 
     #[test]
     fn a_fold_lands_under_the_threshold_with_room_to_grow() {
-        // The thrash this prevents: trimming to the threshold leaves the next
-        // tool result over the line, so a long run pays for a summariser call
-        // on every turn.
+        // Trimming to the exact threshold leaves the next tool result over the
+        // line. A long run would then need a summarizer call on every turn.
         let long = "x".repeat(400);
         let prior: Vec<HistoryItem> = (0..40)
             .map(|i| {
@@ -1223,9 +1206,9 @@ mod tests {
     #[test]
     fn the_brief_rules_are_content_not_code() {
         // The summarizer's instructions are prompt text, so they live in
-        // prompts/COMPACT.md and the binary carries none. In the dev layout
-        // the fold must read the working copy under test — any difference
-        // means the rules crept back into Rust.
+        // prompts/COMPACT.md and the binary carries none. In the dev layout the
+        // fold must read the working copy under test. Any difference means the
+        // rules crept back into Rust.
         assert_eq!(
             brief_rules().unwrap(),
             std::fs::read_to_string("../prompts/COMPACT.md").unwrap()
@@ -1258,7 +1241,7 @@ mod tests {
 
     #[test]
     fn resumed_skills_carry_their_instructions_into_the_prompt() {
-        // The ledger names the skills; the prompt must carry their rules too.
+        // The ledger names the skills. The prompt must carry their rules too.
         let loaded = ["winapp".to_string(), "filesystem".to_string(), "winapp".to_string()];
         let out = system_prompt_with_skills("BASE", &loaded);
         assert!(out.starts_with("BASE\n\n## Loaded skill: "));
@@ -1271,7 +1254,7 @@ mod tests {
             out[fs..wa].chars().count() > 200,
             "the body, not just the skill's name"
         );
-        // Unknown skills inject no empty section; nothing loaded is a no-op.
+        // Unknown skills inject no empty section, and nothing loaded is a no-op.
         let unknown = system_prompt_with_skills("BASE", &["no-such-skill".to_string()]);
         assert_eq!(unknown, "BASE");
         assert_eq!(system_prompt_with_skills("BASE", &[]), "BASE");
@@ -1293,7 +1276,6 @@ mod tests {
             &mut calls,
             &serde_json::json!({"index":0,"function":{"arguments":"mand\":\"dir\"}"}}),
         );
-        // Second call at a higher index.
         merge_tool_call_delta(
             &mut calls,
             &serde_json::json!({"index":1,"id":"call_2","type":"function",

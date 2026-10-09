@@ -1,23 +1,22 @@
-//! Model discovery + connectivity test, driven by the provider catalog
-//! (`providers.json`). Everything switches on the row's `api`/`auth`; there
-//! is no per-provider branching here.
+//! Model discovery and connectivity tests, driven by the provider catalog.
+//! Every branch here switches on the catalog row's `api` or `auth`, so no
+//! branch may test a provider id.
 
 use crate::provider_catalog::{self, Api};
 
-/// The provider roster for the settings UI: id, label, default base URL,
-/// key hint, key-optional flag. The frontend renders this verbatim.
+/// The provider roster for the settings UI. The frontend renders these rows
+/// verbatim.
 #[tauri::command]
 pub(crate) fn list_providers() -> Vec<provider_catalog::Spec> {
     provider_catalog::catalog().to_vec()
 }
 
-/// Resolve the catalog row for a provider id; unknown ids behave as plain
-/// OpenAI-compatible endpoints.
+/// Resolve the wire protocol for a provider id. An unknown id resolves to
+/// `Api::Openai`.
 fn api_of(provider: &str) -> Api {
     provider_catalog::lookup(provider).map(|s| s.api).unwrap_or(Api::Openai)
 }
 
-/// Discover the models a provider exposes, using its model-listing endpoint.
 #[tauri::command]
 pub(crate) async fn list_models(provider: String, base_url: String, api_key: String) -> Result<Vec<String>, String> {
     let base = base_url.trim_end_matches('/');
@@ -45,7 +44,6 @@ pub(crate) async fn list_models(provider: String, base_url: String, api_key: Str
                 .unwrap_or_default()
         }
         Api::Gemini => {
-            // Google listing: GET {base}/models?key=…, names are "models/x".
             let mut url = format!("{base}/models");
             if !api_key.is_empty() {
                 url.push_str(&format!("?key={api_key}"));
@@ -118,16 +116,15 @@ pub(crate) async fn list_models(provider: String, base_url: String, api_key: Str
 
 type WindowMap = std::collections::HashMap<(String, String), Option<u32>>;
 
-/// Endpoint answers, so a model that reports no window is not asked again
-/// on every turn.
+/// Endpoint answers, including "no window reported". A model that reports
+/// no window must not cost a listing round trip on every chat turn.
 static WINDOW_CACHE: std::sync::LazyLock<std::sync::Mutex<WindowMap>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(WindowMap::new()));
 
-/// The context window the endpoint reports for a model, resolved once per
-/// endpoint + model. Compaction needs a window before it can have a
-/// threshold: llama.cpp and its clones report `max_model_len`, Ollama keeps
-/// it inside `model_info`, and hosts that say nothing leave the caller to
-/// the configured fallback.
+/// The context window an endpoint reports for a model. Compaction needs a
+/// window before compaction can state a threshold. llama.cpp and its clones
+/// report `max_model_len`. Ollama nests the value inside `model_info`. A
+/// silent host leaves the caller to the configured fallback.
 pub(crate) async fn model_context(
     provider: &str,
     base_url: &str,
@@ -139,8 +136,6 @@ pub(crate) async fn model_context(
         return None;
     }
     let key = (base.to_string(), model.to_string());
-    // A silent endpoint is cached as silent: a model that never reports a
-    // window must not cost a listing round trip on every chat turn.
     if let Some(hit) = WINDOW_CACHE.lock().ok()?.get(&key).copied() {
         return hit;
     }
@@ -188,7 +183,7 @@ async fn fetch_context(provider: &str, base: &str, api_key: &str, model: &str) -
     }
 }
 
-/// The window under whichever name the server happens to use.
+/// The context window under any field name the server uses.
 fn window_of_entry(entry: &serde_json::Value) -> Option<u32> {
     ["max_model_len", "n_ctx", "context_length", "context_window"]
         .iter()
@@ -196,7 +191,7 @@ fn window_of_entry(entry: &serde_json::Value) -> Option<u32> {
         .map(|v| v as u32)
 }
 
-/// Make a minimal chat completion to verify the LLM config actually works.
+/// One minimal chat completion verifies the saved LLM configuration.
 #[tauri::command]
 pub(crate) async fn test_llm(provider: String, base_url: String, api_key: String, model: String) -> Result<String, String> {
     let base = base_url.trim_end_matches('/');
@@ -298,8 +293,8 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
 
-    /// One-shot mock HTTP server: accepts a single request, replies with a
-    /// canned JSON body, and hands the raw request head back on the channel.
+    /// One-shot mock HTTP server. The server accepts one request, replies
+    /// with `resp_body`, and sends the raw request head on the channel.
     fn mock(resp_body: &'static str) -> (String, std::sync::mpsc::Receiver<String>) {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = l.local_addr().unwrap().port();
@@ -347,7 +342,8 @@ mod tests {
 
     #[tokio::test]
     async fn unversioned_path_root_still_gets_v1() {
-        // deepinfra's base ends at `/openai` (not a version) → /v1 appended.
+        // A base ending at `/openai` is not a version segment, so `/v1` is
+        // appended.
         let (base, rx) = mock(r#"{"data":[{"id":"mix"}]}"#);
         list_models("deepinfra".into(), format!("{base}/v1/openai"), "k".into()).await.unwrap();
         assert!(head(&rx).starts_with("GET /v1/openai/v1/models"));

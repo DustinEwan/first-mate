@@ -40,9 +40,9 @@ use crate::settings::{HOTKEY, get_hotkey, get_settings, save_settings};
 use crate::skills::{get_system_prompt, list_skills};
 use crate::window::{open_settings, open_settings_inner, toggle_window};
 
-// IPC command glue lives here (next to the handler list that keeps it in
-// the app binary) so feature modules stay free of tauri's command
-// machinery — see the note in elevate.rs.
+// IPC command glue lives here, beside the handler list that keeps these
+// functions in the app binary. Feature modules stay free of tauri command
+// machinery. See the note in elevate.rs.
 #[tauri::command]
 fn elevation_status(app: tauri::AppHandle) -> elevate_mod::ElevStatus {
     elevate_mod::status_snapshot(&app)
@@ -67,21 +67,20 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, list_models, list_providers, test_llm, chat_with_llm, stop_chat, list_skills, list_conversations, load_conversation, delete_conversation, save_conversation, get_system_prompt, open_path, bootstrap_status, install_winapp, open_settings, elevate, delevate, elevation_status])
         .setup(|app| {
             app.manage(ElevationState::default());
-            // Scratch hygiene (P6): drop old generations of generated
-            // scripts and spilled output from previous sessions.
+            // Generated scripts and spilled output from earlier sessions
+            // would otherwise accumulate in both scratch directories.
             trim_dir(&fm_tmp_dir(), 50);
             trim_dir(&fm_out_dir(), 50);
-            // Harness probe: the winapp skill drives the desktop through the
-            // winapp CLI (microsoft/winappCli). We DETECT only - installing
-            // software is the user's decision, made in the Setup wizard,
-            // which offers the same unattended winget command on demand.
+            // The winapp skill drives the desktop through the winapp CLI
+            // (microsoft/winappCli). This probe only detects the CLI.
+            // Installing software is the user's decision, taken in the Setup
+            // wizard, which offers the unattended winget command on demand.
             tauri::async_runtime::spawn(async {
                 match cli_version("winapp").await {
                     Some(v) => log(&format!("BOOTSTRAP: winapp CLI present ({v})")),
                     None => log("BOOTSTRAP: winapp CLI missing; offer install in Setup wizard"),
                 }
             });
-            // Tray: left-click toggles the console; menu for explicit actions.
             let toggle_item =
                 MenuItem::with_id(app, "toggle", "Show / Hide", true, None::<&str>)?;
             let settings_item =
@@ -90,14 +89,14 @@ pub fn run() {
                 MenuItem::with_id(app, "setup", "Setup Wizard", true, None::<&str>)?;
             let quit_item =
                 MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            // Disabled until the background check finds an update; then it is
-            // enabled and renamed to "Update to X" (see update.rs).
+            // The item starts disabled. update.rs enables and renames the
+            // item when the background check finds an update.
             let update_item = MenuItem::with_id(app, "update", "Update…", false, None::<&str>)?;
             app.manage(update::UpdateItem(update_item.clone()));
             let menu = Menu::with_items(app, &[&toggle_item, &setup_item, &settings_item, &update_item, &quit_item])?;
 
-            // The anchor glyph rendered from Segoe UI Emoji (icons/tray.png),
-            // not the default Tauri icon.
+            // The tray icon is a pre-rendered anchor glyph (icons/tray.png,
+            // Segoe UI Emoji), not the default Tauri icon.
             let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))
                 .unwrap_or_else(|_| app.default_window_icon().unwrap().clone());
             TrayIconBuilder::new()
@@ -122,8 +121,8 @@ pub fn run() {
                     }
                 })
                 .on_tray_icon_event({
-                    // A single tray click can emit more than one event; debounce so a
-                    // double event doesn't show-then-hide (flash) the window.
+                    // One tray click can emit several events. The debounce
+                    // stops a second event from hiding the window again.
                     let last_toggle = Arc::new(AtomicU64::new(0));
                     move |tray, event| {
                         if let TrayIconEvent::Click { button: MouseButton::Left, .. } = event {
@@ -142,10 +141,8 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // Self-update: check GitHub Releases shortly after launch.
             update::spawn_check(app.handle());
 
-            // Global hotkey toggles the console from anywhere.
             app.global_shortcut()
                 .on_shortcut(HOTKEY, |app, _, event| {
                     if event.state == ShortcutState::Pressed {
@@ -153,7 +150,8 @@ pub fn run() {
                     }
                 })?;
 
-            // Closing the window hides it; the app lives in the tray.
+            // Closing the window only hides the window. The app keeps
+            // running in the tray.
             if let Some(window) = app.get_webview_window("main") {
                 let win = window.clone();
                 window.on_window_event(move |event| {
