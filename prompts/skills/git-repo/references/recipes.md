@@ -26,8 +26,8 @@ git -C <repo> blame -L 40,60 -- src/main.rs
 git -C <repo> reflog -20
 ```
 
-Reflog entries are recoverable with `git -C <repo> show <sha>`; only suggest
-restoring after the user confirms.
+A reflog entry is recoverable with `git -C <repo> show <sha>`. Suggest
+restoring it only after the user confirms.
 
 ## Is the tree clean enough to switch branches
 
@@ -35,5 +35,5 @@ restoring after the user confirms.
 git -C <repo> status --porcelain
 ```
 
-Empty output = clean. Anything else: report the dirty files, do not stash
-without asking.
+Empty output means the tree is clean. Any other output lists dirty files.
+Report those files, and do not stash without asking the user.
