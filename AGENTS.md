@@ -28,6 +28,11 @@ behavior. Most work in this repo is writing content rather than writing code.
   module exposes plain functions. The command wrappers live beside the handler
   table in `lib.rs`. That placement keeps the webview runtime out of a binary that
   merely links the module.
+- **Prose states the constraint.** A comment, doc, or prompt sentence states one
+  fact in at most 20 words. Each sentence names its referent instead of a
+  pronoun. Idiomatic shorthand is replaced with the mechanism it stood for. Text
+  never narrates a past design, an investigation, or a rejected alternative. The
+  file does not record that history, so a later reader cannot verify the claim.
 - **Gates are not optional.** Every backend change passes `cargo test` and
   `cargo clippy --all-targets -- -D warnings`. Every frontend change passes
   `npm run lint`, which runs eslint and prettier. Every commit follows
