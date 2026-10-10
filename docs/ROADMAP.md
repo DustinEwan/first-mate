@@ -299,12 +299,14 @@ three items depend on a profile.
       never shows values.
 - [ ] Tests cover round-trip fidelity, untouched code blocks, and the rule that
       nothing persists the token map.
-- [ ] Settings holds the decision-server URL. Unset means the exact rules alone, and
-      an unreachable endpoint shows `scorer offline` in the console.
-- [ ] The client posts one `noul` question per span to `POST {base}/v1/systemone`. A
-      non-loopback URL needs your confirmation before the first span leaves.
-- [ ] Setup probes one benign span and one credential span, and refuses a server
-      whose two answers both land at or above 0.8.
+- [x] Settings holds the decision-server URL, the enable box, and the flag
+      threshold. Unset or unchecked means the exact rules alone.
+- [x] The client posts one `noul` question per span to `POST {base}/v1/systemone`.
+      A non-loopback URL needs your confirmation before the first span leaves.
+- [x] Setup probes one benign span and one credential span, and reports a server
+      whose two answers both land at or above 0.8 as unusable.
+- [ ] An unreachable scorer shows in the console. Today the log carries one
+      `GATE:` line that names the failing address.
 - **Accept:** a checked box produces the same tokenized request on a local
   endpoint and on a public endpoint. That request carries a fake card, a JWT,
   and an email. A registry-seeded account number with no checksum also leaves

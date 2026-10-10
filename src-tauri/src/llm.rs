@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use tauri::Emitter;
 use crate::context;
+use crate::decide;
 use crate::execute::execute_tool;
 use crate::log::{dump_request, log};
 use crate::provider_catalog::{self, Api};
@@ -153,6 +154,38 @@ fn redactor(app: &tauri::AppHandle, provider: &str) -> Option<redact::Redactor> 
         red.seed(&value);
     }
     Some(red)
+}
+
+/// The decision server for this run, or `None` when the user left it off.
+struct Scorer {
+    base: String,
+    threshold: f64,
+}
+
+fn scorer(app: &tauri::AppHandle) -> Option<Scorer> {
+    let (base, threshold) = settings::decision_server(app)?;
+    Some(Scorer { base, threshold })
+}
+
+/// Ask the server about each span this request carries for the first time, and
+/// replace a flagged span with one token. A server that fails leaves the exact
+/// rules in force, because the gate only advances detection and one unanswered
+/// question must not end a turn. A span the gate never asked about stays
+/// unscored, so the next turn asks again.
+async fn gate(red: &mut redact::Redactor, scorer: &Scorer, spans: Vec<String>) {
+    for span in spans {
+        match decide::score(&scorer.base, &span).await {
+            Ok(p) => {
+                if red.record_score(&span, p, scorer.threshold) {
+                    log(&format!("GATE: flagged a span at {p:.2}"));
+                }
+            }
+            Err(e) => {
+                log(&format!("GATE: {e}; sending on the exact rules"));
+                return;
+            }
+        }
+    }
 }
 
 /// The wire copy of the history. The stored transcript keeps real values, so
@@ -454,6 +487,7 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
     };
     let llm = create_chat_provider(&config).map_err(|e| e.to_string())?;
     let mut red = redactor(&app, &provider);
+    let scorer = scorer(&app);
     let mut carry = String::new();
 
     // Every request carries the full registry, because the tool array is
@@ -565,6 +599,19 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
         // cannot restore it.
         let mut wire = history.clone();
         if let Some(r) = red.as_mut() {
+            if let Some(s) = scorer.as_ref() {
+                let mut found: Vec<&str> = Vec::new();
+                for m in wire.iter().rev() {
+                    if let Some(c) = m.content.as_deref() {
+                        found.push(c);
+                    }
+                    for call in m.tool_calls.iter().flatten() {
+                        found.push(&call.function.arguments);
+                    }
+                }
+                let spans = r.pending_from(found.into_iter());
+                gate(r, s, spans).await;
+            }
             tokenize_chat(r, &mut wire);
         }
         log(&format!("TURN {}: history_msgs={} tools={}", turn, wire.len(), tools.len()));
@@ -795,6 +842,7 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
     let (window, window_src) =
         resolve_window(&provider, base, &api_key, &model, context_window).await;
     let mut red = redactor(&app, &provider);
+    let scorer = scorer(&app);
     let mut carry = String::new();
 
     let threshold = context::threshold_tokens(window, compact_at_percent);
@@ -958,6 +1006,10 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
         // and only the outbound copy carries handles.
         let mut wire = msgs.clone();
         if let Some(r) = red.as_mut() {
+            if let Some(s) = scorer.as_ref() {
+                let spans = r.pending(&mut wire);
+                gate(r, s, spans).await;
+            }
             r.tokenize_msgs(&mut wire);
         }
         measured_at = msgs.len();

@@ -32,11 +32,20 @@ interface LlmSettings {
   api_key: string;
   base_url: string;
 }
+
+// The wizard posts a whole `Settings` object, so every field it does not show
+// must come from the stored copy, or the wizard erases it.
+interface Settings {
+  llm: LlmSettings;
+  hide_sensitive: Record<string, boolean>;
+  [key: string]: unknown;
+}
 const provider = ref("");
 const baseUrl = ref("");
 const apiKey = ref("");
 const model = ref("");
 const hideSensitive = ref<Partial<Record<string, boolean>>>({});
+const stored = ref<Settings | null>(null);
 const models = ref<string[]>([]);
 const modelStatus = ref("");
 
@@ -140,7 +149,9 @@ const modelReady = () => provider.value !== "" && model.value !== "";
 
 async function saveModel() {
   const settings = {
+    ...(stored.value ?? {}),
     llm: {
+      ...stored.value?.llm,
       provider: provider.value,
       model: model.value,
       api_key: apiKey.value,
@@ -203,15 +214,13 @@ function nextFromPrivacy() {
 
 onMounted(async () => {
   hotkey.value = await invoke<string>("get_hotkey");
-  const [ps, s] = await Promise.all([
-    providersReady,
-    invoke<{ llm: LlmSettings; hide_sensitive: Record<string, boolean> }>("get_settings"),
-  ]);
+  const [ps, s] = await Promise.all([providersReady, invoke<Settings>("get_settings")]);
   provider.value = s.llm.provider;
   baseUrl.value = s.llm.base_url;
   apiKey.value = s.llm.api_key;
   model.value = s.llm.model;
   hideSensitive.value = s.hide_sensitive;
+  stored.value = s;
   const spec = ps.find((p) => p.id === s.llm.provider);
   proxy.value = !!spec && !spec.isLocal && s.llm.base_url !== "" && s.llm.base_url !== spec.base;
   if (provider.value && baseUrl.value) refreshModels();

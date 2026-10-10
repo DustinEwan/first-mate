@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import {
   NConfigProvider,
   NForm,
@@ -34,6 +34,12 @@ const model = ref("");
 const contextWindow = ref<number | null>(0);
 const compactAtPercent = ref<number | null>(85);
 const hideSensitive = ref<Partial<Record<string, boolean>>>({});
+const decisionUrl = ref("");
+const decisionEnabled = ref(false);
+const decisionThreshold = ref<number | null>(0.5);
+const decisionRemoteOk = ref(false);
+const decisionHost = ref("");
+const decisionRemote = ref(false);
 const models = ref<string[]>([]);
 const status = ref("");
 
@@ -102,6 +108,10 @@ Promise.all([
   invoke<{
     llm: LlmSettings;
     hide_sensitive: Record<string, boolean>;
+    decision_server_url?: string;
+    decision_server_enabled?: boolean;
+    decision_threshold?: number;
+    decision_server_remote_ok?: boolean;
   }>("get_settings"),
 ]).then(([ps, s]) => {
   providerSpecs.value = ps;
@@ -116,6 +126,11 @@ Promise.all([
   contextWindow.value = s.llm.context_window ?? 0;
   compactAtPercent.value = s.llm.compact_at_percent ?? 85;
   hideSensitive.value = s.hide_sensitive;
+  decisionUrl.value = s.decision_server_url ?? "";
+  decisionEnabled.value = !!s.decision_server_enabled;
+  decisionThreshold.value = s.decision_threshold ?? 0.5;
+  decisionRemoteOk.value = !!s.decision_server_remote_ok;
+  void checkHost(s.decision_server_url ?? "");
   const spec = ps.find((p) => p.id === s.llm.provider);
   proxy.value = !!spec && !spec.isLocal && s.llm.base_url !== "" && s.llm.base_url !== spec.base;
 });
@@ -146,6 +161,10 @@ async function save() {
       compact_at_percent: compactAtPercent.value ?? 85,
     },
     hide_sensitive: hideSensitive.value,
+    decision_server_url: decisionUrl.value,
+    decision_server_enabled: decisionEnabled.value,
+    decision_threshold: decisionThreshold.value ?? 0.5,
+    decision_server_remote_ok: decisionRemoteOk.value,
   };
   try {
     await invoke("save_settings", { settings });
@@ -169,6 +188,43 @@ async function test() {
     status.value = `Test failed: ${e}`;
   }
 }
+
+// The two scores are the operating points. A server that answers at its floor
+// flags every span, so the probe refuses it.
+async function probeServer() {
+  status.value = "Probing decision server…";
+  try {
+    const p = await invoke<{ benign: number; credential: number; usable: boolean }>(
+      "probe_decision_server",
+      { url: decisionUrl.value },
+    );
+    const benign = p.benign.toFixed(2);
+    const credential = p.credential.toFixed(2);
+    status.value = p.usable
+      ? `benign span ${benign}, credential span ${credential}`
+      : `benign span ${benign}, credential span ${credential}: this server answers at its floor`;
+  } catch (e) {
+    status.value = `Probe failed: ${e}`;
+  }
+}
+
+// Rust owns the loopback rule, so the warning and the gate cannot disagree.
+async function checkHost(url: string) {
+  if (url.trim() === "") {
+    decisionHost.value = "";
+    decisionRemote.value = false;
+    return;
+  }
+  const h = await invoke<{ host: string; loopback: boolean }>("decision_host", { url });
+  decisionHost.value = h.host;
+  decisionRemote.value = !h.loopback;
+}
+
+let hostTimer: ReturnType<typeof setTimeout> | null = null;
+watch(decisionUrl, (url) => {
+  if (hostTimer) clearTimeout(hostTimer);
+  hostTimer = setTimeout(() => void checkHost(url), 200);
+});
 
 const win = getCurrentWindow();
 function closeWindow() {
@@ -249,6 +305,50 @@ function closeWindow() {
             <template #feedback>
               Compact the earlier turns once the conversation reaches this share of the context
               window (10–100, default 85).
+            </template>
+          </n-form-item>
+        </n-form>
+
+        <n-form label-placement="top" :show-require-mark="false">
+          <n-form-item :show-label="false">
+            <n-checkbox v-model:checked="decisionEnabled"
+              >Ask a decision server about each span</n-checkbox
+            >
+            <template #feedback>
+              A small model you run judges each new span of text. A span it flags leaves as one
+              placeholder. First Mate never starts or downloads the server.
+            </template>
+          </n-form-item>
+          <n-form-item v-if="decisionEnabled" label="Decision server URL">
+            <n-space align="center" :wrap="false">
+              <n-input v-model:value="decisionUrl" placeholder="e.g. http://127.0.0.1:8741" />
+              <n-button size="small" secondary @click="probeServer">Test</n-button>
+            </n-space>
+            <template #feedback>
+              The server answers one yes/no question per span with a probability, and never receives
+              a prompt. Test reports the score of a benign span and of a credential span.
+            </template>
+          </n-form-item>
+          <n-form-item v-if="decisionEnabled && decisionRemote" :show-label="false">
+            <n-checkbox v-model:checked="decisionRemoteOk">
+              Send every scored span to {{ decisionHost }}
+            </n-checkbox>
+            <template #feedback>
+              That host is off this machine, and it then holds every span the gate sends. Without
+              this box First Mate scores nothing and sends only the exact rules.
+            </template>
+          </n-form-item>
+          <n-form-item v-if="decisionEnabled" label="Flag a span at probability">
+            <n-input-number
+              v-model:value="decisionThreshold"
+              :min="0"
+              :max="1"
+              :step="0.05"
+              :show-button="false"
+            />
+            <template #feedback>
+              A span whose score reaches this value leaves as one placeholder. Pick a value between
+              the two scores Test reports. Default 0.5.
             </template>
           </n-form-item>
         </n-form>

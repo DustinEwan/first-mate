@@ -39,13 +39,36 @@ impl Default for LlmSettings {
     }
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 #[serde(default)]
 pub(crate) struct Settings {
     llm: LlmSettings,
     /// The `Hide sensitive information` choice per provider id. A provider with
     /// no entry takes the roster default.
     hide_sensitive: std::collections::HashMap<String, bool>,
+    /// The address of the decision server the user runs. First Mate neither
+    /// starts nor downloads it, so an empty address is the off position.
+    decision_server_url: String,
+    decision_server_enabled: bool,
+    /// The probability that replaces a span with one token. The setup probe
+    /// reports the measured points, and the user picks one.
+    decision_threshold: f64,
+    /// A host off this machine holds every span the gate sends it. The gate
+    /// sends nothing there until you tick the box in Settings.
+    decision_server_remote_ok: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            llm: LlmSettings::default(),
+            hide_sensitive: std::collections::HashMap::new(),
+            decision_server_url: String::new(),
+            decision_server_enabled: false,
+            decision_threshold: 0.5,
+            decision_server_remote_ok: false,
+        }
+    }
 }
 
 impl Settings {
@@ -59,6 +82,23 @@ impl Settings {
             Some(spec) => spec.hide_sensitive_default,
             None => true,
         }
+    }
+
+    /// The decision server for this run, or `None` when the gate must send
+    /// spans nowhere. A host off this machine needs the acknowledgement,
+    /// because that host then holds every span the gate inspected.
+    pub(crate) fn decision_server(&self) -> Option<(String, f64)> {
+        if !self.decision_server_enabled {
+            return None;
+        }
+        let base = self.decision_server_url.trim();
+        if base.is_empty() {
+            return None;
+        }
+        if !is_loopback(base) && !self.decision_server_remote_ok {
+            return None;
+        }
+        Some((base.to_string(), self.decision_threshold))
     }
 }
 
@@ -132,6 +172,52 @@ pub(crate) fn redaction_for(app: &tauri::AppHandle, provider: &str) -> (bool, Ve
     )
 }
 
+/// The decision server for one run, read where the request is built.
+pub(crate) fn decision_server(app: &tauri::AppHandle) -> Option<(String, f64)> {
+    load(app).ok()?.decision_server()
+}
+
+/// The host behind an address, so Settings can name it before you consent to
+/// send spans there.
+#[tauri::command]
+pub(crate) fn decision_host(url: String) -> serde_json::Value {
+    serde_json::json!({ "host": host_of(&url), "loopback": is_loopback(&url) })
+}
+
+/// Whether an address names this machine. An address this parser cannot read
+/// counts as remote, so it needs the acknowledgement.
+fn is_loopback(url: &str) -> bool {
+    let host = host_of(url);
+    host.eq_ignore_ascii_case("localhost") || host.starts_with("127.") || host == "::1"
+}
+
+/// The address without a scheme, a port, credentials, or a path.
+fn host_of(url: &str) -> String {
+    let authority = url.split("://").nth(1).unwrap_or(url);
+    let authority = authority.split(['/', '?', '#']).next().unwrap_or(authority);
+    let authority = authority.rsplit('@').next().unwrap_or(authority);
+    let host = match authority.rsplit_once(':') {
+        Some((host, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => host,
+        _ => authority,
+    };
+    host.trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_string()
+}
+
+/// The setup probe: two spans, no real value, and the two probabilities that
+/// show the operating points. A server that floors its answer is refused,
+/// because a floor flags every span.
+#[tauri::command]
+pub(crate) async fn probe_decision_server(url: String) -> Result<serde_json::Value, String> {
+    let probe = crate::decide::probe(url.trim()).await?;
+    Ok(serde_json::json!({
+        "benign": probe.benign,
+        "credential": probe.credential,
+        "usable": probe.usable(),
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,5 +268,45 @@ mod tests {
     #[test]
     fn a_provider_outside_the_roster_starts_redacted() {
         assert!(Settings::default().hide_sensitive_for("no-such-provider"));
+    }
+
+    #[test]
+    fn an_older_settings_file_keeps_the_threshold() {
+        let stored = r#"{"llm":{"provider":"openai"}}"#;
+        let settings: Settings = serde_json::from_str(stored).unwrap();
+        assert_eq!(settings.decision_threshold, 0.5);
+        assert!(!settings.decision_server_enabled);
+        assert!(!settings.decision_server_remote_ok);
+    }
+
+    #[test]
+    fn a_remote_scorer_needs_the_acknowledgement() {
+        let mut settings = Settings {
+            decision_server_enabled: true,
+            decision_server_url: "http://192.168.1.20:8741".into(),
+            ..Default::default()
+        };
+        assert_eq!(settings.decision_server(), None);
+        settings.decision_server_remote_ok = true;
+        assert!(settings.decision_server().is_some());
+    }
+
+    #[test]
+    fn a_loopback_scorer_needs_no_acknowledgement() {
+        for url in [
+            "http://127.0.0.1:8741",
+            "http://localhost:8741",
+            "http://[::1]:8741",
+        ] {
+            let settings = Settings {
+                decision_server_enabled: true,
+                decision_server_url: url.into(),
+                ..Default::default()
+            };
+            assert!(
+                settings.decision_server().is_some(),
+                "{url} names this machine"
+            );
+        }
     }
 }

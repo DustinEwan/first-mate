@@ -2,7 +2,7 @@
 //! The outbound pass replaces each detected value with a `⟦CLASS_N⟧` token,
 //! and detokenize runs at the harness boundaries.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -16,6 +16,14 @@ const CLOSE: char = '⟧';
 /// A held fragment longer than this is prose, not a token. Without the cap, a
 /// model that emits one bare `⟦` holds the rest of its answer in the carry.
 const MAX_TOKEN_CHARS: usize = 48;
+
+/// A span shorter than this holds no fact for a decision server to judge, and
+/// the measured audit used the same floor.
+const MIN_SCORE_CHARS: usize = 60;
+
+/// One request scores at most this many spans, so a first turn over a large
+/// file cannot spend its whole latency budget on scoring.
+const MAX_SPANS_PER_REQUEST: usize = 16;
 
 /// One `⟦…⟧` span, so a stray handle in tool arguments can be named.
 static RE_TOKEN: LazyLock<Regex> =
@@ -65,6 +73,9 @@ pub(crate) enum Class {
     /// account number is 8 to 17 digits and is indistinguishable from an
     /// order id.
     Entity,
+    /// A span a decision server flagged. The whole span leaves as one token,
+    /// because a probability carries no offset.
+    Span,
 }
 
 impl Class {
@@ -83,6 +94,7 @@ impl Class {
             Class::Phone => "PHONE",
             Class::UserPath => "USER_PATH",
             Class::Entity => "ENTITY",
+            Class::Span => "SPAN",
         }
     }
 
@@ -103,6 +115,7 @@ impl Class {
             Class::Ssn => 9,
             Class::Email => 10,
             Class::Phone => 11,
+            Class::Span => 12,
         }
     }
 
@@ -119,6 +132,7 @@ impl Class {
         Class::Email,
         Class::Phone,
         Class::Entity,
+        Class::Span,
     ];
 }
 
@@ -390,6 +404,9 @@ pub(crate) struct Redactor {
     repairs: HashMap<String, String>,
     counters: HashMap<Class, usize>,
     registry: Vec<String>,
+    /// Spans the decision server already scored. The agent loop re-sends the
+    /// whole window on every tool turn, and a rescore repeats one audit.
+    scored: HashSet<String>,
 }
 
 impl Redactor {
@@ -405,7 +422,49 @@ impl Redactor {
         }
     }
 
+    /// The strings one JSON request carries that no server has scored, newest
+    /// message first.
+    pub(crate) fn pending(&self, msgs: &mut [serde_json::Value]) -> Vec<String> {
+        let mut found: Vec<String> = Vec::new();
+        for msg in msgs.iter_mut().rev() {
+            walk_strings(msg, &mut |s: &mut String| found.push(s.clone()));
+        }
+        self.budget(found)
+    }
+
+    /// The same choice for a caller that holds plain strings, because the
+    /// Anthropic and Gemini request is not JSON at this point.
+    pub(crate) fn pending_from<'a>(&self, spans: impl Iterator<Item = &'a str>) -> Vec<String> {
+        self.budget(spans.map(str::to_string).collect())
+    }
+
+    /// The shared choice: long enough to judge, never scored before, and at most
+    /// `MAX_SPANS_PER_REQUEST`. Caller order is priority order, because the
+    /// message the user just typed must not lose the budget to older history.
+    fn budget(&self, found: Vec<String>) -> Vec<String> {
+        let mut kept: Vec<String> = found
+            .into_iter()
+            .filter(|s| s.chars().count() >= MIN_SCORE_CHARS && !self.scored.contains(s))
+            .collect();
+        kept.truncate(MAX_SPANS_PER_REQUEST);
+        kept
+    }
+
+    /// Record one answer. A span at or above `threshold` becomes one token, and a
+    /// scored span is never scored again. The return says whether the span left.
+    pub(crate) fn record_score(&mut self, span: &str, score: f64, threshold: f64) -> bool {
+        self.scored.insert(span.to_string());
+        if score >= threshold {
+            self.token(Class::Span, span);
+            return true;
+        }
+        false
+    }
+
     pub(crate) fn tokenize(&mut self, text: &str) -> String {
+        if let Some(token) = self.tokens.get(text) {
+            return token.clone();
+        }
         let mut out = String::with_capacity(text.len());
         let mut last = 0;
         for hit in self.hits(text) {
@@ -876,6 +935,83 @@ mod tests {
         assert_eq!(stray_argument(&clean), None);
         let prose = serde_json::json!({ "content": "a lone ⟦ bracket" });
         assert_eq!(stray_argument(&prose), None);
+    }
+
+    #[test]
+    fn a_flagged_span_leaves_as_one_token_and_returns_on_display() {
+        let span = "My therapist cancelled our session twice this month and I am out of money.";
+        let mut msgs = serde_json::json!([{"role": "user", "content": span}]);
+        let mut r = Redactor::new();
+        assert_eq!(
+            r.pending(msgs.as_array_mut().unwrap().as_mut_slice()).len(),
+            1
+        );
+        r.record_score(span, 0.91, 0.5);
+        r.tokenize_msgs(msgs.as_array_mut().unwrap());
+        assert_eq!(msgs[0]["content"], "⟦SPAN_1⟧");
+        assert_eq!(
+            r.detokenize(msgs[0]["content"].as_str().unwrap()),
+            span,
+            "the console must show the real sentence"
+        );
+        assert!(r
+            .pending(msgs.as_array_mut().unwrap().as_mut_slice())
+            .is_empty());
+    }
+
+    #[test]
+    fn a_span_below_the_threshold_leaves_unchanged() {
+        let span = "The quarterly report lists 3 rows for the GL account and one note.";
+        let mut r = Redactor::new();
+        r.record_score(span, 0.4, 0.5);
+        assert_eq!(r.tokenize(span), span);
+    }
+
+    #[test]
+    fn a_short_span_is_never_offered_to_the_server() {
+        let mut msgs = serde_json::json!([{"role": "user", "content": "call me at 555-867-5309"}]);
+        let r = Redactor::new();
+        assert!(r
+            .pending(msgs.as_array_mut().unwrap().as_mut_slice())
+            .is_empty());
+    }
+
+    #[test]
+    fn one_request_offers_at_most_the_span_budget() {
+        let items: Vec<serde_json::Value> = (0..MAX_SPANS_PER_REQUEST + 5)
+            .map(|i| {
+                serde_json::json!({"role": "user",
+                                   "content": format!("row {i}: {}", "x".repeat(70))})
+            })
+            .collect();
+        let mut msgs = serde_json::Value::Array(items);
+        let r = Redactor::new();
+        assert_eq!(
+            r.pending(msgs.as_array_mut().unwrap().as_mut_slice())
+                .len(),
+            MAX_SPANS_PER_REQUEST
+        );
+    }
+
+    #[test]
+    fn the_newest_span_wins_the_span_budget() {
+        let mut items: Vec<serde_json::Value> = (0..MAX_SPANS_PER_REQUEST)
+            .map(|i| {
+                serde_json::json!({"role": "user",
+                                   "content": format!("old row {i}: {}", "x".repeat(400))})
+            })
+            .collect();
+        items.push(serde_json::json!(
+            {"role": "user", "content": "just typed: my lease ends this month and the landlord kept my deposit"}
+        ));
+        let mut msgs = serde_json::Value::Array(items);
+        let r = Redactor::new();
+        let offered = r.pending(msgs.as_array_mut().unwrap().as_mut_slice());
+        assert_eq!(offered.len(), MAX_SPANS_PER_REQUEST);
+        assert!(
+            offered.iter().any(|s| s.starts_with("just typed:")),
+            "the newest message lost the budget to older history"
+        );
     }
 
 }

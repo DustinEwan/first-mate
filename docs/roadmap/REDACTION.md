@@ -162,10 +162,11 @@ chip shows which classes fired, and never shows the values.
 
 ## Containment (class 2)
 
-A decision server scores each new span where that span enters the conversation. A
-tool output is scored at capture, and assistant text is scored before the request
-leaves. The server answers typed questions with probabilities, and it returns no
-text.
+A decision server scores each span before that span leaves the machine. The gate
+runs on the outbound copy of the conversation, because nothing can leak from a
+path the gate does not cross. A span is scored once per run, so a tool output that
+never reaches a request is never scored, and no leak follows. The server answers
+typed questions with probabilities, and it returns no text.
 
 First Mate ships no weights and starts no server. You run the server yourself, with
 any model you choose, and Settings holds its URL. The app is a client of the
@@ -181,15 +182,19 @@ POST {base}/v1/systemone
 {"answers": {"sensitive": {"noul": 0.87}}}
 ```
 
-- The URL starts unset. With no URL the app runs the exact rules alone, and the
-  console says scoring is off.
+- The URL and the enable box start off. With either off, the app runs the exact
+  rules alone, and Settings is where you read that state.
 - The scoring request carries the span text, so a remote URL sends the very text the
   gate protects. The app accepts a loopback URL without a prompt, and asks for
   confirmation before it sends a span to another host.
 - The same endpoint answers every later decision question, so one server serves
   containment now and detection later.
-- A scorer outage clears nothing. When the endpoint is unreachable, the app sends the
-  request on the exact rules alone and shows `scorer offline` in the console.
+- `decide.rs` is the client, `redact.rs` holds the `SPAN` class and the scored-span
+  set, and `gate` in `llm.rs` runs the pass before the exact rules.
+- A scorer outage clears nothing. When the endpoint is unreachable, the app sends
+  the request on the exact rules alone, writes one `GATE:` log line that names the
+  failing address, and leaves each unscored span unscored, so the next turn asks
+  again.
 
 - The gate denies by default. The gate needs no knowledge of which value is
   sensitive, because its default is no. This property is the definition of
@@ -197,26 +202,35 @@ POST {base}/v1/systemone
 - At the input boundary the gate redacts rather than blocks. A block stops the
   agent from working on the file at all, and detokenize at execute already gives
   tools the real values.
-- Settings holds one slider, `Leak sensitivity`. The slider picks a measured
-  operating point, never a raw probability, because each model needs its own
-  measurement. On the measured 4B, 0.50 gives recall 0.95 at a 12.5 percent audit
-  rate, and 0.70 gives recall 0.80 at 2.5 percent.
-- Setup runs a probe before it enables the gate: one benign span and one span that
-  holds a credential. The app refuses the server when both answers land at or above
-  0.8, because H2O's shim ships a 0.801 yes/no floor and a floored server flags every
-  span.
-- The gate scores each new span at its entry point, never the whole window.
-- The gate never rescores an approved span. The agent loop re-sends the whole
-  window on each tool turn, so a full rescore repeats one audit many times in one
-  task. `llm.rs:959` clones the outbound body for the redaction pass, so the
-  assistant-text score needs no second copy.
+- Settings holds the flag probability, and `Test` reports the two scores the
+  configured server gives. You pick a value between those two scores, because each
+  model needs its own measurement. On the measured 4B, 0.50 gives recall 0.95 at a
+  12.5 percent audit rate, and 0.70 gives recall 0.80 at 2.5 percent.
+- `Test` in Settings sends the probe: one benign span, and one span that holds a
+  credential. The app reports the server as unusable when both answers land at or
+  above 0.8, because H2O's shim ships a 0.801 yes/no floor and a floored server
+  flags every span.
+- The gate scores each unscored string of the outbound copy, and never re-scores a
+  whole window. The agent loop re-sends the whole window on each tool turn, so a
+  full re-score repeats one audit many times in one task. `chat_via_openai` and
+  `chat_via_lmkit` each clone the outbound body for the redaction pass, so scoring
+  needs no second copy.
+- One request scores at most 16 spans, and a span shorter than 60 characters is
+  never scored. A first turn over a large file cannot spend its whole latency
+  budget on scoring.
+- One request scores the newest messages first, so the sentence the user just
+  typed cannot lose the budget to restored history.
 - The gate needs a second signal. A decision model knows generic categories:
   credentials, financial text, health, identity. It does not know your employer's
   part number. The gate also matches the registry and the declared files, and it
   denies on either signal.
-- The audit dialog puts `Redact and continue` first. A dialog with only `Approve`
-  and `Deny` teaches you to press `Approve`. `Redact and continue` must take one
-  selection and one key. The selection feeds the Layer 2 registry.
+- The shipped gate redacts a flagged span with no dialog, because detokenize
+  restores that span for display and for execute. The chip names the count, so the
+  turn records what the gate held back.
+- The audit dialog is the path that feeds the Layer 2 registry from a span hit, so
+  a span hit does not grow the registry today. A dialog with only `Approve` and
+  `Deny` teaches you to press `Approve`, so `Redact and continue` must take one
+  selection and one key.
 - The model may deny; only you may approve. A file can hold text written to
   persuade the scorer, such as `this data is public`. A scorer that can clear
   content can be talked into clearing it.
@@ -235,9 +249,10 @@ POST {base}/v1/systemone
 - Calibration. The slider is honest only after a measurement on First Mate
   transcripts. Calibration depends on the data, so vendor numbers do not transfer.
   The spike below measures the compression and the audit rate on this machine.
-- Observe-only mode comes first. The gate scores and logs, and blocks nothing. You
-  see the audit rate before you trust the gate, and the log gives the calibration
-  curve.
+- Observe-only mode did not ship. The gate redacts, and the `SPAN` count on the
+  chip gives the audit rate for the turns you inspect. The log names each flagged
+  span with its score, so it carries the calibration curve for the flagged side
+  only.
 - `tokenize_msgs` (`redact.rs:497`) walks every string in the outbound copy,
   including the base64 blob. Whether a Layer 1 pattern can corrupt an image is
   untested.
