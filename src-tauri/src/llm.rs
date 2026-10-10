@@ -4,8 +4,10 @@ use crate::context;
 use crate::execute::execute_tool;
 use crate::log::log;
 use crate::provider_catalog::{self, Api};
+use crate::redact;
 use crate::report::tool_report;
 use crate::route::looks_like_unexecuted_intent;
+use crate::settings;
 use crate::tooldefs::{agent_tools, to_tool_defs};
 
 /// The tool loop has no turn cap, so a stop request is the only bound on
@@ -135,6 +137,55 @@ pub(crate) async fn chat_with_llm(
         chat_via_lmkit(app, params).await
     } else {
         chat_via_openai(app, params).await
+    }
+}
+
+/// The redaction pass for this run, or `None` when the provider's `Hide
+/// sensitive information` box is unchecked. The trigger is read here from the
+/// stored setting, so no caller can put a request on the wire without it.
+fn redactor(app: &tauri::AppHandle, provider: &str) -> Option<redact::Redactor> {
+    let (hide, values) = settings::redaction_for(app, provider);
+    if !hide {
+        return None;
+    }
+    let mut red = redact::Redactor::new();
+    for value in values {
+        red.seed(&value);
+    }
+    Some(red)
+}
+
+/// The wire copy of the history. The stored transcript keeps real values, so
+/// the pass runs at this boundary and nowhere else.
+fn tokenize_chat(red: &mut redact::Redactor, msgs: &mut [lmkit::ChatMessage]) {
+    for m in msgs.iter_mut() {
+        if let Some(content) = m.content.as_mut() {
+            *content = red.tokenize(content);
+        }
+        for call in m.tool_calls.iter_mut().flatten() {
+            call.function.arguments = red.tokenize(&call.function.arguments);
+        }
+    }
+}
+
+/// What the console shows for one streamed delta. A token that straddles two
+/// chunks waits in `carry` for its close.
+fn shown(red: &Option<redact::Redactor>, carry: &mut String, delta: &str) -> String {
+    match red {
+        Some(r) => r.detokenize_stream(carry, delta),
+        None => delta.to_string(),
+    }
+}
+
+/// The chip event. A run that replaced nothing emits nothing.
+fn emit_redacted(app: &tauri::AppHandle, red: &Option<redact::Redactor>) {
+    let Some(r) = red else { return };
+    let count = r.redacted_count();
+    if count > 0 {
+        let _ = app.emit(
+            "redact",
+            serde_json::json!({ "count": count, "classes": r.breakdown() }),
+        );
     }
 }
 
@@ -402,6 +453,8 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
         ProviderConfig::with_base_url(provider_enum, api_key, format!("{base}/v1"), model)
     };
     let llm = create_chat_provider(&config).map_err(|e| e.to_string())?;
+    let mut red = redactor(&app, &provider);
+    let mut carry = String::new();
 
     // Every request carries the full registry, because the tool array is
     // static. Availability is not schema-gated: the dispatch gate in
@@ -506,6 +559,9 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
             return Ok("(stopped)".to_string());
         }
         let tools: Vec<ToolDefinition> = to_tool_defs(&active);
+        if let Some(r) = red.as_mut() {
+            tokenize_chat(r, &mut history);
+        }
         log(&format!("TURN {}: history_msgs={} tools={}", turn, history.len(), tools.len()));
         let request = ChatRequest {
             messages: history.clone(),
@@ -542,11 +598,18 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
             let event = event.map_err(|e| e.to_string())?;
             match event {
                 ChatEvent::Delta(t) => {
+                    let shown = shown(&red, &mut carry, &t);
                     text.push_str(&t);
-                    let _ = app.emit("stream_chunk", serde_json::json!({ "text": t }));
+                    let _ = app.emit("stream_chunk", serde_json::json!({ "text": shown }));
                 }
                 ChatEvent::ToolCallDelta(d) => deltas.extend(d),
                 ChatEvent::Finish(_) => {}
+            }
+        }
+        if let Some(r) = red.as_ref() {
+            let tail = r.flush(&mut carry);
+            if !tail.is_empty() {
+                let _ = app.emit("stream_chunk", serde_json::json!({ "text": tail }));
             }
         }
         log(&format!(
@@ -571,9 +634,12 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
                     return Ok("(stopped)".to_string());
                 }
                 let name = call.function.name.clone();
-                let args: serde_json::Value =
+                let mut args: serde_json::Value =
                     serde_json::from_str(&call.function.arguments)
                         .unwrap_or(serde_json::json!({}));
+                if let Some(r) = red.as_ref() {
+                    r.detokenize_json(&mut args);
+                }
                 let _ = app.emit(
                     "tool_call",
                     serde_json::json!({
@@ -630,8 +696,12 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
             continue;
         }
 
+        emit_redacted(&app, &red);
         let _ = app.emit("stream_done", serde_json::json!({}));
-        return Ok(text);
+        return Ok(match red.as_ref() {
+            Some(r) => r.detokenize(&text),
+            None => text,
+        });
     }
 }
 
@@ -714,6 +784,9 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
     let client = reqwest::Client::new();
     let (window, window_src) =
         resolve_window(&provider, base, &api_key, &model, context_window).await;
+    let mut red = redactor(&app, &provider);
+    let mut carry = String::new();
+
     let threshold = context::threshold_tokens(window, compact_at_percent);
     let overhead = context::tools_tokens();
     let keep_budget =
@@ -871,6 +944,9 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
                 }
             }
         }
+        if let Some(r) = red.as_mut() {
+            r.tokenize_msgs(&mut msgs);
+        }
         measured_at = msgs.len();
         let body = serde_json::json!({
             "model": model,
@@ -950,8 +1026,9 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
                 let delta = choice.get("delta");
                 if let Some(t) = delta.and_then(|d| d.get("content")).and_then(|c| c.as_str()) {
                     if !t.is_empty() {
+                        let shown = shown(&red, &mut carry, t);
                         text.push_str(t);
-                        let _ = app.emit("stream_chunk", serde_json::json!({ "text": t }));
+                        let _ = app.emit("stream_chunk", serde_json::json!({ "text": shown }));
                     }
                 }
                 if let Some(tcs) = delta.and_then(|d| d.get("tool_calls")).and_then(|t| t.as_array()) {
@@ -959,6 +1036,12 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
                         merge_tool_call_delta(&mut calls, tc);
                     }
                 }
+            }
+        }
+        if let Some(r) = red.as_ref() {
+            let tail = r.flush(&mut carry);
+            if !tail.is_empty() {
+                let _ = app.emit("stream_chunk", serde_json::json!({ "text": tail }));
             }
         }
         log(&format!(
@@ -998,8 +1081,11 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
                     return Ok("(stopped)".to_string());
                 }
                 let name = call.name.clone();
-                let args: serde_json::Value =
+                let mut args: serde_json::Value =
                     serde_json::from_str(&call.args).unwrap_or(serde_json::json!({}));
+                if let Some(r) = red.as_ref() {
+                    r.detokenize_json(&mut args);
+                }
                 let _ = app.emit(
                     "tool_call",
                     serde_json::json!({
@@ -1071,8 +1157,12 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
             continue;
         }
 
+        emit_redacted(&app, &red);
         let _ = app.emit("stream_done", serde_json::json!({}));
-        return Ok(text);
+        return Ok(match red.as_ref() {
+            Some(r) => r.detokenize(&text),
+            None => text,
+        });
     }
 }
 
