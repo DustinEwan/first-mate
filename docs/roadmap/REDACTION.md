@@ -27,15 +27,17 @@ selected provider's `Hide sensitive information` checkbox is checked, redact.
 - A redaction pass runs over every outbound request whose provider has
   `hide_sensitive` checked. The pass detects secrets, replaces each one with a
   reversible placeholder such as `⟦EMAIL_1⟧`, and sends the request.
-- The token map is **session-scoped**, because the model echoes tokens across
-  turns. The token map lives in memory only. Nothing persists that map, and
-  nothing sends that map anywhere.
+- The pass runs on a copy of the conversation. The stored transcript keeps real
+  values, because a stored token outlives the map that restores it. The next run
+  mints a fresh map, and the old token then reaches a tool as a literal name.
 - Detokenize happens at three harness boundaries, never in the model.
   - **Display**: the console renders the real value, or obfuscates that value at
     the §5 privacy level.
   - **Tool/action execute**: a tool call such as "email `⟦EMAIL_1⟧` the
     summary" contains a token. Execution substitutes the real address at that
-    point, under the profile's trust tier.
+    point, under the profile's trust tier. The harness refuses a call whose
+    token the map cannot restore. The refusal names the argument, not the token,
+    because a quoted token is one the model reuses.
   - **Tool output inbound**: exec and file output receive the same redaction
     pass before the next request carries that output to the provider. Redaction and
     detokenize

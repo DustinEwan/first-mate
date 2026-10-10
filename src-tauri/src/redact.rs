@@ -17,6 +17,36 @@ const CLOSE: char = '⟧';
 /// model that emits one bare `⟦` holds the rest of its answer in the carry.
 const MAX_TOKEN_CHARS: usize = 48;
 
+/// One `⟦…⟧` span, so a stray handle in tool arguments can be named.
+static RE_TOKEN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"⟦[^⟧]{1,48}⟧").unwrap());
+
+/// The key of the argument whose value carries a token, deepest first. The
+/// refusal names the key, because copying the handle back into the transcript
+/// gives the model another handle to reuse.
+pub(crate) fn stray_argument(args: &serde_json::Value) -> Option<String> {
+    match args {
+        serde_json::Value::Object(map) => map.iter().find_map(|(key, value)| {
+            if !has_token(value) {
+                return None;
+            }
+            let inner = stray_argument(value).filter(|k| !k.is_empty());
+            Some(inner.unwrap_or_else(|| key.clone()))
+        }),
+        serde_json::Value::Array(items) => items.iter().find_map(stray_argument),
+        other => has_token(other).then(String::new),
+    }
+}
+
+fn has_token(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::String(s) => RE_TOKEN.is_match(s),
+        serde_json::Value::Object(map) => map.values().any(has_token),
+        serde_json::Value::Array(items) => items.iter().any(has_token),
+        _ => false,
+    }
+}
+
 /// A detected class. The console breakdown names this value.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum Class {
@@ -835,4 +865,17 @@ mod tests {
         let mut r = Redactor::new();
         assert_eq!(r.tokenize(source), source);
     }
+
+    #[test]
+    fn a_stray_handle_is_reported_by_argument_key() {
+        let stray = serde_json::json!({ "command": "dir ⟦USER_PATH_9⟧", "shell": "cmd" });
+        assert_eq!(stray_argument(&stray).as_deref(), Some("command"));
+        let nested = serde_json::json!({ "ops": [{ "path": "C:\\⟦EMAIL_1⟧" }] });
+        assert_eq!(stray_argument(&nested).as_deref(), Some("path"));
+        let clean = serde_json::json!({ "path": "C:\\Users\\me\\notes.md" });
+        assert_eq!(stray_argument(&clean), None);
+        let prose = serde_json::json!({ "content": "a lone ⟦ bracket" });
+        assert_eq!(stray_argument(&prose), None);
+    }
+
 }

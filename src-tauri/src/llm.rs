@@ -559,21 +559,26 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
             return Ok("(stopped)".to_string());
         }
         let tools: Vec<ToolDefinition> = to_tool_defs(&active);
+        // The token map lives for one run, so the live history keeps real
+        // values and only the outbound copy carries handles. A handle stored in
+        // the live history reaches the transcript, and the next run's fresh map
+        // cannot restore it.
+        let mut wire = history.clone();
         if let Some(r) = red.as_mut() {
-            tokenize_chat(r, &mut history);
+            tokenize_chat(r, &mut wire);
         }
-        log(&format!("TURN {}: history_msgs={} tools={}", turn, history.len(), tools.len()));
-        let request = ChatRequest {
-            messages: history.clone(),
-            tools: Some(tools.clone()),
-            ..Default::default()
-        };
-        let req_json = match serde_json::to_string(&request_to_json(&history, &tools)) {
+        log(&format!("TURN {}: history_msgs={} tools={}", turn, wire.len(), tools.len()));
+        let req_json = match serde_json::to_string(&request_to_json(&wire, &tools)) {
             Ok(j) => j,
             Err(e) => {
                 log(&format!("TURN {} REQUEST SERIALIZE ERROR: {}", turn, e));
                 return Err(e.to_string());
             }
+        };
+        let request = ChatRequest {
+            messages: wire,
+            tools: Some(tools),
+            ..Default::default()
         };
         log(&format!(
             "TURN {} REQUEST: len={} head={:?}",
@@ -620,10 +625,16 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
         let calls = merge_tool_call_deltas(&deltas);
         if !calls.is_empty() {
             let _ = app.emit("stream_reset", serde_json::json!({}));
+            let mut stored = calls.clone();
+            for call in stored.iter_mut() {
+                if let Some(r) = red.as_ref() {
+                    call.function.arguments = r.detokenize(&call.function.arguments);
+                }
+            }
             history.push(ChatMessage {
                 role: Role::Assistant,
                 content: Some(text.clone()),
-                tool_calls: Some(calls.clone()),
+                tool_calls: Some(stored),
                 tool_call_id: None,
                 name: None,
             });
@@ -944,13 +955,16 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
                 }
             }
         }
+        // The token map lives for one run, so the live buffer keeps real values
+        // and only the outbound copy carries handles.
+        let mut wire = msgs.clone();
         if let Some(r) = red.as_mut() {
-            r.tokenize_msgs(&mut msgs);
+            r.tokenize_msgs(&mut wire);
         }
         measured_at = msgs.len();
         let body = serde_json::json!({
             "model": model,
-            "messages": msgs,
+            "messages": wire,
             "tools": tools,
             "stream": true,
         });
@@ -1058,10 +1072,16 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
             let tcs: Vec<serde_json::Value> = calls
                 .iter()
                 .map(|c| {
+                    // The live buffer keeps real values, so a remembered tool
+                    // call carries no handle the next run must restore.
+                    let arguments = match red.as_ref() {
+                        Some(r) => r.detokenize(&c.args),
+                        None => c.args.clone(),
+                    };
                     serde_json::json!({
                         "id": c.id,
                         "type": "function",
-                        "function": { "name": c.name, "arguments": c.args },
+                        "function": { "name": c.name, "arguments": arguments },
                     })
                 })
                 .collect();

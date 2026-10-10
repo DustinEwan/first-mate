@@ -8,6 +8,7 @@ use crate::exec::{AppNotifier, BgNotifier, NoopNotifier, bg_registry, budget_out
 use crate::fileedit::{apply_edit_ops, parse_edit_ops, record_snapshot, seen_snapshot, snapshot_tag};
 use crate::log::{fm_tmp_dir, log};
 use crate::psrep::{PsRun, ps_session_exec};
+use crate::redact::stray_argument;
 use crate::route::route_to_tool;
 use crate::skills::{discover_skills, parse_frontmatter, resolve_skill_resource, skill_dir};
 use crate::tooldefs::skill_required;
@@ -54,11 +55,30 @@ pub(crate) async fn execute_tool_inner(name: &str, args: &serde_json::Value) -> 
     .await
 }
 
+/// A token that survived detokenize was never this run's handle, so the tool
+/// would run on a name the disk does not have. Authored content is checked on
+/// the same call: a handle written into a file is a wrong value nobody sees.
+fn refuse_stray_handle(args: &serde_json::Value) -> Result<(), String> {
+    let Some(key) = stray_argument(args) else {
+        return Ok(());
+    };
+    let place = if key.is_empty() {
+        "an argument".to_string()
+    } else {
+        format!("the argument `{key}`")
+    };
+    Err(format!(
+        "Blocked: {place} carries a redaction handle this run cannot restore. Re-run the call \
+         that produced the value, then use the real path from its result."
+    ))
+}
+
 async fn execute_elevation(
     app: &tauri::AppHandle,
     name: &str,
     args: &serde_json::Value,
 ) -> Result<String, String> {
+    refuse_stray_handle(args)?;
     match name {
         "elevate" => {
             let a = app.clone();
@@ -91,6 +111,7 @@ async fn execute_tool_notify(
     name: &str,
     args: &serde_json::Value,
 ) -> Result<String, String> {
+    refuse_stray_handle(args)?;
     // This is the dispatch gate, a client policy rather than a spec rule. A
     // tool whose usage rules live in a skill's instructions is refused until
     // that skill is loaded.
@@ -106,9 +127,9 @@ async fn execute_tool_notify(
             let command = args.get("command").and_then(|c| c.as_str()).unwrap_or("");
             if let Some((tool, why)) = route_to_tool(command, loaded) {
                 return Err(format!(
-                    "Blocked: `{command}` duplicates the {tool} tool, which is already available \
-                     in this conversation. Call {tool} instead ({why}: structured output, no shell \
-                     quoting, no truncation)."
+                    "Blocked: {tool} answers this command ({why}: structured output, no shell \
+                     quoting, no truncation). Call {tool} instead. Command: `{}`",
+                    command.chars().take(160).collect::<String>()
                 ));
             }
             if let Some(app) = app {
@@ -519,6 +540,17 @@ mod tests {
             .await
             .unwrap();
         assert!(ok.contains("dir"), "{ok}");
+    }
+
+    #[tokio::test]
+    async fn a_handle_this_run_cannot_restore_is_refused_before_dispatch() {
+        let err = execute_tool_inner(
+            "run_command",
+            &serde_json::json!({ "command": "Get-ChildItem ⟦USER_PATH_1⟧" }),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("redaction handle"), "{err}");
     }
 
     fn temp_path(name: &str) -> String {
