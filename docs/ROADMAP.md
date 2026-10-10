@@ -90,7 +90,9 @@ whose provider has the switch on. That pass runs detect → tokenize → send.
 Detokenize happens at the harness boundaries: display, tool execute, and
 inbound tool output. Detokenize never happens in the model. Detection stacks
 deterministic shape+checksum checks, a user-seeded entity registry, provenance
-marks, and an optional local-NER net. Over-redaction is the accepted bias,
+marks, and a decision server that you run and the app calls over the typed-decision
+API.
+Over-redaction is the accepted bias,
 because detokenize restores the real text everywhere the user can see. Full
 design: `docs/roadmap/REDACTION.md`.
 
@@ -297,11 +299,19 @@ three items depend on a profile.
       never shows values.
 - [ ] Tests cover round-trip fidelity, untouched code blocks, and the rule that
       nothing persists the token map.
+- [ ] Settings holds the decision-server URL. Unset means the exact rules alone, and
+      an unreachable endpoint shows `scorer offline` in the console.
+- [ ] The client posts one `noul` question per span to `POST {base}/v1/systemone`. A
+      non-loopback URL needs your confirmation before the first span leaves.
+- [ ] Setup probes one benign span and one credential span, and refuses a server
+      whose two answers both land at or above 0.8.
 - **Accept:** a checked box produces the same tokenized request on a local
   endpoint and on a public endpoint. That request carries a fake card, a JWT,
   and an email. A registry-seeded account number with no checksum also leaves
   tokenized. That turn renders correctly on return. An unchecked box leaves the
-  text unchanged.
+  text unchanged. With a decision server configured, a private sentence that no
+  pattern matches still leaves tokenized; with no server, that same sentence
+  leaves unchanged.
 
 ### Phase B — Agent profiles (§1)
 

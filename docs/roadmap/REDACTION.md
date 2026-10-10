@@ -162,12 +162,34 @@ chip shows which classes fired, and never shows the values.
 
 ## Containment (class 2)
 
-A local decision model scores each new span where that span enters the
-conversation. A tool output is scored at capture, and assistant text is scored
-before the request leaves. The model returns a probability and a confidence, not
+A decision server scores each new span where that span enters the conversation. A
+tool output is scored at capture, and assistant text is scored before the request
+leaves. The server answers typed questions with probabilities, and it returns no
 text.
-`StrandsAgents/strands-decider-2B` carries an Apache-2.0 license and runs on a
-laptop. Jev itself is API-only, so Jev cannot serve this role.
+
+First Mate ships no weights and starts no server. You run the server yourself, with
+any model you choose, and Settings holds its URL. The app is a client of the
+Jev-compatible typed-decision API, so any server that answers it can drive the gate:
+
+```text
+POST {base}/v1/systemone
+{"state": "<the span>",
+ "questions": {"sensitive": {"type": "noul",
+                             "instructions": "<the question>",
+                             "criteria": {"true": "yes", "false": "no"}}}}
+
+{"answers": {"sensitive": {"noul": 0.87}}}
+```
+
+- The URL starts unset. With no URL the app runs the exact rules alone, and the
+  console says scoring is off.
+- The scoring request carries the span text, so a remote URL sends the very text the
+  gate protects. The app accepts a loopback URL without a prompt, and asks for
+  confirmation before it sends a span to another host.
+- The same endpoint answers every later decision question, so one server serves
+  containment now and detection later.
+- A scorer outage clears nothing. When the endpoint is unreachable, the app sends the
+  request on the exact rules alone and shows `scorer offline` in the console.
 
 - The gate denies by default. The gate needs no knowledge of which value is
   sensitive, because its default is no. This property is the definition of
@@ -175,8 +197,14 @@ laptop. Jev itself is API-only, so Jev cannot serve this role.
 - At the input boundary the gate redacts rather than blocks. A block stops the
   agent from working on the file at all, and detokenize at execute already gives
   tools the real values.
-- Settings holds one slider, `Leak sensitivity`. The slider sets the confidence
-  the gate requires before it sends.
+- Settings holds one slider, `Leak sensitivity`. The slider picks a measured
+  operating point, never a raw probability, because each model needs its own
+  measurement. On the measured 4B, 0.50 gives recall 0.95 at a 12.5 percent audit
+  rate, and 0.70 gives recall 0.80 at 2.5 percent.
+- Setup runs a probe before it enables the gate: one benign span and one span that
+  holds a credential. The app refuses the server when both answers land at or above
+  0.8, because H2O's shim ships a 0.801 yes/no floor and a floored server flags every
+  span.
 - The gate scores each new span at its entry point, never the whole window.
 - The gate never rescores an approved span. The agent loop re-sends the whole
   window on each tool turn, so a full rescore repeats one audit many times in one
@@ -199,8 +227,8 @@ laptop. Jev itself is API-only, so Jev cannot serve this role.
 
 - Screenshots. `llm.rs:1128-1143` adds each captured screenshot as a base64 PNG
   part. No text pass reads pixels, so a bank statement leaves the machine whole
-  today. The gate needs a vision variant, or OCR before scoring, or denial toward
-  hosted receivers.
+  today. The API carries an image as a data URI inside `state`, and H2O-Lightning-4B
+  reads it, so the app needs to pass the image through rather than score only text.
 - Derived text. A token hides a value, not a relation. "The balance is three times
   the salary" carries no token and appeared in no tool output, so no input score
   covered it. The score on new assistant text covers that case.
@@ -213,6 +241,11 @@ laptop. Jev itself is API-only, so Jev cannot serve this role.
 - `tokenize_msgs` (`redact.rs:497`) walks every string in the outbound copy,
   including the base64 blob. Whether a Layer 1 pattern can corrupt an image is
   untested.
+- Which host runs the server. A user could point the URL at a hosted endpoint, and
+  that endpoint would then hold every span the gate inspected. The confirmation above
+  is the only control, so the console must name the host on every audit line.
+- One server, many profiles. A profile could want its own question text or its own
+  threshold. The probe and the slider are global today.
 
 ### Spike: local decision models, measured 2026-10-10
 
@@ -260,8 +293,9 @@ a span, not whether the topic is private.
 - The registry and the declared paths still decide the exact cases. The 4B ranks an
   example SSN above three real private facts, and it scored the internal SKU scheme
   low in the 2B run.
-- Ship the score gate only where the GPU budget exists. Elsewhere run the exact
-  rules and score nothing, and say so in the UI.
+- First Mate ships the client, not the server, so the hardware budget is yours. The
+  numbers above say what a 4B costs and what it catches, and the probe records the
+  same two numbers for the server you run.
 - Nothing under 4B on the board reaches capability 55. The 270M Gemma clone stayed
   untested, because Gemma 3 270M is gated and needs a Hugging Face login.
 
