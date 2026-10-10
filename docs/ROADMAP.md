@@ -68,37 +68,37 @@ log.
 open, along with the re-approval flow. The rule for retiring a skill that has
 gone stale is also open. No scoring design supports that rule yet.
 
-## 3. Encrypted Chat Sessions / Config (Windows Hello-gated)
+## 3. Encryption at rest
 
-**Problem.** Conversations and `settings.json` are plaintext in `%APPDATA%`.
-An agent that touches mail or banking leaves plaintext evidence of that work.
-The template here is the redesign Recall shipped after its public failure. That
-design uses local encryption plus Windows Hello (passkey/TPM-backed) as the
-gate, and it uses no password file.
+**Problem.** First Mate writes four stores in plaintext. `conversations.rs`
+writes each `.chat` transcript under `%USERPROFILE%\.firstmate\conversations`.
+`log.rs` writes each exec spill under `%USERPROFILE%\.firstmate\output`.
+`settings.rs` writes `settings.json` and `entity_registry.json` under
+`%APPDATA%\com.dusti.firstmate`. An agent that touches mail or banking leaves
+plaintext evidence of that work in all four stores.
 
 **Design sketch.**
 
-- First Mate encrypts each conversation file with AES-256-GCM.
-- A **DPAPI-NG / CNG key protected by Windows Hello** wraps the data key:
-  `NCrypt` with a user+device+platform bound key, released only after Hello
-  verification.
-- Microsoft ships the same class of mitigation for Recall snapshots.
+- First Mate encrypts every file it writes. Encryption is not a setting, and no
+  store stays plaintext.
+- AES-256-GCM encrypts each file, and the header `FMENC1` names the format.
+- The Platform Crypto Provider holds each file key in the TPM. `NCrypt` exposes
+  that provider as `MS_PLATFORM_KEY_STORAGE_PROVIDER`.
+- The app unwraps that key at start with no prompt. The app must read its own
+  settings, registry, and transcripts at logon, so no prompt may block a read.
 - No key material is ever on disk in the clear.
-- The user opts in per conversation at creation, with "seal this session".
-- A sealed session decrypts lazily behind a Hello prompt when the console opens
-  that session.
-- `settings.json` gets a `secrets` section for API keys, and that section moves
-  into the same envelope.
-- Non-sealed conversations stay plaintext, so search and migration stay cheap.
-- The file header `FMENC1` tells tooling which files are sealed and which are
-  plaintext.
-- A TPM reset or hardware loss makes sealed data unrecoverable.
-- The first seal therefore offers a recovery key, printed once and kept
-  offline.
+- `entity_registry.json` holds raw sensitive values by design, so it needs the
+  same envelope as a transcript.
+- Windows Hello does not gate this key. Hello gates display, and §5 defines that
+  policy.
+- The first run after an upgrade rewrites every plaintext file inside the
+  envelope, so no store stays readable after that run.
+- A TPM reset or hardware loss makes the data unrecoverable. The app therefore
+  prints a recovery key once at the first run, and the user keeps it offline.
+  Each file key carries a second wrap under a key derived from that secret.
 
-**Open questions.** How often the Hello prompt appears is open: per open, or
-per app run. `winapp` and exec output spilled to `fm_out` inherit the session's
-seal, because `fm_out` stores the sensitive content.
+§7 records the reception evidence for this design. That evidence rejects ambient
+capture and plaintext-at-rest storage, not encryption.
 
 ## 4. Sensitive-Info Obfuscation
 
@@ -146,13 +146,12 @@ under a `Privacy` section, away from the provider and model fields.
   the entity registry. `wide` adds Layer 4 context, which also tokenizes a
   benign id that sits near a trigger word. `off` sends real values. A receiver
   the user owns is the only case for `off`.
-- `blur` renders tokens or blurs in the console, and each item reveals on click.
-  `hello` makes each reveal a Windows Hello event and writes one audit line.
+- `blur` renders tokens or blurs in the console, and one click reveals one item.
+  `hello` adds the Windows Hello check that the reveal session below defines.
   `show` is today's behavior.
 - One dependency crosses the two axes, and it is disk, not threat.
   Click-to-reveal needs the real value on disk. §4 keeps real values in the
-  stored transcript today. `blur` and `hello` therefore need §3 sealing first,
-  because that log then holds real values.
+  stored transcript, so §3 encryption is a precondition for `blur` and `hello`.
 - A profile may raise either axis. A profile may not lower either axis.
 - Before `wide` ships, the entity registry must ask before it grows. A false
   positive that enters the registry matches that value everywhere, forever.
@@ -160,6 +159,49 @@ under a `Privacy` section, away from the provider and model fields.
 - A later control may store only redacted text. That control removes the real
   value from disk, so it also removes click-to-reveal. The UI must state that
   loss beside the control.
+
+### The reveal session
+
+`hello` gates display, not the key. One state governs the console: the reveal
+session is open or closed. While the session is closed, the console shows the
+tokens from the §4 pass, and the API key field shows a masked value. While the
+session is open, the console shows real values.
+
+| Event | Effect |
+| --- | --- |
+| The user presses Reveal | The app asks for Windows Hello, then opens the session |
+| The console window hides | The app closes the session |
+| The session lifetime elapses | The app closes the session |
+| The user presses Extend | The app asks for Windows Hello, then resets the lifetime |
+| The user presses End reveal | The app closes the session |
+| The process exits | The session ends, because the flag lives in memory |
+
+- The lifetime is 10 minutes, and it is the backstop. The app has no idle timer,
+  because no input does not mean no person: the user reads what the agent wrote.
+  The user holds the explicit End control, and the hide rule covers the rest.
+- The window has `alwaysOnTop: true`, so a console that stays visible while the
+  user steps away stays readable until the lifetime elapses. The lifetime bounds
+  that time, and the UI states the bound instead of implying safety.
+- Hiding the window closes the session, so the tray icon needs no state. No open
+  session can exist while the console is hidden.
+- The hotkey and the close button both hide the window by different paths:
+  `toggle_window` in `window.rs`, and a direct `win.hide()` call in the
+  `CloseRequested` handler in `lib.rs`. Both paths must close the session.
+- Extend costs a Windows Hello check. A free extension would keep real values
+  shown forever after one check.
+- Expiry closes display only. The §3 key stays unlocked, because the app must
+  read its own files. An expiry is not a data lock, and the UI must not say one.
+- The mask must come from the render path. The transcript uses a virtualized
+  scroller, so a mask applied to the document alone would show a real value
+  again when that row scrolls back into view.
+- The agent cannot open, extend, or close a session. A passkey answers a
+  physical-presence question, and the agent has no answer to give. Contrast
+  `delevate`, which the agent may call, because the agent can finish the work
+  that needed elevation.
+- The app logs one line per session event, with the reason it closed.
+- `CheckAvailabilityAsync` reports a machine with no passkey configured. There
+  the app keeps `blur` behavior, allows click-to-reveal, and states in the
+  Privacy section that no passkey check runs on this machine.
 
 ## 6. Workspaces
 
@@ -224,7 +266,7 @@ a searchable archive for humans. The _agent_ resurfaces relevant history at the
 moment of relevance. An example: "you restructured these logs in March — same
 failure?". First Mate already owns the raw material: every conversation, every
 spilled output, and every skill execution. Index that material with embeddings
-over sealed data (§3), and let the active profile query its own past. There is
+over encrypted data (§3), and let the active profile query its own past. There is
 no ambient capture. Continuous screen recording was Recall's most expensive and
 least valued choice. First Mate serves the same job from work product First Mate
 already owns.
@@ -259,7 +301,7 @@ The dependency spine is **A → B → C → D → E → F → G**. Redaction com
 because that work is self-contained and protects every turn whose receiver the
 user does not trust. Phase H (§6) has no dependency, because its scratch
 directories already exist and need only routing. Profiles come next, because
-three items depend on a profile. Sealing comes before self-authored skills,
+three items depend on a profile. Encryption comes before self-authored skills,
 because the product must not gain agent-written skills
 while conversations are still plaintext.
 
@@ -279,7 +321,7 @@ while conversations are still plaintext.
       real values, so its output needs no detokenize pass.
 - [x] A repair pass fixes mangled tokens by fuzzy match on `⟦…⟧` shapes.
 - [ ] The entity registry stores the values that profiles seed, and it grows by
-      confirmation from layer-1 and layer-3 hits. §3 seals that registry.
+      confirmation from layer-1 and layer-3 hits. §3 encrypts that registry.
 - [ ] Provenance marks sensitive-path reads, UIA field names, and banking
       origins. The harness blocks password-manager clipboard reads.
 - [ ] Each class has its own toggle, and a disclose-once override exists.
@@ -307,22 +349,24 @@ while conversations are still plaintext.
 - **Accept:** two profiles with different models and skills, verifiable from a
   conversation's recorded profile.
 
-### Phase C — Hello-sealed sessions (§3)
+### Phase C — Encryption at rest (§3)
 
-- [ ] Spike first, because the biggest unknown is the NCrypt CNG
-      user+device+platform-bound key with Hello-gated unwrap. Build that proof
-      of concept, then drop or commit the approach before you build anything
-      else.
-- [ ] The `FMENC1` container encrypts each conversation file with AES-256-GCM.
-- [ ] The console offers "Seal this session" at creation, and a sealed session
-      shows a Hello prompt lazily on open.
-- [ ] The `settings.json` secrets, which are API keys, move into the same
+- [ ] Spike first. The unknown is the Platform Crypto Provider key. Create it,
+      wrap a test key, unwrap it at start with no prompt, and confirm that a
+      second Windows account on the same disk reads only ciphertext.
+- [ ] The `FMENC1` container encrypts each `.chat` transcript with AES-256-GCM.
+- [ ] The envelope covers `settings.json`, `entity_registry.json`, and each
+      `fm_out` exec spill, so no store stays plaintext.
+- [ ] The first run after an upgrade rewrites every plaintext file in the
       envelope.
-- [ ] Exec output spilled to `fm_out` inherits the seal of its session.
-- [ ] The recovery-key flow prints the key once. The app states plainly that a
-      TPM loss makes sealed data unrecoverable.
-- **Accept:** a sealed file is ciphertext to a second Windows account on the
-  same disk. The same file opens with one Hello prompt.
+- [ ] The app unwraps the key at start with no prompt, so the app starts at
+      logon with no interaction.
+- [ ] The recovery-key flow prints the key once and stores a second wrap of each
+      file key. The app states plainly that a TPM loss makes data unrecoverable.
+- [ ] Encryption has no setting and no per-session choice.
+- **Accept:** a transcript is ciphertext to a second Windows account on the same
+  disk, the app starts at logon with zero prompts, and every store still carries
+  `FMENC1` after a task that wrote a transcript, a spill, and a registry value.
 
 ### Phase D — Privacy section (§5)
 
@@ -337,12 +381,15 @@ The screen axis needs Phase C first, because the transcript holds real values.
       three on-machine rows keep `off`.
 - [ ] The registry asks once before it grows, and that gate opens `wide`.
 - [ ] The screen axis adds `blur`: tokens in the console, one click reveals one
-      item, and the log stores the real text sealed under §3.
-- [ ] `hello` gates each reveal behind Windows Hello and writes one audit line.
+      item, and the log stores the real text, encrypted under §3.
+- [ ] The `hello` level adds the reveal session: one Windows Hello check opens
+      it, a hide or a 10-minute lifetime closes it, and Extend costs a check.
+- [ ] The app logs one line per session event, with the reason it closed.
 - [ ] A profile holds a floor for each axis, and can raise either axis but never
       lower it.
-- **Accept:** a screenshot under `blur` contains zero sensitive values, one Hello
-  opens one item, and a provider set to `off` sends the real value.
+- **Accept:** a screenshot under `blur` contains zero sensitive values, a hidden
+  console shows masked values on the next summon until one Hello check passes,
+  and a provider set to `off` sends the real value.
 
 ### Phase E — Agent-defined skills (§2)
 
@@ -370,7 +417,7 @@ The screen axis needs Phase C first, because the transcript holds real values.
 
 ### Phase G — Derived capabilities (§8), in this order
 
-- [ ] Continuity (needs C) adds embeddings over sealed conversations and
+- [ ] Continuity (needs C) adds embeddings over encrypted conversations and
       outputs, plus agent-side relevance queries. The item excludes ambient
       capture.
 - [ ] Focus transfer (needs B) adds UIA selection capture. The focused

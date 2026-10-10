@@ -70,7 +70,7 @@ That target set is tiny and closed.
 - The registry grows from Layer 1 and Layer 3 hits after a one-time user
   confirmation.
 - The registry then matches exact values anywhere, in any format.
-- §3 stores that registry sealed.
+- §3 encrypts that registry.
 
 **Layer 3 — provenance.** Content from a marked origin is sensitive regardless
 of its shape. Layer 3 marks the following origins:
@@ -115,8 +115,8 @@ against over-redaction degrading model task quality.
 
 How much real text the chat log stores is a choice in the §5 Privacy section.
 The store-only-redacted-text option minimizes on-disk truth. The `blur` and
-`hello` levels need the real text on disk, so they need §3 sealing first, as §3
-describes. The console can therefore reveal that truth on demand.
+`hello` levels need the real text on disk, so they need §3 encryption first,
+as §3 describes. The console can therefore reveal that truth on demand.
 
 The console shows a "Redacted N items" chip on each turn whose pass replaced a value.
 Clicking that
