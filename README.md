@@ -101,6 +101,13 @@ LLM settings live in `%APPDATA%\com.dusti.firstmate\settings.json`. Open the tra
 menu and choose **Settings** to edit them. The `llm` section defines `provider`,
 `model`, `api_key`, `base_url`, `context_window`, and `compact_at_percent`.
 
+Two top-level keys drive redaction. `hide_sensitive` maps a provider id to the
+`Hide sensitive information` choice. A provider with no entry takes the default
+its roster row declares, and every hosted provider starts on.
+The entity registry lives in `entity_registry.json` beside `settings.json`. It
+lists exact strings the pass replaces, for values no shape identifies, such as
+a bank account number.
+
 The selectable providers come from `src-tauri/src/providers.json`, which the
 binary embeds at compile time. Adding a provider is an edit to that file. You
 need no Rust change, because request building switches on the row's `api` and

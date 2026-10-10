@@ -220,25 +220,25 @@ while conversations are still plaintext.
 
 ### Phase A — Sensitive-info redaction (§4)
 
-- [ ] Trust registry: `hide_sensitive` on the resolved provider is the single
+- [x] Trust registry: `hide_sensitive` on the resolved provider is the single
       trigger source. The settings UI checks that box for public providers. An
       endpoint address is never a privacy decision, and `is_local` stays a
       Base-URL hint.
-- [ ] `redact.rs` layer 1 replaces each detected secret with a `⟦CLASS_N⟧`
+- [x] `redact.rs` layer 1 replaces each detected secret with a `⟦CLASS_N⟧`
       token. Layer 1 detects Luhn+BIN cards, IBAN mod-97, ABA mod-10, SWIFT, and
       SSN validity. Layer 1 also detects crypto checksums, API-key shapes, JWT,
       email, phone, and `%USERPROFILE%` paths.
-- [ ] The token map lives in the session, and detokenize stays stream-safe across
+- [x] The token map lives in the session, and detokenize stays stream-safe across
       placeholder boundaries in SSE chunks.
-- [ ] Detokenize runs at display, at tool and action execute, and on inbound
-      tool output.
-- [ ] A repair pass fixes mangled tokens by fuzzy match on `⟦…⟧` shapes.
+- [x] Detokenize runs at display, and at tool and action execute. A tool receives
+      real values, so its output needs no detokenize pass.
+- [x] A repair pass fixes mangled tokens by fuzzy match on `⟦…⟧` shapes.
 - [ ] The entity registry stores the values that profiles seed, and it grows by
       confirmation from layer-1 and layer-3 hits. §3 seals that registry.
 - [ ] Provenance marks sensitive-path reads, UIA field names, and banking
       origins. The harness blocks password-manager clipboard reads.
 - [ ] Each class has its own toggle, and a disclose-once override exists.
-- [ ] The "Redacted N items" chip opens a class breakdown, and that breakdown
+- [x] The "Redacted N items" chip opens a class breakdown, and that breakdown
       never shows values.
 - [ ] Tests cover round-trip fidelity, untouched code blocks, and the rule that
       nothing persists the token map.

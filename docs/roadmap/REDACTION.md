@@ -16,8 +16,9 @@ selected provider's `Hide sensitive information` checkbox is checked, redact.
 - Settings stores that checkbox per provider id, because the stored `llm` block
   holds one provider at a time. Switching providers restores each provider's
   own choice.
-- The checkbox starts checked for every public provider. Whether a user-added
-  endpoint starts checked is the open call in §4.
+- Each roster row declares its start value in `hideSensitiveDefault`. The three
+  on-machine engines start unchecked; every hosted row and every user-added URL
+  starts checked, because a receiver exists there.
 - `Spec::is_local` keeps its one job: it shows the Base URL field. The endpoint
   address never selects the redaction pass.
 
@@ -62,7 +63,8 @@ number is indistinguishable from an order ID. Layer 2 therefore needs no
 open-world detection, because the valuable targets are the user's own values.
 That target set is tiny and closed.
 
-- Profile settings seed the registry with accounts, addresses, and employer.
+- `entity_registry.json` beside `settings.json` holds the values. Phase B gives
+  the Profiles UI the write path; today you edit the file.
 - The registry grows from Layer 1 and Layer 3 hits after a one-time user
   confirmation.
 - The registry then matches exact values anywhere, in any format.
