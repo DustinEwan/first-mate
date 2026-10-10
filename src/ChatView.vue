@@ -377,6 +377,19 @@ function deleteConversation(c: ConvInfo) {
     .catch((e) => console.error("delete failed", e));
 }
 
+// The console caches the provider, so a wizard save reaches the next message
+// only through this call.
+async function loadSettings(): Promise<LlmSettings> {
+  const s = await invoke<{ llm: LlmSettings }>("get_settings");
+  llmSettings = s.llm;
+  return s.llm;
+}
+
+function finishSetup() {
+  wizardOpen.value = false;
+  loadSettings();
+}
+
 onMounted(() => {
   refreshConversations().then(() => {
     if (conversations.value.length > 0) {
@@ -386,9 +399,8 @@ onMounted(() => {
   invoke<string>("get_hotkey").then((hotkey) => {
     addMsg(`First Mate is online. Summon with ${hotkey}.`, "dim");
   });
-  invoke<{ llm: LlmSettings }>("get_settings").then((s) => {
-    llmSettings = s.llm;
-    if (!s.llm.model) wizardOpen.value = true;
+  loadSettings().then((llm) => {
+    if (!llm.model) wizardOpen.value = true;
   });
   invoke<boolean>("recovery_key_status").then((pending) => {
     if (pending) wizardOpen.value = true;
@@ -804,7 +816,7 @@ window.addEventListener("keydown", (e) => {
           </ul>
         </aside>
       </div>
-      <SetupWizard v-if="wizardOpen" @done="wizardOpen = false" />
+      <SetupWizard v-if="wizardOpen" @done="finishSetup" />
     </div>
   </n-config-provider>
 </template>
