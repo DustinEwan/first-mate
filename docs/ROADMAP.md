@@ -7,8 +7,8 @@ A trust layer makes it safe to point an agent at a machine full of personal
 data.
 
 This is a **living document**. The document records direction and build order.
-§1–5 describe features, §6 records the reception evidence, §7 lists derived
-capabilities, and §8 lists the build order. The last section lists the
+§1–6 describe features, §7 records the reception evidence, §8 lists derived
+capabilities, and §9 lists the build order. The last section lists the
 non-goals. When priorities move, update this document, because the document is
 only as accurate as its last update. Design detail lives in the documents this
 one points to, not here.
@@ -154,7 +154,44 @@ controls:
 - An L3 reveal is per item, not per session. One Hello prompt per reveal is the
   point.
 
-## 6. The Copilot lesson: usefulness, not features
+## 6. Workspaces
+
+**Problem.** The agent's work product has no home. One disk-inventory task wrote
+nine `.ps1` scripts and ten `.txt` reports into `%USERPROFILE%`. Its closing
+message spent 19 filenames on an apology. A screenshot landed as
+`screenshot.png` in a git working tree, because `winapp ui screenshot` defaults
+to the app's working directory. `write_file` accepts any path, so each task
+picks its own litter. Cleanup then becomes a delete the user must audit file by
+file.
+
+`~/.firstmate/tmp` and `~/.firstmate/output` already exist, and `trim_dir` caps
+each at 50 entries at startup. That is storage, not a workspace: the files carry
+no link to the task that made them, and nothing sends the agent's writes there.
+
+**Design sketch.**
+
+- A conversation owns a workspace at `~/.firstmate/workspaces/<conversation-id>/`.
+  A run gets a subfolder of it, so one task's files list and clear as a set.
+- The workspace is the default destination, not a jail. When the user names a
+  destination, the agent writes there.
+- `write_file`, the screenshot path, and spilled tool output resolve to the
+  current run's workspace when no destination is given. `output/` becomes that
+  folder's spill subdirectory.
+- The console shows the run's workspace as one link, so the question "what did
+  it leave behind" is one click. Clearing that folder is one action, not an
+  inventory of filenames.
+- Deleting a conversation deletes its workspaces, which replaces the 50-entry
+  trim with a lifetime the user understands.
+- Skill scripts are not workspace files. A skill's `scripts/` folder is durable
+  content (§2), and a workspace holds only what one task produced.
+- The winapp skill passes an explicit output path for every screenshot. The
+  image then lands in the workspace, not in the current directory.
+
+**Open questions.** Whether a workspace survives the conversation that made it
+is open. Whether the user can point a workspace at a real project folder is also
+open. That choice puts the agent's scratch beside the work it is doing.
+
+## 7. The Copilot lesson: usefulness, not features
 
 The 2025–2026 reception evidence for Copilot leaves four jobs standing. The
 four are: recover lost context, use what's in front of me, bounded delegation,
@@ -163,7 +200,7 @@ plaintext at rest, plus an unconfirmed action that can change any file or
 account. §3–4 and the trust tiers answer those two complaints. Evidence and
 full analysis: `docs/roadmap/COPILOT-ANALYSIS.md`.
 
-## 7. Derived capabilities
+## 8. Derived capabilities
 
 Each entry states its job first. First Mate chooses the mechanism.
 
@@ -209,13 +246,14 @@ and reports into the console. The approved §2
 skill is itself the approval artifact. That is why self-authored skills must
 ship with review, versioning, and tier binding before automation exists.
 
-## 8. Execution checklist
+## 9. Execution checklist
 
 The dependency spine is **A → B → C → D → E → F → G**. Redaction comes first,
-because that work is self-contained and protects every turn whose receiver the user
-does not trust. Profiles
-come next, because three items depend on a profile. Sealing comes before
-self-authored skills, because the product must not gain agent-written skills
+because that work is self-contained and protects every turn whose receiver the
+user does not trust. Phase H (§6) has no dependency, because its scratch
+directories already exist and need only routing. Profiles come next, because
+three items depend on a profile. Sealing comes before self-authored skills,
+because the product must not gain agent-written skills
 while conversations are still plaintext.
 
 ### Phase A — Sensitive-info redaction (§4)
@@ -302,7 +340,7 @@ while conversations are still plaintext.
 - **Accept:** the agent proposes, you approve, and the next session uses that
   skill under one profile only.
 
-### Phase F — Harness trust tiers (§7 "Next")
+### Phase F — Harness trust tiers (§8 "Next")
 
 - [ ] The exec harness enforces tiers 0–3, and that enforcement extends the
       gate that `route.rs` already implements.
@@ -314,7 +352,7 @@ while conversations are still plaintext.
 - **Accept:** a `general`-profile agent cannot delete outside its workspace
   without an explicit confirm.
 
-### Phase G — Derived capabilities (§7), in this order
+### Phase G — Derived capabilities (§8), in this order
 
 - [ ] Continuity (needs C) adds embeddings over sealed conversations and
       outputs, plus agent-side relevance queries. The item excludes ambient
@@ -332,9 +370,22 @@ embeddings, and selections leave the machine only when the redaction pass ran on
 that turn. Nothing in E or G ships without its review gate
 and its tier gate.
 
+### Phase H — Workspaces (§6)
+
+- [ ] A conversation gets a workspace folder, and a run gets a subfolder of it.
+- [ ] `write_file`, the screenshot path, and tool-output spill resolve to the
+      current run's workspace when no destination is given.
+- [ ] The winapp skill passes that path to every screenshot, so no image lands
+      in the app's working directory.
+- [ ] The console links the run's workspace, and one action clears it.
+- [ ] Deleting a conversation deletes its workspaces, and `trim_dir` becomes a
+      backstop instead of the only lifetime rule.
+- **Accept:** a task that writes ten files leaves ten files in one folder that
+  the console links, while `git status` and `%USERPROFILE%` stay clean.
+
 ## Non-goals
 
-- Ambient screen capture, which is a Recall-style recorder. §7 serves the
+- Ambient screen capture, which is a Recall-style recorder. §8 serves the
   continuity job from First Mate's own work product. Continuous capture would
   reintroduce the exposure that §3 exists to prevent.
 - Full voice control of the OS. Voice Access already does that job, and Voice
