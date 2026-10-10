@@ -206,7 +206,7 @@ laptop. Jev itself is API-only, so Jev cannot serve this role.
   covered it. The score on new assistant text covers that case.
 - Calibration. The slider is honest only after a measurement on First Mate
   transcripts. Calibration depends on the data, so vendor numbers do not transfer.
-  The spike below shows the compression on this machine.
+  The spike below measures the compression and the audit rate on this machine.
 - Observe-only mode comes first. The gate scores and logs, and blocks nothing. You
   see the audit rate before you trust the gate, and the log gives the calibration
   curve.
@@ -214,37 +214,56 @@ laptop. Jev itself is API-only, so Jev cannot serve this role.
   including the base64 blob. Whether a Layer 1 pattern can corrupt an image is
   untested.
 
-### Spike: local decision model, measured 2026-10-10
+### Spike: local decision models, measured 2026-10-10
 
-`StrandsAgents/strands-decider-2B-qwen3.5-v1-2610`, Apache-2.0, 4.55 GB of
-weights. The host is an RTX 3060 with 12 GB and 12 CPU cores.
+Two decision models and one embedding model ran on the same 44 labeled spans and
+the same 200 spans of real agent work. The host is an RTX 3060 with 12 GB and 12
+CPU cores. JevBench v1.6.1 ranks open-weights decision models by Intelligence,
+Calibration, Speed, and Cost. A board score does not establish reliability on this
+task, so each model also ran here.
 
-| Measurement | GPU | CPU |
-| --- | --- | --- |
-| One span, one question | 109 ms | 1767 ms |
-| Warm-cache load | 17.7 s | 17.7 s |
-| Memory | 6 GB VRAM, 2.2 GB RSS | about 9 GB RSS |
+| Model | JevBench capability | AUC | Threshold for recall 0.95 | Audit rate there | Latency | Memory |
+| --- | --- | --- | --- | --- | --- | --- |
+| `h2oai/h2o-lightning-4b` v1.1, 4B | 75.0, open rank 5 | 0.960 | 0.50 | 12.5% | 70 ms GPU | 11.6 GB VRAM, 5.4 GB RSS |
+| `StrandsAgents/strands-decider-2B`, 2B | unranked | 0.891 | 0.10 | 98.5% | 109 ms GPU, 1767 ms CPU | 6 GB VRAM, 9 GB CPU RSS |
+| `all-MiniLM-L6-v2`, 23M, kNN | not a decision model | 0.735 | none | 0%, misses | 59 ms CPU | 1.0 GB RSS |
 
-- 44 labeled spans. AUC 0.891 on GPU and 0.887 on CPU, so the ranking is real and
-  device-independent.
-- The scores are compressed. Positives median 0.238, negatives median 0.092, floor
-  0.070. Recall 0.95 needs threshold 0.10, and that costs 9 false positives of 24.
-- 199 spans of real agent work. Mean 0.165, median 0.144, max 0.487. At threshold
-  0.15 the audit rate is 44.7 percent, and at 0.10 it is 98.5 percent. No threshold
-  separates the two classes on real work.
-- Two failure classes. Private prose scores low: the salary sentence 0.12, the
-  therapy note 0.19, the internal SKU scheme 0.07. Examples of secrets score high: a
-  spec sample SSN 0.672, a placeholder key 0.465.
-- An embedding model is cheaper and worse. `all-MiniLM-L6-v2`, 23M parameters,
-  59 ms per span on CPU, 1.02 GB RSS, scores a span by similarity to labeled
-  exemplars: AUC 0.735. Its four lowest scores are the four private prose facts.
-- Consequence. The blocking gate above is contradicted by the audit rate, because a
-  gate that interrupts 44.7 percent of spans turns you into a rubber stamp. The
-  registry and the declared paths are the only mechanisms that caught the value the
-  models scored at 0.07. A decision model can rank the audit dialog, because ranking
-  needs no calibration.
-- The 270M Gemma clone stayed untested. Gemma 3 270M is gated, so it needs a
-  Hugging Face login.
+H2O-Lightning-4B is Apache-2.0, 9.1 GB, served by vLLM 0.30.0 with the shim flag
+`SHIM_NOUL_FLOOR=0`. The shipped config floors every yes/no answer at 0.801, which
+would flag every span, so the floor must stay off for a threshold to mean anything.
+
+- Positives median 0.862, negatives median 0.248. Threshold 0.50 gives recall 0.95
+  with 5 false positives of 24.
+- On real work the mean is 0.306 and the max is 0.774. Threshold 0.50 flags 25 of
+  200 spans. Threshold 0.70 flags 5 of 200, at recall 0.80.
+- The same two error classes remain, narrower. The weakest positives are private
+  prose: 0.473, 0.531, 0.555. The strongest negatives are examples of secrets:
+  0.760 and 0.721.
+- The GPU budget is the blocker. The server holds 11.6 GB of the 12 GB card and
+  5.4 GB of host RSS. A machine without a large GPU cannot host it, and CPU is out
+  of reach.
+
+Strands Decider 2B is Apache-2.0, 4.55 GB, and is not on the board.
+
+- Its scores compress: positives median 0.238, negatives median 0.092, floor 0.070.
+  On real work no span reached 0.5, so no threshold separates the classes. At
+  threshold 0.15 the audit rate is 44.7 percent, and at 0.10 it is 98.5 percent.
+- On CPU it holds AUC 0.887 at 1767 ms per span and about 9 GB RSS. Warm-cache load
+  is 17.7 s.
+
+The embedding model scores a span by similarity to labeled exemplars. Its four
+lowest scores are the four private prose facts, so an embedding carries the topic of
+a span, not whether the topic is private.
+
+- Model choice, not the model class, caused the first failure. The ranked 4B gives a
+  usable operating point at a 12.5 percent audit rate.
+- The registry and the declared paths still decide the exact cases. The 4B ranks an
+  example SSN above three real private facts, and it scored the internal SKU scheme
+  low in the 2B run.
+- Ship the score gate only where the GPU budget exists. Elsewhere run the exact
+  rules and score nothing, and say so in the UI.
+- Nothing under 4B on the board reaches capability 55. The 270M Gemma clone stayed
+  untested, because Gemma 3 270M is gated and needs a Hugging Face login.
 
 ## Mitigation (class 2)
 
