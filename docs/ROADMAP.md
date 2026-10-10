@@ -111,8 +111,9 @@ reports `Export Policy` `0`, and `NCryptExportKey` refuses `RSAPRIVATEBLOB` with
 `NTE_BAD_TYPE`, so the key cannot leave the TPM. The store keeps the key at
 `%LOCALAPPDATA%\Microsoft\Crypto\PCPKSP\<sid hash>\*.PCPKEY`. `icacls` grants
 that folder to the user, `BUILTIN\Administrators`, and `SYSTEM`, so a second
-standard account cannot read the blob. Two checks stay open: the read test under
-a real second account, and survival across a reboot.
+standard account cannot read the blob. The spike proved nothing about the
+envelope, because no envelope exists yet. Phase C must show that a sealed file
+holds no plaintext byte and stays closed once you delete the TPM key.
 
 §7 records the reception evidence for this design. That evidence rejects ambient
 capture and plaintext-at-rest storage, not encryption.
@@ -371,21 +372,21 @@ while conversations are still plaintext.
 - [x] Spike: the Platform Crypto Provider key works. Create it, wrap a test key,
       and unwrap it in a fresh process, all with no prompt. §3 records the
       result, and names the API that wraps a key.
-- [ ] Spike: confirm that a second Windows account on the same disk reads only
-      ciphertext, and that the key survives a reboot.
+- [ ] Spike: show that a sealed file holds no plaintext byte, and that it stays
+      closed once you delete the TPM key, so no key material travels with a file.
 - [ ] The `FMENC1` container encrypts each `.chat` transcript with AES-256-GCM.
 - [ ] The envelope covers `settings.json`, `entity_registry.json`, and each
       `fm_out` exec spill, so no store stays plaintext.
 - [ ] The first run after an upgrade rewrites every plaintext file in the
       envelope.
-- [ ] The app unwraps the key at start with no prompt, so the app starts at
-      logon with no interaction.
+- [ ] After a reboot, the app unwraps the key at logon with no prompt, so the
+      app starts with no interaction.
 - [ ] The recovery-key flow prints the key once and stores a second wrap of each
       file key. The app states plainly that a TPM loss makes data unrecoverable.
 - [ ] Encryption has no setting and no per-session choice.
-- **Accept:** a transcript is ciphertext to a second Windows account on the same
-  disk, the app starts at logon with zero prompts, and every store still carries
-  `FMENC1` after a task that wrote a transcript, a spill, and a registry value.
+- **Accept:** no byte that a task wrote appears in plaintext on disk, and a
+  sealed file stays closed once you delete the TPM key. The app opens every
+  store at logon after a reboot with zero prompts.
 
 ### Phase D — Privacy section (§5)
 
