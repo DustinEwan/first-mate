@@ -162,21 +162,26 @@ chip shows which classes fired, and never shows the values.
 
 ## Containment (class 2)
 
-A local decision model scores each outbound request body before the request
-leaves the machine. The model returns a probability and a confidence, not text.
+A local decision model scores each new span where that span enters the
+conversation. A tool output is scored at capture, and assistant text is scored
+before the request leaves. The model returns a probability and a confidence, not
+text.
 `StrandsAgents/strands-decider-2B` carries an Apache-2.0 license and runs on a
 laptop. Jev itself is API-only, so Jev cannot serve this role.
 
 - The gate denies by default. The gate needs no knowledge of which value is
   sensitive, because its default is no. This property is the definition of
   containment in this document.
+- At the input boundary the gate redacts rather than blocks. A block stops the
+  agent from working on the file at all, and detokenize at execute already gives
+  tools the real values.
 - Settings holds one slider, `Leak sensitivity`. The slider sets the confidence
   the gate requires before it sends.
-- The unit is the assembled request body. `llm.rs:959` clones that body for the
-  redaction pass, so the gate needs no second copy.
-- The gate scores only spans that were not in the last approved request. The agent
-  loop re-sends the whole window on each tool turn, so a full rescore repeats one
-  audit many times in one task.
+- The gate scores each new span at its entry point, never the whole window.
+- The gate never rescores an approved span. The agent loop re-sends the whole
+  window on each tool turn, so a full rescore repeats one audit many times in one
+  task. `llm.rs:959` clones the outbound body for the redaction pass, so the
+  assistant-text score needs no second copy.
 - The gate needs a second signal. A decision model knows generic categories:
   credentials, financial text, health, identity. It does not know your employer's
   part number. The gate also matches the registry and the declared files, and it
@@ -187,8 +192,8 @@ laptop. Jev itself is API-only, so Jev cannot serve this role.
 - The model may deny; only you may approve. A file can hold text written to
   persuade the scorer, such as `this data is public`. A scorer that can clear
   content can be talked into clearing it.
-- Scope: the inference request. An action that emails or searches a real value
-  stays with the tier-3 confirm gate above.
+- Scope: the text and images that enter an inference request. An action that
+  emails or searches a real value stays with the tier-3 confirm gate above.
 
 ### Open items
 
@@ -196,9 +201,9 @@ laptop. Jev itself is API-only, so Jev cannot serve this role.
   part. No text pass reads pixels, so a bank statement leaves the machine whole
   today. The gate needs a vision variant, or OCR before scoring, or denial toward
   hosted receivers.
-- Assistant text. The model can transcribe an image, and the model can state a
-  conclusion that no token covered. Both cases put sensitive text into the next
-  request. The score on the assembled body covers both.
+- Derived text. A token hides a value, not a relation. "The balance is three times
+  the salary" carries no token and appeared in no tool output, so no input score
+  covered it. The score on new assistant text covers that case.
 - Calibration. The slider is honest only after a measurement on First Mate
   transcripts. Calibration depends on the data, so vendor numbers do not transfer.
 - Observe-only mode comes first. The gate scores and logs, and blocks nothing. You
