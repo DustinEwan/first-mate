@@ -8,6 +8,43 @@ or financial data. The endpoint address does not decide that exposure. An agent
 on the same LAN is a receiver you may not trust. A hosted model behind your own
 proxy is a receiver you trust. One rule therefore drives the feature: when the
 selected provider's `Hide sensitive information` checkbox is checked, redact.
+Detection alone cannot hold that promise for every class of value. The next
+section states why.
+
+## Two classes of sensitive value
+
+Class 1 values carry their own proof. A specification gives each one a shape and
+a checksum, so the text alone decides whether the value is present. That set is
+closed, and `redact.rs` implements it as Layer 1 below.
+
+For a class-2 value, the deciding fact sits outside the text. It names whose
+value the value is, where the text came from, or what the sentence means. The
+string therefore holds no evidence a scan can recover. A US account number and
+an order ID of the same length are the same string.
+
+**Detection cannot reach completeness for class 2.** A detector must exist
+before the leak, and it must guess your private context. Its recall is also
+unmeasurable, because the missed values are the ones nobody recorded. An
+unmeasurable quantity cannot improve, so completeness is not a target this
+project can hold.
+
+Order class 2 controls in this sequence: containment, then mitigation, then
+ad-hoc identification. Containment bounds what can leave the machine, so an
+undetected value has nowhere to go. Containment must hold without knowing which
+value is sensitive. A control that must ask whether a value is sensitive is
+identification, and it inherits the same ceiling. Mitigation assumes the value
+left. It then asks what that is worth to the receiver: how long the receiver
+keeps it, whether the receiver can reuse it, and how many receivers hold it
+already. Ad-hoc identification then corrects the system from what you observed,
+and the first two controls bound its misses.
+
+Per channel, containment can reach leak-free without prediction. A value that
+cannot leave until you cleared it produces no leak, whatever its shape.
+Detection-based completeness stays impossible. The guarantee moves where
+prediction is not required.
+
+This document holds no containment or mitigation design yet. It holds one
+ad-hoc identification design, below.
 
 ## The switch
 
@@ -122,6 +159,36 @@ demand.
 The console shows a "Redacted N items" chip on each turn whose pass replaced a value.
 Clicking that
 chip shows which classes fired, and never shows the values.
+
+## Ad-hoc identification (class 2, future)
+
+You notice a plaintext value in the chat log. You select it, open the context
+menu, and choose `Redact`. That gesture can work where a pattern set cannot,
+because you know the value. The log is evidence, not a guess.
+
+- The rule targets the value, not the conversation. A value in one log usually
+  sits in other logs, in the file the agent read, and in the file itself. A
+  per-conversation rule closes one path of four.
+- The gesture is the write path Layer 2 needs, so the registry grows from a leak
+  you observed. You need no upfront configuration, because nobody writes such a
+  list in advance.
+- The action cannot retract what already left. The console keeps a persistent
+  `<!>` marker on the turn where the value first went out, and that marker states
+  the value reached the provider before the rule existed. The word `Redact` alone
+  would imply an undone exposure.
+- The pass edits the outbound copy only, and re-derives that copy per request. The
+  stored transcript keeps real values, per the Core round-trip rule. A rule baked
+  into stored rows fails on resume against another provider, because those rows
+  then carry plaintext again.
+- You never write a pattern. The UI collects the forms you observed, and the model
+  writes a pattern that matches every collected form. That limit is real: this
+  path fits numbers and codes. Prose-shaped sensitivity, such as a name or a
+  diagnosis, is out of reach.
+- The rule list shows each rule, the rows it touched on the last request, and an
+  off switch. A broad pattern on an 8-digit value can also match order IDs. A
+  silent no-match and a silent over-match both destroy your trust in the control.
+- Provider-side retention is out of reach. Once a request arrived, only the
+  receiver's own policy decides what survives. That case belongs to mitigation.
 
 **Dependency:** Profile model bindings (§1) decide which provider a turn uses, and
 that provider's checkbox decides whether the pass runs. Encryption at rest
