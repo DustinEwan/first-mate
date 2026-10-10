@@ -50,6 +50,17 @@ pub(crate) struct Spec {
     /// shows the Base URL field only for these rows.
     #[serde(default)]
     pub is_local: bool,
+    /// Redaction starts on for this provider. An on-machine engine has no
+    /// receiver, so that row may start unredacted. A user-added URL is a
+    /// receiver, so that row starts redacted.
+    #[serde(default = "hide_sensitive_default")]
+    pub hide_sensitive_default: bool,
+}
+
+/// A roster row that omits `hideSensitiveDefault` starts redacted, so a new row
+/// cannot leak by omission.
+fn hide_sensitive_default() -> bool {
+    true
 }
 
 fn rows() -> &'static Vec<Spec> {
@@ -70,7 +81,6 @@ pub(crate) fn lookup(id: &str) -> Option<&'static Spec> {
 }
 
 pub(crate) fn base_is_versioned(base: &str) -> bool {
-
     base.rsplit('/').next().is_some_and(|seg| {
         let rest = seg.strip_prefix('v').unwrap_or("");
         !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit())

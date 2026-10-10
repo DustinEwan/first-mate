@@ -7,7 +7,8 @@
     "base": "http://localhost:11434",
     "keyHint": "",
     "keyOptional": true,
-    "isLocal": true
+    "isLocal": true,
+    "hideSensitiveDefault": false
   },
   {
     "id": "lm-studio",
@@ -17,7 +18,8 @@
     "base": "http://localhost:1234/v1",
     "keyHint": "",
     "keyOptional": true,
-    "isLocal": true
+    "isLocal": true,
+    "hideSensitiveDefault": false
   },
   {
     "id": "llama-cpp",
@@ -27,7 +29,8 @@
     "base": "http://localhost:8080/v1",
     "keyHint": "",
     "keyOptional": true,
-    "isLocal": true
+    "isLocal": true,
+    "hideSensitiveDefault": false
   },
   {
     "id": "openai",

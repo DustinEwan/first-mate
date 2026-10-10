@@ -21,6 +21,7 @@ mod modelapi;
 mod openpath;
 mod provider_catalog;
 mod psrep;
+mod redact;
 mod report;
 mod route;
 mod settings;
