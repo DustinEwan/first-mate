@@ -212,7 +212,8 @@ ship with review, versioning, and tier binding before automation exists.
 ## 8. Execution checklist
 
 The dependency spine is **A → B → C → D → E → F → G**. Redaction comes first,
-because that work is self-contained and protects today's cloud users. Profiles
+because that work is self-contained and protects every turn whose receiver the user
+does not trust. Profiles
 come next, because three items depend on a profile. Sealing comes before
 self-authored skills, because the product must not gain agent-written skills
 while conversations are still plaintext.
@@ -241,9 +242,11 @@ while conversations are still plaintext.
       never shows values.
 - [ ] Tests cover round-trip fidelity, untouched code blocks, and the rule that
       nothing persists the token map.
-- **Accept:** a cloud turn that includes a fake card, a JWT, and an email leaves
-  machine tokenized. A registry-seeded account number with no checksum also
-  leaves tokenized. That turn renders correctly on return.
+- **Accept:** a checked box produces the same tokenized request on a local
+  endpoint and on a public endpoint. That request carries a fake card, a JWT,
+  and an email. A registry-seeded account number with no checksum also leaves
+  tokenized. That turn renders correctly on return. An unchecked box leaves the
+  text unchanged.
 
 ### Phase B — Agent profiles (§1)
 
@@ -325,8 +328,8 @@ while conversations are still plaintext.
       and runs that skill under its tier.
 
 Cross-cutting: every G capability respects the §3/§4/§5 boundary. Voice,
-embeddings, and selections never leave the machine unless the profile's model
-is remote _and_ redaction ran. Nothing in E or G ships without its review gate
+embeddings, and selections leave the machine only when the redaction pass ran on
+that turn. Nothing in E or G ships without its review gate
 and its tier gate.
 
 ## Non-goals

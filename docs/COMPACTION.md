@@ -6,12 +6,16 @@ This document is the design detail for context compaction.
 the rules it agreed to follow. Both failures are window-management bugs, not
 model bugs. Both failures are measurable on a normal day of use.
 
-## Evidence (2026-10-09, 161 provider requests)
-- The history window counts **rows, not tokens**. `ChatView.vue` filters to
-  user/assistant/tool rows, then ships `messages.value.slice(-30)`. On a
-  166-item drivers chat the last 30 rows held **zero user turns**. That request
-  reached the provider with no user turn at all. 5 of 12 chat invocations hit
-  the 30-row cap.
+## Evidence that forced the design (measured 2026-10-09, 161 provider requests)
+
+These bullets record the state before the rules below shipped. Each bullet names
+the rule that closed the gap.
+
+- The history window counted **rows, not tokens**. `ChatView.vue` shipped
+  `messages.value.slice(-30)`. On a 166-item drivers chat, the last 30 rows held
+  **zero user turns**. That request reached the provider with no user turn at
+  all. 5 of 12 chat invocations hit the 30-row cap. Rule 1 and rule 3 replaced
+  that cap with a token threshold.
 - Request size is median 47.9 KB, p90 783 KB, max 1.46 MB. Size is **not** a
   cost or latency problem. Requests over 900 KB were the _fastest_: median 2 s,
   against 3 s for requests under 60 KB. The log has no 413 error and no
@@ -23,13 +27,18 @@ model bugs. Both failures are measurable on a normal day of use.
   window**, so they matter for the trigger, not for cost. The next request
   contains no screenshot, because `HistoryItem` stores text only. Visual memory
   therefore ends when the user speaks.
-- Nothing knows a model's window. `providers.json` defines no window field.
-  `modelapi.rs` discards the `max_model_len` that the endpoint already reports.
-  `llm.rs` never parses `usage` or `prompt_tokens`.
+- Nothing knew a model's window. `providers.json` defined no window field,
+  `modelapi.rs` discarded the `max_model_len` the endpoint reported, and
+  `llm.rs` parsed no `usage`. `model_context` plus `WINDOW_CACHE` in
+  `modelapi.rs` now read that report, and `llm.rs` reads `/usage/prompt_tokens`.
+  `providers.json` still defines no window field: rule 1 prefers the user
+  override, then the endpoint report, then the fallback.
 - `load_skill` returns the whole `SKILL.md` (`execute.rs`), but `tool_report`
-  attaches no body for that call. The `.chat` ledger therefore stores only
-  `📖 load_skill filesystem ✅`. Resume re-derives capability from that ledger
-  line, so gated tools unlock **without their instructions in context**.
+  still attaches no body, so the `.chat` ledger stores only
+  `📖 load_skill filesystem ✅`. Resume therefore re-derived capability from that
+  ledger line, and gated tools unlocked **without their instructions in
+  context**. Rule 6 re-injects each loaded body at request build, so the ledger
+  shape no longer decides what the model sees.
 
 ## The rule that governs everything else
 

@@ -1,16 +1,30 @@
-# Cloud Redaction — Design
+# Sensitive-Info Redaction — Design
 
 This document is the design detail for roadmap §4 (Phase A). The `§`
 references below point to `docs/ROADMAP.md`.
 
 **Problem.** A public model must never see credentials, addresses, health data,
-or financial data. A local model needs none of that protection. The feature is
-therefore one rule: when the resolved provider is remote, redact.
+or financial data. The endpoint address does not decide that exposure. An agent
+on the same LAN is a receiver you may not trust. A hosted model behind your own
+proxy is a receiver you trust. One rule therefore drives the feature: when the
+selected provider's `Hide sensitive information` checkbox is checked, redact.
+
+## The switch
+
+- The model settings form shows one checkbox labeled `Hide sensitive
+  information` for the selected provider.
+- Settings stores that checkbox per provider id, because the stored `llm` block
+  holds one provider at a time. Switching providers restores each provider's
+  own choice.
+- The checkbox starts checked for every public provider. Whether a user-added
+  endpoint starts checked is the open call in §4.
+- `Spec::is_local` keeps its one job: it shows the Base URL field. The endpoint
+  address never selects the redaction pass.
 
 ## Core round-trip
 
-- A redaction pass runs over every outbound request when
-  `provider.kind != local`. The pass detects secrets, replaces each one with a
+- A redaction pass runs over every outbound request whose provider has
+  `hide_sensitive` checked. The pass detects secrets, replaces each one with a
   reversible placeholder such as `⟦EMAIL_1⟧`, and sends the request.
 - The token map is **session-scoped**, because the model echoes tokens across
   turns. The token map lives in memory only. Nothing persists that map, and
@@ -22,7 +36,8 @@ therefore one rule: when the resolved provider is remote, redact.
     summary" contains a token. Execution substitutes the real address at that
     point, under the profile's trust tier.
   - **Tool output inbound**: exec and file output receive the same redaction
-    pass before that output enters a cloud prompt. Redaction and detokenize
+    pass before the next request carries that output to the provider. Redaction and
+    detokenize
     cover both directions.
 
 ## Detection layers
@@ -85,7 +100,8 @@ local model, because the scan itself cannot leak.
 
 ## Bias rule
 
-The bias is to over-redact outbound traffic to a cloud provider. Detokenize
+The bias is to over-redact outbound traffic on a turn whose provider has the checkbox
+checked. Detokenize
 restores the real value for display and for actions. A false positive therefore
 removes a token that detokenize restores before the user sees it. A false
 negative is the leak. Per-class toggles and the disclose-once override guard
@@ -98,8 +114,10 @@ Level L1 stores _redacted_ text, which minimizes on-disk truth. Level L2 and
 above store sealed truth, as §3 describes. The console can therefore reveal that
 truth on demand.
 
-The console shows a "Redacted N items" chip on each cloud turn. Clicking that
+The console shows a "Redacted N items" chip on each turn whose pass replaced a value.
+Clicking that
 chip shows which classes fired, and never shows the values.
 
-**Dependency:** Profile model bindings (§1) decide when redaction runs. §3
+**Dependency:** Profile model bindings (§1) decide which provider a turn uses, and
+that provider's checkbox decides whether the pass runs. §3
 decides what is worth protecting on disk instead.
