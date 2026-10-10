@@ -16,7 +16,7 @@ pub(crate) fn home_dir() -> std::path::PathBuf {
         .unwrap_or_default()
 }
 
-fn fm_dir() -> std::path::PathBuf {
+pub(crate) fn fm_dir() -> std::path::PathBuf {
     home_dir().join(".firstmate")
 }
 
@@ -32,6 +32,15 @@ pub(crate) fn fm_out_dir() -> std::path::PathBuf {
     let d = fm_dir().join("output");
     let _ = std::fs::create_dir_all(&d);
     d
+}
+
+/// A failed request body, sealed in the spill directory. `%TEMP%` keeps no
+/// plaintext copy, so a support read needs `read_file`.
+pub(crate) fn dump_request(turn: usize, body: &str) -> std::path::PathBuf {
+    let path = fm_out_dir().join(format!("req-{}-t{turn}.json", std::process::id()));
+    let _ = crate::crypto::seal(body.as_bytes())
+        .and_then(|bytes| std::fs::write(&path, bytes).map_err(|e| e.to_string()));
+    path
 }
 
 pub(crate) fn trim_dir(dir: &std::path::Path, keep: usize) {

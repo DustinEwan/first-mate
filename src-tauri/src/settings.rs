@@ -1,4 +1,5 @@
 use tauri::Manager;
+use crate::crypto;
 use crate::provider_catalog;
 
 /// `run` registers `HOTKEY` once, so this constant is the only place to
@@ -67,13 +68,19 @@ fn settings_file(app: &tauri::AppHandle) -> tauri::Result<std::path::PathBuf> {
     Ok(dir.join("settings.json"))
 }
 
+fn read_text(path: &std::path::Path) -> tauri::Result<String> {
+    let bytes = std::fs::read(path)?;
+    let plain = crypto::open_store_bytes(path, bytes).map_err(std::io::Error::other)?;
+    Ok(String::from_utf8_lossy(&plain).to_string())
+}
+
 /// Read the stored settings. A missing or unreadable file yields defaults,
 /// and `Settings::hide_sensitive_for` redacts an unknown provider, so a broken
 /// settings file fails toward redaction.
 pub(crate) fn load(app: &tauri::AppHandle) -> tauri::Result<Settings> {
     let path = settings_file(app)?;
     if path.exists() {
-        let contents = std::fs::read_to_string(&path)?;
+        let contents = read_text(&path)?;
         Ok(serde_json::from_str(&contents)?)
     } else {
         Ok(Settings::default())
@@ -89,7 +96,7 @@ pub(crate) fn get_settings(app: tauri::AppHandle) -> tauri::Result<Settings> {
 pub(crate) fn save_settings(app: tauri::AppHandle, settings: Settings) -> tauri::Result<()> {
     let path = settings_file(&app)?;
     let contents = serde_json::to_string_pretty(&settings)?;
-    std::fs::write(&path, contents)?;
+    std::fs::write(&path, crypto::seal(contents.as_bytes()).map_err(std::io::Error::other)?)?;
     Ok(())
 }
 
@@ -110,7 +117,7 @@ pub(crate) fn registry(app: &tauri::AppHandle) -> Vec<String> {
     let Ok(path) = registry_file(app) else {
         return Vec::new();
     };
-    match std::fs::read_to_string(&path) {
+    match read_text(&path) {
         Ok(contents) => parse_registry(&contents),
         Err(_) => Vec::new(),
     }

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use tauri::Emitter;
 use crate::context;
 use crate::execute::execute_tool;
-use crate::log::log;
+use crate::log::{dump_request, log};
 use crate::provider_catalog::{self, Api};
 use crate::redact;
 use crate::report::tool_report;
@@ -593,8 +593,7 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
             Ok(s) => s,
             Err(e) => {
                 log(&format!("TURN {} ERROR: complete_stream failed: {}", turn, e));
-                let dump = std::env::temp_dir().join(format!("firstmate_req_t{}.json", turn));
-                let _ = std::fs::write(&dump, &req_json);
+                let dump = dump_request(turn, &req_json);
                 log(&format!("TURN {} REQUEST DUMPED to {}", turn, dump.display()));
                 return Err(e.to_string());
             }
@@ -984,8 +983,7 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
             Ok(r) => r,
             Err(e) => {
                 log(&format!("TURN {} ERROR: request failed: {}", turn, e));
-                let dump = std::env::temp_dir().join(format!("firstmate_req_t{}.json", turn));
-                let _ = std::fs::write(&dump, &body_json);
+                let dump = dump_request(turn, &body_json);
                 log(&format!("TURN {} REQUEST DUMPED to {}", turn, dump.display()));
                 return Err(format!("request failed: {e}"));
             }
@@ -998,8 +996,7 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
                 turn,
                 text.chars().take(400).collect::<String>()
             ));
-            let dump = std::env::temp_dir().join(format!("firstmate_req_t{}.json", turn));
-            let _ = std::fs::write(&dump, &body_json);
+            let dump = dump_request(turn, &body_json);
             log(&format!("TURN {} REQUEST DUMPED to {}", turn, dump.display()));
             return Err(format!(
                 "API error ({status}): {}",

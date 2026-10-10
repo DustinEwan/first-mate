@@ -10,6 +10,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 mod conversations;
 mod context;
+mod crypto;
 mod exec;
 mod elevate;
 mod execute;
@@ -52,6 +53,21 @@ fn elevate(app: tauri::AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn recovery_key_status() -> bool {
+    crypto::recovery_key_pending()
+}
+
+#[tauri::command]
+fn get_recovery_key() -> Option<String> {
+    crypto::recovery_key()
+}
+
+#[tauri::command]
+fn ack_recovery_key() -> bool {
+    crypto::ack_recovery_key()
+}
+
+#[tauri::command]
 fn delevate(app: tauri::AppHandle) -> Result<String, String> {
     Ok(elevate_mod::delevate_core(&app, false))
 }
@@ -62,9 +78,15 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, list_models, list_providers, test_llm, chat_with_llm, stop_chat, list_skills, list_conversations, load_conversation, delete_conversation, save_conversation, get_system_prompt, open_path, bootstrap_status, install_winapp, open_settings, elevate, delevate, elevation_status])
+        .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, list_models, list_providers, test_llm, chat_with_llm, stop_chat, list_skills, list_conversations, load_conversation, delete_conversation, save_conversation, get_system_prompt, open_path, bootstrap_status, install_winapp, open_settings, elevate, delevate, elevation_status, recovery_key_status, get_recovery_key, ack_recovery_key])
         .setup(|app| {
             app.manage(ElevationState::default());
+            let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+            crypto::init(config_dir.clone());
+            let (sealed, removed) = crypto::upgrade_stores(&config_dir);
+            if sealed > 0 || removed > 0 {
+                log(&format!("ENVELOPE: sealed {sealed} store files, removed {removed} plaintext request dumps"));
+            }
             // Generated scripts and spilled output from earlier sessions
             // would otherwise accumulate in both scratch directories.
             trim_dir(&fm_tmp_dir(), 50);

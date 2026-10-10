@@ -1,3 +1,4 @@
+use crate::crypto;
 use crate::log::{home_dir, log};
 use crate::report::ToolReport;
 
@@ -19,7 +20,7 @@ pub(crate) struct ConvInfo {
     modified: u64,
 }
 
-fn conv_dir() -> std::path::PathBuf {
+pub(crate) fn conv_dir() -> std::path::PathBuf {
     home_dir().join(".firstmate").join("conversations")
 }
 
@@ -42,8 +43,6 @@ fn sanitize_conv_name(name: &str) -> String {
 }
 
 /// The first line is the conversation name; the rest is JSONL of `ConvMsg`.
-/// Listing a directory reads only that first line, so listing needs no JSON
-/// parsing.
 fn serialize_conversation(name: &str, msgs: &[ConvMsg]) -> String {
     let mut out = format!("{}\n", name);
     for m in msgs {
@@ -75,11 +74,17 @@ fn resolve_conv_path(path: &str) -> Result<std::path::PathBuf, String> {
     }
 }
 
+fn read_text(path: &std::path::Path) -> Result<String, String> {
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    Ok(String::from_utf8_lossy(&crypto::open_store_bytes(path, bytes)?).to_string())
+}
+
 #[tauri::command]
 pub(crate) fn save_conversation(name: String, messages: Vec<ConvMsg>) -> Result<String, String> {
     std::fs::create_dir_all(conv_dir()).map_err(|e| e.to_string())?;
     let path = conv_dir().join(format!("{}.chat", sanitize_conv_name(&name)));
-    std::fs::write(&path, serialize_conversation(&name, &messages)).map_err(|e| e.to_string())?;
+    std::fs::write(&path, crypto::seal(serialize_conversation(&name, &messages).as_bytes())?)
+        .map_err(|e| e.to_string())?;
     Ok(path.to_string_lossy().to_string())
 }
 
@@ -94,7 +99,7 @@ pub(crate) fn list_conversations() -> Vec<ConvInfo> {
         if path.extension().and_then(|e| e.to_str()) != Some("chat") {
             continue;
         }
-        let Ok(raw) = std::fs::read_to_string(&path) else {
+        let Ok(raw) = read_text(&path) else {
             continue;
         };
         let name = raw.lines().next().unwrap_or("Untitled").trim();
@@ -120,7 +125,7 @@ pub(crate) fn list_conversations() -> Vec<ConvInfo> {
 #[tauri::command]
 pub(crate) fn load_conversation(path: String) -> Result<Vec<ConvMsg>, String> {
     let full = resolve_conv_path(&path)?;
-    let raw = std::fs::read_to_string(&full).map_err(|e| e.to_string())?;
+    let raw = read_text(&full)?;
     Ok(parse_conversation(&raw).1)
 }
 
@@ -211,5 +216,25 @@ mod tests {
         assert!(resolve_conv_path(f.to_str().unwrap()).is_ok());
         assert!(resolve_conv_path("C:\\Windows\\win.ini").is_err());
         let _ = std::fs::remove_file(&f);
+    }
+
+    /// `resolve_conv_path` canonicalizes, so the load path carries the `\\?\`
+    /// verbatim prefix. A sealed transcript must still open through it.
+    #[test]
+    fn sealed_transcript_loads_from_a_canonical_path() {
+        if !crypto::tpm_ready() {
+            return;
+        }
+        crypto::init(std::env::temp_dir().join("fm-envelope"));
+        let msgs = vec![ConvMsg {
+            role: "user".into(),
+            text: "card 4111 1111 1111 1111".into(),
+            report: None,
+        }];
+        let path = save_conversation("_firstmate_sealed_test".into(), msgs).unwrap();
+        let back = load_conversation(path.clone()).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].text, "card 4111 1111 1111 1111");
     }
 }

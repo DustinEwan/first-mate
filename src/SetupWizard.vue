@@ -17,6 +17,7 @@ import {
   NSteps,
   darkTheme,
 } from "naive-ui";
+import RecoveryKey from "./RecoveryKey.vue";
 
 const emit = defineEmits<{ done: [] }>();
 
@@ -330,6 +331,7 @@ onBeforeUnmount(() => {
             Summon it with <b>{{ hotkey }}</b> and just ask — "screenshot the browser", "commit my
             changes", "what's eating my CPU".
           </p>
+          <recovery-key />
         </div>
 
         <div class="wizard-foot">

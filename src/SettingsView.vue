@@ -14,6 +14,7 @@ import {
   NSpace,
   darkTheme,
 } from "naive-ui";
+import RecoveryKey from "./RecoveryKey.vue";
 
 interface LlmSettings {
   provider: string;
@@ -187,6 +188,8 @@ function closeWindow() {
         <button class="close" @click="closeWindow">&#10005;</button>
       </header>
       <main class="content">
+        <recovery-key />
+
         <n-form label-placement="top" :show-require-mark="false">
           <n-form-item label="Provider">
             <n-select

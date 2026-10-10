@@ -111,9 +111,10 @@ reports `Export Policy` `0`, and `NCryptExportKey` refuses `RSAPRIVATEBLOB` with
 `NTE_BAD_TYPE`, so the key cannot leave the TPM. The store keeps the key at
 `%LOCALAPPDATA%\Microsoft\Crypto\PCPKSP\<sid hash>\*.PCPKEY`. `icacls` grants
 that folder to the user, `BUILTIN\Administrators`, and `SYSTEM`, so a second
-standard account cannot read the blob. The spike proved nothing about the
-envelope, because no envelope exists yet. Phase C must show that a sealed file
-holds no plaintext byte and stays closed once you delete the TPM key.
+standard account cannot read the blob. `crypto.rs` now writes the envelope.
+The live `settings.json` starts with `FMENC1`, and no byte of the stored API
+key appears in it. A test deletes a second PCP key with `NCryptDeleteKey`. That
+key's wrap then refuses to open, so no key material travels with a file.
 
 §7 records the reception evidence for this design. That evidence rejects ambient
 capture and plaintext-at-rest storage, not encryption.
@@ -372,18 +373,19 @@ while conversations are still plaintext.
 - [x] Spike: the Platform Crypto Provider key works. Create it, wrap a test key,
       and unwrap it in a fresh process, all with no prompt. §3 records the
       result, and names the API that wraps a key.
-- [ ] Spike: show that a sealed file holds no plaintext byte, and that it stays
+- [x] Spike: show that a sealed file holds no plaintext byte, and that it stays
       closed once you delete the TPM key, so no key material travels with a file.
-- [ ] The `FMENC1` container encrypts each `.chat` transcript with AES-256-GCM.
-- [ ] The envelope covers `settings.json`, `entity_registry.json`, and each
-      `fm_out` exec spill, so no store stays plaintext.
-- [ ] The first run after an upgrade rewrites every plaintext file in the
+- [x] The `FMENC1` container encrypts each `.chat` transcript with AES-256-GCM.
+- [x] The envelope covers `settings.json`, `entity_registry.json`, each `fm_out`
+      exec spill, `firstmate.log`, and each request dump, so no store stays
+      plaintext.
+- [x] The first run after an upgrade rewrites every plaintext file in the
       envelope.
 - [ ] After a reboot, the app unwraps the key at logon with no prompt, so the
       app starts with no interaction.
-- [ ] The recovery-key flow prints the key once and stores a second wrap of each
+- [x] The recovery-key flow prints the key once and stores a second wrap of each
       file key. The app states plainly that a TPM loss makes data unrecoverable.
-- [ ] Encryption has no setting and no per-session choice.
+- [x] Encryption has no setting and no per-session choice.
 - **Accept:** no byte that a task wrote appears in plaintext on disk, and a
   sealed file stays closed once you delete the TPM key. The app opens every
   store at logon after a reboot with zero prompts.

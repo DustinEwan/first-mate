@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
+use crate::crypto;
 use crate::elevate::{
     agent_delevate, agent_elevate, agent_run_elevated, elevation_active, is_winapp_call,
 };
@@ -12,6 +13,16 @@ use crate::redact::stray_argument;
 use crate::route::route_to_tool;
 use crate::skills::{discover_skills, parse_frontmatter, resolve_skill_resource, skill_dir};
 use crate::tooldefs::skill_required;
+
+/// First Mate's own directories hold sealed files, so a file the agent writes
+/// there carries the envelope. A file the user owns keeps its bytes, so the user
+/// can still open it.
+fn store_body(path: &str, plain: &[u8]) -> Result<Vec<u8>, String> {
+    if crypto::is_store(std::path::Path::new(path)) {
+        return crypto::seal(plain);
+    }
+    Ok(plain.to_vec())
+}
 
 /// `app` enables background-job completion announcements; `loaded`
 /// is the set of skills loaded into this conversation (the dispatch
@@ -278,6 +289,8 @@ async fn execute_tool_notify(
         "read_file" => {
             let path = args.get("path").and_then(|c| c.as_str()).unwrap_or("");
             let bytes = tokio::fs::read(path).await.map_err(|e| format!("read {path}: {e}"))?;
+            let bytes = crypto::open_store_bytes(std::path::Path::new(path), bytes)
+                .map_err(|e| format!("open {path}: {e}"))?;
             if bytes.iter().take(8192).any(|b| *b == 0) {
                 return Err(format!(
                     "{path} is binary (NUL byte in first 8 KiB); read_file refuses. \
@@ -327,6 +340,7 @@ async fn execute_tool_notify(
                 // error must not leak the current tag; a leaked tag
                 // would defeat the read requirement.
                 let bytes = tokio::fs::read(path).await.map_err(|e| e.to_string())?;
+                let bytes = crypto::open_store_bytes(std::path::Path::new(path), bytes).map_err(|e| e.to_string())?;
                 let current = snapshot_tag(&bytes);
                 let tag = args.get("tag").and_then(|c| c.as_str()).unwrap_or("");
                 if tag != current || seen_snapshot(path).as_deref() != Some(tag) {
@@ -339,7 +353,8 @@ async fn execute_tool_notify(
                     ));
                 }
             }
-            tokio::fs::write(path, content)
+            let body = store_body(path, content.as_bytes()).map_err(|e| format!("seal {path}: {e}"))?;
+            tokio::fs::write(path, body)
                 .await
                 .map_err(|e| format!("write {path}: {e}"))?;
             let new_tag = snapshot_tag(content.as_bytes());
@@ -354,6 +369,8 @@ async fn execute_tool_notify(
             let tag = args.get("tag").and_then(|c| c.as_str()).unwrap_or("");
             let ops = args.get("ops").and_then(|c| c.as_str()).unwrap_or("");
             let bytes = tokio::fs::read(path).await.map_err(|e| format!("read {path}: {e}"))?;
+            let bytes = crypto::open_store_bytes(std::path::Path::new(path), bytes)
+                .map_err(|e| format!("open {path}: {e}"))?;
             if bytes.iter().take(8192).any(|b| *b == 0) {
                 return Err(format!("{path} is binary; edit_file refuses"));
             }
@@ -371,7 +388,8 @@ async fn execute_tool_notify(
             let total = lines.len().max(1);
             let (summaries, diff) = apply_edit_ops(&mut lines, &ops, total)?;
             let new_text = lines.join("\n");
-            tokio::fs::write(path, &new_text)
+            let body = store_body(path, new_text.as_bytes()).map_err(|e| format!("seal {path}: {e}"))?;
+            tokio::fs::write(path, body)
                 .await
                 .map_err(|e| format!("write {path}: {e}"))?;
             let new_tag = snapshot_tag(new_text.as_bytes());
@@ -594,6 +612,34 @@ mod tests {
             .unwrap_err();
         assert!(err.contains("past the end"), "{err}");
         std::fs::remove_file(&p).ok();
+    }
+
+    /// A spill carries the envelope, so `read_file` opens it. The same bytes
+    /// outside First Mate's directories stay closed, because the agent may point
+    /// at a file the user owns.
+    #[tokio::test]
+    async fn read_file_opens_a_sealed_store_file_only() {
+        if !crate::crypto::tpm_ready() {
+            return;
+        }
+        crate::crypto::init(std::env::temp_dir().join("fm-envelope"));
+        let sealed = crate::crypto::seal(b"card 4111 1111 1111 1111").unwrap();
+        assert!(!sealed.windows(4).any(|window| window == b"4111"), "the card number survived");
+        let inside = crate::log::fm_out_dir().join(format!("fm-sealed-{}.txt", std::process::id()));
+        std::fs::write(&inside, &sealed).unwrap();
+        let opened = fs_call("read_file", serde_json::json!({ "path": inside.to_string_lossy() }))
+            .await
+            .unwrap();
+        let _ = std::fs::remove_file(&inside);
+        assert!(opened.contains("4111"), "the store spill stayed closed: {opened}");
+        let outside = temp_path("sealed-outside.txt");
+        std::fs::write(&outside, &sealed).unwrap();
+        let outcome = fs_call("read_file", serde_json::json!({ "path": &outside })).await;
+        let _ = std::fs::remove_file(&outside);
+        match outcome {
+            Ok(text) => panic!("read_file decrypted a file outside the store: {text}"),
+            Err(why) => assert!(!why.contains("4111"), "the refusal leaked plaintext: {why}"),
+        }
     }
 
     #[tokio::test]

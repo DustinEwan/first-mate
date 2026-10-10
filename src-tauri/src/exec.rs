@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use tauri::Emitter;
+use crate::crypto;
 use crate::fileedit::line_diff;
 use crate::log::{fm_out_dir, log};
 use crate::report::{BodyKind, ReportBody, ToolReport};
@@ -72,7 +73,7 @@ fn truncate_if_over(s: String, max: usize) -> String {
         SPILL_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     let omitted = count - head.chars().count() - tail.chars().count();
-    let pointer = if std::fs::write(&path, &s).is_ok() {
+    let pointer = if crypto::seal(s.as_bytes()).and_then(|bytes| std::fs::write(&path, bytes).map_err(|e| e.to_string())).is_ok() {
         format!(
             "\n...[{omitted} of {count} chars omitted; FULL output saved: {} — read_file path=\"{}\" offset=<line> for the middle]...\n",
             path.display(),
@@ -572,7 +573,7 @@ mod tests {
             .next()
             .unwrap()
             .to_string();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), huge);
+        assert_eq!(crypto::open(&std::fs::read(&path).unwrap()).unwrap(), huge.as_bytes());
         let _ = std::fs::remove_file(&path);
     }
 
@@ -745,7 +746,8 @@ mod tests {
             .next()
             .expect("terminator")
             .to_string();
-        let full = std::fs::read_to_string(&path).expect("spill file must exist and be complete");
+        let full =
+            String::from_utf8(crypto::open(&std::fs::read(&path).unwrap()).unwrap()).expect("spill holds UTF-8");
         assert_eq!(full, big);
         let _ = std::fs::remove_file(&path);
     }
