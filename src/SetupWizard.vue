@@ -23,6 +23,8 @@ const emit = defineEmits<{ done: [] }>();
 
 const step = ref(1);
 const hotkey = ref("");
+const recoveryPending = ref(false);
+const recoveryAcked = ref(false);
 
 interface LlmSettings {
   provider: string;
@@ -64,6 +66,8 @@ const providersReady = invoke<ProviderSpec[]>("list_providers").then((ps) => {
 });
 
 const currentSpec = computed(() => providerSpecs.value.find((p) => p.id === provider.value));
+
+const providerLabel = computed(() => currentSpec.value?.label ?? provider.value);
 
 // Only the select calls this, so loading saved settings never overwrites
 // a custom base URL.
@@ -188,6 +192,12 @@ async function installWinapp() {
 async function nextFromModel() {
   await saveModel();
   step.value = 3;
+  recoveryPending.value = await invoke<boolean>("recovery_key_status");
+  recoveryAcked.value = !recoveryPending.value;
+}
+
+function nextFromPrivacy() {
+  step.value = 4;
   checkHarness();
 }
 
@@ -205,6 +215,8 @@ onMounted(async () => {
   const spec = ps.find((p) => p.id === s.llm.provider);
   proxy.value = !!spec && !spec.isLocal && s.llm.base_url !== "" && s.llm.base_url !== spec.base;
   if (provider.value && baseUrl.value) refreshModels();
+  recoveryPending.value = await invoke<boolean>("recovery_key_status");
+  if (recoveryPending.value) step.value = 3;
 });
 
 onBeforeUnmount(() => {
@@ -219,6 +231,7 @@ onBeforeUnmount(() => {
         <n-steps :current="step" size="small">
           <n-step title="Welcome" />
           <n-step title="Model" />
+          <n-step title="Privacy" />
           <n-step title="Harness" />
           <n-step title="Ready" />
         </n-steps>
@@ -226,13 +239,16 @@ onBeforeUnmount(() => {
         <div v-if="step === 1" class="wizard-body">
           <h2>⚓ First Mate</h2>
           <p>
-            A local-first agent that controls this machine: shell, files, and real desktop apps via
-            the winapp CLI. Summon it from anywhere with
+            First Mate works on this PC the way you do. It opens apps, works with your files, and
+            reads the web in a browser. Summon it from any window with
             <b>{{ hotkey }}</b
             >.
           </p>
+          <p>
+            It does these things as your Windows account. It can change or delete anything you can.
+          </p>
           <p class="dim">
-            Setup takes about a minute: pick a model, then verify the desktop harness.
+            Setup takes about two minutes: pick a model, then save your recovery key.
           </p>
         </div>
 
@@ -277,8 +293,8 @@ onBeforeUnmount(() => {
                 Hide sensitive information
               </n-checkbox>
               <template #feedback>
-                Replaces card numbers, account numbers, credentials, and file paths with
-                placeholders before the request leaves this machine.
+                First Mate hides card numbers, account numbers, passwords, and file paths from the
+                model service. Your saved conversation keeps the real values.
               </template>
             </n-form-item>
           </n-form>
@@ -286,6 +302,28 @@ onBeforeUnmount(() => {
         </div>
 
         <div v-else-if="step === 3" class="wizard-body">
+          <h2>Privacy</h2>
+          <p>
+            First Mate encrypts everything it writes here: your conversations with it, its logs, and
+            its settings. Only your account can read them. Another person who signs in on this PC
+            cannot, and neither can someone who copies the disk.
+          </p>
+          <p>
+            What you type, and what First Mate reads back from this PC, goes to the model service
+            you picked. With <b>Hide sensitive information</b> on, that service never sees your card
+            numbers, account numbers, passwords, or file paths. Your saved conversation keeps the
+            real values, so you can always read back what really happened.
+          </p>
+          <p class="dim">
+            After each answer, First Mate shows how many values it hid. Hide sensitive information
+            is
+            {{ hideSensitiveChecked ? "on" : "off" }} for
+            {{ providerLabel || "the model service you picked" }}.
+          </p>
+          <recovery-key @acked="recoveryAcked = true" />
+        </div>
+
+        <div v-else-if="step === 4" class="wizard-body">
           <p>
             Desktop automation runs through the <b>winapp</b> CLI — Microsoft's official tool for
             inspecting and driving Windows apps. First Mate checks for it on every start but never
@@ -331,11 +369,10 @@ onBeforeUnmount(() => {
             Summon it with <b>{{ hotkey }}</b> and just ask — "screenshot the browser", "commit my
             changes", "what's eating my CPU".
           </p>
-          <recovery-key />
         </div>
 
         <div class="wizard-foot">
-          <n-button text @click="emit('done')">Skip setup</n-button>
+          <span class="dim">Step {{ step }} of 5</span>
           <n-space>
             <n-button v-if="step > 1" secondary @click="step--">Back</n-button>
             <n-button v-if="step === 1" type="primary" @click="step = 2">Next</n-button>
@@ -349,8 +386,15 @@ onBeforeUnmount(() => {
             <n-button
               v-else-if="step === 3"
               type="primary"
+              :disabled="!recoveryAcked"
+              @click="nextFromPrivacy"
+              >Next</n-button
+            >
+            <n-button
+              v-else-if="step === 4"
+              type="primary"
               :disabled="!boot?.winapp"
-              @click="step = 4"
+              @click="step = 5"
               >Next</n-button
             >
             <n-button v-else type="primary" @click="emit('done')">Finish</n-button>

@@ -390,6 +390,9 @@ onMounted(() => {
     llmSettings = s.llm;
     if (!s.llm.model) wizardOpen.value = true;
   });
+  invoke<boolean>("recovery_key_status").then((pending) => {
+    if (pending) wizardOpen.value = true;
+  });
   listen("open_setup", () => (wizardOpen.value = true));
   invoke<{ active: boolean; commands: number }>("elevation_status").then((s) => {
     elevActive.value = s.active;

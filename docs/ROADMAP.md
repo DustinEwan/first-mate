@@ -386,6 +386,8 @@ while conversations are still plaintext.
 - [x] The recovery-key flow prints the key once and stores a second wrap of each
       file key. The app states plainly that a TPM loss makes data unrecoverable.
 - [x] Encryption has no setting and no per-session choice.
+- [x] The first-run wizard shows the recovery key before setup can finish, so no
+      user starts the product without reading it.
 - **Accept:** no byte that a task wrote appears in plaintext on disk, and a
   sealed file stays closed once you delete the TPM key. The app opens every
   store at logon after a reboot with zero prompts.

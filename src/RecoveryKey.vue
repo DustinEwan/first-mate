@@ -5,6 +5,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { onMounted, ref } from "vue";
 import { NAlert, NButton, NInput, NSpace } from "naive-ui";
 
+const emit = defineEmits<{ acked: [] }>();
+
 const key = ref("");
 const pending = ref(false);
 
@@ -18,6 +20,7 @@ async function reveal() {
 
 async function ack() {
   await invoke("ack_recovery_key");
+  emit("acked");
   pending.value = false;
   key.value = "";
 }
@@ -27,18 +30,18 @@ async function ack() {
   <n-alert v-if="pending" type="warning" :bordered="false" title="Recovery key">
     <div class="recovery">
       <p>
-        First Mate seals every file it writes with a key your TPM holds. This recovery key opens
-        those files after a TPM reset or a hardware loss.
+        First Mate encrypts every file it writes. This recovery key is the only way to read those
+        files if this PC is rebuilt or replaced.
       </p>
       <n-input v-if="key" :value="key" readonly />
       <p v-else>Choose Show key to read the recovery key once.</p>
       <n-space>
         <n-button v-if="!key" size="small" secondary @click="reveal">Show key</n-button>
-        <n-button size="small" secondary @click="ack">I saved it</n-button>
+        <n-button size="small" secondary :disabled="!key" @click="ack">I saved it</n-button>
       </n-space>
       <p class="dim">
-        Save the key offline, outside this machine. First Mate forgets the text when you choose I
-        saved it, and cannot show it again.
+        Save it somewhere outside this PC. First Mate will not show it to you again after you choose
+        I saved it. Without it, those files are gone for good.
       </p>
     </div>
   </n-alert>
