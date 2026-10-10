@@ -8,13 +8,23 @@ pub(crate) fn anchor_icon() -> tauri::image::Image<'static> {
         .expect("icons/window.png must be a valid PNG")
 }
 
+/// The console leaves the screen only through this function. §5 of
+/// `docs/ROADMAP.md` closes the reveal session here, so a second hide path
+/// would leave real values shown.
+pub(crate) fn hide_window(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let _ = window.hide();
+}
+
 pub(crate) fn toggle_window(app: &tauri::AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
     match window.is_visible() {
         Ok(true) => {
-            let _ = window.hide();
+            hide_window(app);
         }
         _ => {
             if let Ok(Some(monitor)) = window.current_monitor() {

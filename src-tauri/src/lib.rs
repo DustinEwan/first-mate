@@ -39,7 +39,7 @@ use crate::modelapi::{list_models, list_providers, test_llm};
 use crate::openpath::open_path;
 use crate::settings::{HOTKEY, get_hotkey, get_settings, save_settings};
 use crate::skills::{get_system_prompt, list_skills};
-use crate::window::{open_settings, open_settings_inner, toggle_window};
+use crate::window::{hide_window, open_settings, open_settings_inner, toggle_window};
 
 #[tauri::command]
 fn elevation_status(app: tauri::AppHandle) -> elevate_mod::ElevStatus {
@@ -153,7 +153,7 @@ pub fn run() {
                 window.on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                         api.prevent_close();
-                        let _ = win.hide();
+                        hide_window(win.app_handle());
                     }
                 });
             }
