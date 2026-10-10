@@ -111,9 +111,8 @@ pub(crate) fn is_winapp_call(command: &str) -> bool {
         .is_some_and(|t| t.eq_ignore_ascii_case("winapp"))
 }
 
-/// The app writes this text to the First Mate tmp dir inside `elevate()`. The
-/// user can read the code that runs with admin rights, rather than trusting a
-/// compiled binary. Three guards apply:
+/// The user can read the code that runs with admin rights, rather than
+/// trusting a compiled binary. Three guards apply:
 /// - Only the First Mate executable may connect, checked from PID to image path.
 /// - A watchdog kills the helper when the app exits.
 /// - Every command runs under a hard timeout through async invocation.
@@ -294,7 +293,6 @@ pub(crate) fn elevate_core(app: &AppHandle) -> Result<String, String> {
         let nonce = nonce();
         let app_pid = std::process::id();
         let script = write_helper_script()?;
-        // Err here means the prompt could not be shown, or the user said No.
         let app_exe = std::env::current_exe()
             .map_err(|e| format!("cannot locate own executable: {e}"))?;
         let helper_pid =

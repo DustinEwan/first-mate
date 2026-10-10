@@ -47,11 +47,9 @@ interface ProviderSpec {
   isLocal: boolean;
 }
 
-// The roster lives in the backend (providers.json); the UI renders it verbatim.
 const providerSpecs = ref<ProviderSpec[]>([]);
 const providerOptions = ref([{ label: "— none —", value: "" }]);
 const keyPlaceholder = ref("sk-...");
-// Hosted providers hide Base URL unless the user opts into a proxy endpoint.
 const proxy = ref(false);
 const providersReady = invoke<ProviderSpec[]>("list_providers").then((ps) => {
   providerSpecs.value = ps;
@@ -64,8 +62,8 @@ const providersReady = invoke<ProviderSpec[]>("list_providers").then((ps) => {
 
 const currentSpec = computed(() => providerSpecs.value.find((p) => p.id === provider.value));
 
-// Only the select calls this. Restoring saved settings assigns provider
-// directly, so stored values survive.
+// Only the select calls this, so loading saved settings never overwrites
+// a custom base URL.
 function onProviderChange(id: string) {
   const spec = providerSpecs.value.find((p) => p.id === id);
   if (!spec) return;

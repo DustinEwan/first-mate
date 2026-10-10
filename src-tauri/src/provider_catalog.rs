@@ -39,8 +39,7 @@ pub(crate) struct Spec {
     pub label: String,
     pub api: Api,
     pub auth: Auth,
-    /// Default endpoint. An empty base means the user must supply a base
-    /// URL.
+    /// An empty base means the user must supply a base URL.
     pub base: String,
     pub key_hint: String,
     /// An empty API key is valid for this provider. Local engines have no
@@ -105,8 +104,7 @@ mod tests {
                 s.id
             );
         }
-        // The UI shows the Base URL field only for local rows, so each
-        // local row must carry a default base. `custom` is the user's entry.
+        // `custom` is the user's entry.
         for id in ["ollama", "lm-studio", "llama-cpp", "custom"] {
             let s = lookup(id).unwrap_or_else(|| panic!("{id} missing from roster"));
             assert!(s.is_local, "{id} must be marked isLocal");
@@ -116,7 +114,6 @@ mod tests {
                 assert!(!s.base.is_empty(), "{} is local but has no default base", s.id);
             }
         }
-        // The roster must carry every protocol family the app routes.
         for api in [Api::Openai, Api::Anthropic, Api::Gemini] {
             assert!(catalog().iter().any(|s| s.api == api), "roster lacks api {api:?}");
         }

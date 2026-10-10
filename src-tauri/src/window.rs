@@ -1,8 +1,8 @@
 use tauri::{Manager, PhysicalPosition};
 
-/// The anchor glyph (icons/window.png, 256px), the same artwork as the tray
-/// icon. The bundle icons are generated from that source, so windows inherit
-/// it by default.
+/// `anchor_icon` returns icons/window.png (256px), the same artwork as the tray
+/// icon. The Tauri bundler generates the bundle icons from icons/window.png, so
+/// every window inherits that artwork by default.
 pub(crate) fn anchor_icon() -> tauri::image::Image<'static> {
     tauri::image::Image::from_bytes(include_bytes!("../icons/window.png"))
         .expect("icons/window.png must be a valid PNG")

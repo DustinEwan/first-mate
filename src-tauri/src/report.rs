@@ -46,9 +46,15 @@ pub(crate) struct ToolReport {
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub(crate) struct ReportBody {
-    /// "output" (program output) or "diff" (applied edit lines).
-    pub(crate) kind: String,
+    pub(crate) kind: BodyKind,
     pub(crate) text: String,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum BodyKind {
+    Output,
+    Diff,
 }
 
 impl ToolReport {
@@ -59,7 +65,7 @@ impl ToolReport {
         if let Some(b) = &self.body {
             if !b.text.trim().is_empty() {
                 let f = fence_for(&b.text);
-                let lang = if b.kind == "diff" { "diff" } else { "" };
+                let lang = if b.kind == BodyKind::Diff { "diff" } else { "" };
                 out.push_str(&format!("\n{f}{lang}\n{}\n{f}", b.text));
             }
         }
@@ -230,17 +236,17 @@ pub(crate) fn tool_report(
     };
     let body = if !ok {
         Some(ReportBody {
-            kind: "output".into(),
+            kind: BodyKind::Output,
             text: clip_lines(result, 6),
         })
     } else {
         match name {
             "edit_file" => extract_diff_fence(result).map(|text| ReportBody {
-                kind: "diff".into(),
+                kind: BodyKind::Diff,
                 text,
             }),
             "run_command" | "get_command_output" | "run_elevated" => Some(ReportBody {
-                kind: "output".into(),
+                kind: BodyKind::Output,
                 text: clip_lines(result, 18),
             }),
             _ => None,
@@ -319,7 +325,7 @@ mod tests {
         assert_eq!(r.subject, "C:\\x\\notes.md");
         assert_eq!(r.from_tag.as_deref(), Some("443A"));
         assert_eq!(r.tag.as_deref(), Some("F926"));
-        assert_eq!(r.body.as_ref().unwrap().kind, "diff");
+        assert_eq!(r.body.as_ref().unwrap().kind, BodyKind::Diff);
         assert_eq!(
             r.transcript(),
             "✎ notes.md #443A PUT 3.=3:\n```diff\n-for\n+EDITED\n```\n✅ 0.0s · #F926"
@@ -328,8 +334,7 @@ mod tests {
             !r.transcript().contains("+EDITED\n+EDITED"),
             "op body must not be duplicated"
         );
-        // The report carries a byte count. File content must never appear
-        // in the report.
+        // File content must never appear in the report.
         let r = tool_report(
             "write_file",
             &serde_json::json!({ "path": "C:\\x\\d.md", "content": "secret stuff" }),
@@ -357,17 +362,28 @@ mod tests {
         );
         assert!(!r.ok);
         assert_eq!(r.error.as_deref(), Some("Blocked: duplicates list_dir"));
-        assert_eq!(r.body.as_ref().unwrap().kind, "output");
+        assert_eq!(r.body.as_ref().unwrap().kind, BodyKind::Output);
         let t = r.transcript();
         assert!(
             t.starts_with("$ dir\n")
                 && t.ends_with("❌ Blocked: duplicates list_dir 0.0s"),
             "{t}"
         );
-        // A numeric pid must stringify as 42, not as a quoted JSON value.
         let r = tool_report("kill_command", &serde_json::json!({ "pid": 42 }), "killed", 0);
         assert_eq!(r.subject, "42");
         assert_eq!(r.pid, Some(42));
         assert_eq!(r.transcript(), "✖ kill pid 42\n✅");
+    }
+
+    #[test]
+    fn body_kind_serializes_to_the_strings_the_frontend_matches() {
+        let json = serde_json::to_string(&ReportBody {
+            kind: BodyKind::Diff,
+            text: "x".into(),
+        })
+        .unwrap();
+        assert_eq!(json, r#"{"kind":"diff","text":"x"}"#);
+        let saved: ReportBody = serde_json::from_str(r#"{"kind":"output","text":"x"}"#).unwrap();
+        assert_eq!(saved.kind, BodyKind::Output);
     }
 }

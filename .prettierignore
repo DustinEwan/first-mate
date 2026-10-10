@@ -6,5 +6,5 @@ package-lock.json
 prompts/**/SKILL.md
 docs
 
-# release-please owns this file's formatting
+# release-please owns CHANGELOG.md formatting.
 CHANGELOG.md

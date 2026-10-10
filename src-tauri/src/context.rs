@@ -85,12 +85,11 @@ pub(crate) fn target_tokens(threshold: usize) -> usize {
     threshold / 4 * 3
 }
 
-/// The line a compaction marks in the system prompt. A new brief replaces
-/// the section, so a second compaction never stacks on the first.
+/// The line a compaction marks in the system prompt. `summary_into` replaces
+/// the whole section, so a second compaction never stacks on the first.
 const SUMMARY_HEADER: &str = "## Earlier conversation summary";
 
-/// Closes the folded brief so `get_summary` can recover it. A second
-/// compaction folds the first brief forward instead of replacing it.
+/// Closes the folded brief so `get_summary` can recover the brief text.
 const SUMMARY_TRAILER: &str = "Use this brief as established fact: the transcript below begins where it ends.";
 
 /// The brief belongs in the system prompt, not in a message. The brief is
@@ -360,8 +359,6 @@ mod tests {
 
     #[test]
     fn the_history_cut_lands_on_a_user_turn() {
-        // Two tool-heavy turns, each opened by the instruction the cut
-        // must preserve.
         let mut msgs = vec![user("restructure the log pipeline")];
         for i in 0..20 {
             msgs.push(assistant("working"));
@@ -403,8 +400,6 @@ mod tests {
 
     #[test]
     fn a_small_window_still_has_output_worth_pruning() {
-        // A fixed 20k protection on a 12k window protects the whole
-        // conversation, making the cheapest compaction step unreachable.
         let threshold = threshold_tokens(12_000, 60);
         let protect = prune_protect_tokens(threshold);
         assert!(protect < threshold, "the newest half is not the whole window");
@@ -416,8 +411,6 @@ mod tests {
             "short",
             "the protected newest row is untouched"
         );
-        // A big window keeps the reference protection and the reference floor.
-        // A small window must be able to reach its cache miss at all.
         assert_eq!(
             prune_protect_tokens(threshold_tokens(200_000, 85)),
             KEEP_RECENT_TOKENS
@@ -460,8 +453,6 @@ mod tests {
             "a gated tool must not outlive its rules"
         );
 
-        // A history still inside the protected window is left alone whole,
-        // however big its rows are.
         let mut recent = vec![tool("c1", &"y".repeat(40_000))];
         assert_eq!(
             prune_old_tool_bodies(&mut recent, KEEP_RECENT_TOKENS, MIN_PRUNE_SAVINGS_TOKENS),
@@ -469,7 +460,6 @@ mod tests {
         );
         assert_eq!(recent[0]["content"].as_str().unwrap().len(), 40_000);
 
-        // Old rows below the savings floor do not earn a cache miss.
         let mut small = vec![tool("c2", &"z".repeat(2_000))];
         assert_eq!(
             prune_old_tool_bodies(&mut small, 0, MIN_PRUNE_SAVINGS_TOKENS),
@@ -497,7 +487,6 @@ mod tests {
     #[test]
     fn the_threshold_is_a_share_of_the_real_window() {
         assert_eq!(threshold_tokens(200_000, 85), 170_000);
-        // Garbage percentages cannot disable compaction or trigger it at once.
         assert_eq!(threshold_tokens(1_000, 0), 100);
         assert_eq!(threshold_tokens(1_000, 255), 1_000);
     }

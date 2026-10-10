@@ -20,8 +20,7 @@ interface LlmSettings {
   model: string;
   api_key: string;
   base_url: string;
-  // Compaction (docs/COMPACTION.md): 0 in context_window means read the
-  // window size off the model endpoint.
+  // docs/COMPACTION.md explains the compaction design.
   context_window?: number;
   compact_at_percent?: number;
 }
@@ -47,11 +46,9 @@ interface ProviderSpec {
   isLocal: boolean;
 }
 
-// The roster lives in the backend (providers.json); the UI renders it verbatim.
 const providerSpecs = ref<ProviderSpec[]>([]);
 const providerOptions = ref([{ label: "— none —", value: "" }]);
 const keyPlaceholder = ref("sk-...");
-// Hosted providers hide Base URL unless the user opts into a proxy endpoint.
 const proxy = ref(false);
 
 const currentSpec = computed(() => providerSpecs.value.find((p) => p.id === provider.value));

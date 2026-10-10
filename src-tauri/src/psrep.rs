@@ -7,13 +7,6 @@ use crate::exec::{MAX_BG_OUTPUT, cmd_timeout};
 // carrying the exit status. `$vars`, functions, and cwd persist across tool
 // calls. The command never passes through another interpreter's argument
 // parser, so no quoting nesting exists.
-//
-// Failure semantics:
-// - Broken: the command demonstrably never ran (spawn/write failure). The
-//   caller may safely fall back to one-shot `powershell -File`.
-// - TimedOut / died mid-command: the command may have partially run. The
-//   session is killed. Partial output is returned. NOTHING is re-run, so no
-//   side effect is duplicated.
 
 /// The REPL script that owns the session child's stdin loop. The REPL reads
 /// lines until it sees a `__FM_RUN_*` marker. The REPL dot-sources everything
@@ -216,7 +209,6 @@ fn ps_handle(cmd: PsCommand, seq: u64, state: &mut Option<PsState>) {
         if remaining.is_zero() {
             break;
         }
-        // Short slices so a user stop can interrupt a stuck command.
         let slice = remaining.min(std::time::Duration::from_millis(250));
         match st.lines.recv_timeout(slice) {
             Ok(line) => {
@@ -241,7 +233,7 @@ fn ps_handle(cmd: PsCommand, seq: u64, state: &mut Option<PsState>) {
                 out.push('\n');
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                disconnected = true; // child died mid-command
+                disconnected = true;
                 break;
             }
             Err(_) => {

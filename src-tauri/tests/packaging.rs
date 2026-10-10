@@ -68,8 +68,7 @@ fn installer_packages_every_skill_file() {
 
 #[test]
 fn installer_packages_the_prompt_content() {
-    // The binary ships no prompt text. Every prompt file the runtime reads
-    // must travel with the installer.
+    // The binary ships no prompt text.
     let conf = std::fs::read_to_string(repo_root().join("src-tauri").join("tauri.conf.json"))
         .expect("tauri.conf.json");
     for name in ["AGENTS.md", "COMPACT.md"] {

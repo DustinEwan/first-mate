@@ -2,10 +2,8 @@ use std::collections::HashMap;
 use tauri::Emitter;
 use crate::fileedit::line_diff;
 use crate::log::{fm_out_dir, log};
-use crate::report::{ReportBody, ToolReport};
+use crate::report::{BodyKind, ReportBody, ToolReport};
 
-/// `winapp ui search "Qwen 3.8 Flash Next" -a zen`
-///   -> ["winapp", "ui", "search", "Qwen 3.8 Flash Next", "-a", "zen"]
 pub(crate) fn parse_command(cmd: &str) -> Vec<String> {
     let mut args = Vec::new();
     let mut current = String::new();
@@ -217,6 +215,12 @@ fn pump_bg_output<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
     });
 }
 
+/// The child exited, so both pipes are at EOF. Wait briefly so the pump
+/// tasks append their final chunk.
+async fn wait_for_pump_flush() {
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+}
+
 /// Evict oldest finished jobs first so the registry cannot grow unbounded.
 fn evict_bg_jobs(reg: &mut std::collections::HashMap<u32, BgJob>) {
     if reg.len() < MAX_BG_JOBS {
@@ -292,7 +296,7 @@ impl BgNotifier for AppNotifier {
             count: None,
             unit: None,
             body: (!body.trim().is_empty()).then_some(ReportBody {
-                kind: "output".into(),
+                kind: BodyKind::Output,
                 text: body,
             }),
         };
@@ -347,8 +351,7 @@ pub(crate) async fn spawn_background_notify(
                 Err(e) => format!("wait error: {e}"),
             };
             *status.lock().unwrap() = s.clone();
-            // Wait briefly so the pump tasks flush their final chunk.
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            wait_for_pump_flush().await;
             let out = String::from_utf8_lossy(&jout.lock().unwrap()).to_string();
             let err = String::from_utf8_lossy(&jerr.lock().unwrap()).to_string();
             notify.announce(pid, &command, &s, &out, &err);
@@ -404,9 +407,7 @@ pub(crate) async fn exec_or_background(
     .await
     {
         Ok(Ok(status)) => {
-            // The child exited, so the streams are at EOF. Wait
-            // briefly so the pumps flush.
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            wait_for_pump_flush().await;
             if let Some(p) = &script_path {
                 let _ = std::fs::remove_file(p);
             }
@@ -445,7 +446,7 @@ pub(crate) async fn exec_or_background(
                         Err(e) => format!("wait error: {e}"),
                     };
                     *status.lock().unwrap() = s.clone();
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    wait_for_pump_flush().await;
                     let out = String::from_utf8_lossy(&jout.lock().unwrap()).to_string();
                     let err = String::from_utf8_lossy(&jerr.lock().unwrap()).to_string();
                     notify.announce(pid, &command, &s, &out, &err);

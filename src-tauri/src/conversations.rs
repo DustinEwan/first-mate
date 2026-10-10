@@ -23,8 +23,6 @@ fn conv_dir() -> std::path::PathBuf {
     home_dir().join(".firstmate").join("conversations")
 }
 
-/// Filesystem-safe conversation filename stem. The result holds no path
-/// separator, no Windows reserved character, and at most 48 characters.
 fn sanitize_conv_name(name: &str) -> String {
     let cleaned: String = name
         .chars()
@@ -65,7 +63,6 @@ fn parse_conversation(raw: &str) -> (String, Vec<ConvMsg>) {
     (name, msgs)
 }
 
-/// A path outside the conversations dir is refused.
 fn resolve_conv_path(path: &str) -> Result<std::path::PathBuf, String> {
     let full = std::path::Path::new(path)
         .canonicalize()
@@ -127,8 +124,6 @@ pub(crate) fn load_conversation(path: String) -> Result<Vec<ConvMsg>, String> {
     Ok(parse_conversation(&raw).1)
 }
 
-/// The path passes the containment check that `load_conversation` uses, so
-/// only a file inside the conversations dir can be removed.
 #[tauri::command]
 pub(crate) fn delete_conversation(path: String) -> Result<(), String> {
     let full = resolve_conv_path(&path)?;
@@ -175,8 +170,6 @@ mod tests {
         assert_eq!(back.len(), 3);
         assert_eq!(back[1].role, "tool");
         assert!(back[1].text.starts_with("→ x"));
-        // Structured facts survive the round trip. The UI re-renders them
-        // without parsing text.
         let r = back[1].report.as_ref().unwrap();
         assert_eq!(r.subject, "C:\\x");
         assert_eq!(r.count, Some(2));
@@ -189,12 +182,10 @@ mod tests {
             ConvMsg { role: "assistant".into(), text: "hello".into(), report: None },
         ];
         let ser = serialize_conversation("My chat", &msgs);
-        // Listing a directory needs only the first line.
         assert_eq!(ser.lines().next(), Some("My chat"));
         let (name, back) = parse_conversation(&ser);
         assert_eq!(name, "My chat");
         assert_eq!(back.len(), 2);
-        // Multi-line text survives the JSONL round-trip.
         assert_eq!(back[0].text, "hi\nthere");
     }
 
@@ -207,8 +198,6 @@ mod tests {
 
     #[test]
     fn delete_cannot_escape_conversations_dir() {
-        // Everything outside the conversations dir is refused before any
-        // remove_file runs: a file elsewhere, a traversal, a missing file.
         assert!(resolve_conv_path("C:\\Windows\\win.ini").is_err());
         assert!(resolve_conv_path("..\\..\\settings.json").is_err());
         assert!(resolve_conv_path("no-such-file-here").is_err());

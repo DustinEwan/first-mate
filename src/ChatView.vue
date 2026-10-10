@@ -244,8 +244,6 @@ interface LlmSettings {
   model: string;
   api_key: string;
   base_url: string;
-  // Compaction (docs/COMPACTION.md): 0 in context_window means read the
-  // window size off the model endpoint.
   context_window?: number;
   compact_at_percent?: number;
 }
@@ -408,8 +406,6 @@ onMounted(() => {
       tool: { ...tool, status: undefined, tag: undefined },
     });
   });
-  // The flat model-facing transcript becomes the persisted text. The UI
-  // renders only the structured report.
   listen<{ name: string; transcript: string; report?: ToolReport }>("tool_result", (event) => {
     const { name, transcript, report } = event.payload;
     let matched = false;
@@ -453,17 +449,12 @@ onMounted(() => {
   });
 });
 
-// Behavior text comes from AGENTS.md (repo prompts/ or ~/.firstmate),
-// loaded via get_system_prompt. The Rust fallback applies only when no
-// file exists.
 const systemPromptBase = ref("");
 
 interface SkillInfo {
   name: string;
   description: string;
 }
-// Stage 1 of progressive disclosure (docs/SKILLS.md): advertise skills by
-// name + description; the agent loads bodies on demand via load_skill.
 const skillsAds = ref("");
 const BRAILLE = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 let spinnerInterval: number | null = null;
@@ -547,9 +538,6 @@ async function submit() {
       // The percent caps how full the window may get before summarizing.
       compactAtPercent: llmSettings.compact_at_percent ?? 85,
     });
-    // The return value is the unstreamed remainder, e.g. a turn-cap note
-    // after a tool turn reset the live message. The reply is empty only
-    // when nothing came back at all.
     if (liveMsgId < 0) {
       if (final.trim()) addMsg(final, "assistant");
       else addMsg("(no response)", "dim");

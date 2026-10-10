@@ -34,8 +34,6 @@ pub(crate) fn fm_out_dir() -> std::path::PathBuf {
     d
 }
 
-/// Callers run this at startup, so files left by an earlier session cannot
-/// accumulate.
 pub(crate) fn trim_dir(dir: &std::path::Path, keep: usize) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;

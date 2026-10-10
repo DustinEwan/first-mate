@@ -28,17 +28,15 @@ fn prompt_path(name: &str) -> Option<std::path::PathBuf> {
     candidates.into_iter().find(|p| p.is_file())
 }
 
-/// The binary ships NO prompt text, so a missing file means the behaviour
-/// that needs it is unconfigured.
+/// A missing prompt file leaves the behaviour that needs that prompt unconfigured.
 pub(crate) fn prompt_content(name: &str) -> Option<String> {
     prompt_path(name)
         .and_then(|p| std::fs::read_to_string(p).ok())
         .filter(|s| !s.trim().is_empty())
 }
 
-/// The system prompt is AGENTS.md content, not a compiled-in string. With
-/// no AGENTS.md anywhere this returns an empty string, and the agent runs
-/// on the skill advertisements alone.
+/// With no AGENTS.md anywhere, `get_system_prompt` returns an empty string.
+/// The agent then runs on the skill advertisements alone.
 #[tauri::command]
 pub(crate) fn get_system_prompt() -> String {
     prompt_content("AGENTS.md").unwrap_or_default()
@@ -122,7 +120,6 @@ pub(crate) fn parse_frontmatter(md: &str) -> (Option<String>, Option<String>, St
     (name, description, body)
 }
 
-/// `"..."` uses backslash escapes; `'...'` uses doubled quotes.
 fn unquote(v: &str) -> String {
     if let Some(s) = v.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
         s.replace("\\\"", "\"").replace("\\\\", "\\")
@@ -190,9 +187,6 @@ pub(crate) fn skill_body(name: &str) -> Option<String> {
     (!body.is_empty()).then_some(body)
 }
 
-/// Resolve `"<skill>/<relative/path>"` to a real file. Paths that escape
-/// the skill directory are refused, including `..` traversal and symlink
-/// escapes.
 pub(crate) fn resolve_skill_resource(path: &str) -> Result<std::path::PathBuf, String> {
     if path.contains("..") {
         return Err("path traversal not allowed".into());
@@ -232,8 +226,6 @@ mod tests {
 
     #[test]
     fn quoted_descriptions_unescape() {
-        // Real descriptions contain colons and quotes. A YAML-quoted value
-        // must parse to plain text.
         let md = "---\nname: demo\ndescription: \"Open `start ms-settings:apps`, the user's \\\"main\\\" panel\"\n---\n\nBody\n";
         let (_, desc, _) = parse_frontmatter(md);
         assert_eq!(
@@ -258,7 +250,6 @@ mod tests {
 
     #[test]
     fn winapp_skill_is_discoverable_with_cost_guidance() {
-        // winapp enables no tools of its own; it drives `run_command`.
         let skills = discover_skills();
         let win = skills
             .iter()
@@ -274,8 +265,6 @@ mod tests {
 
     #[test]
     fn powershell_skill_is_discoverable() {
-        // powershell enables no tools of its own; `run_command` does the
-        // work.
         let skills = discover_skills();
         let ps = skills
             .iter()
@@ -294,9 +283,6 @@ mod tests {
 
     #[test]
     fn system_prompt_comes_from_agents_md_not_the_binary() {
-        // cargo test runs with cwd = src-tauri (dev layout). The binary
-        // carries no prompt text, so the prompt must equal the repo file
-        // byte for byte.
         let p = get_system_prompt();
         assert_eq!(p, std::fs::read_to_string("../prompts/AGENTS.md").unwrap());
         assert!(p.contains("file://"), "prompt must come from AGENTS.md");
@@ -304,9 +290,6 @@ mod tests {
 
     #[test]
     fn skill_root_precedence_is_dev_then_user_then_packaged() {
-        // First-root-wins name resolution makes this order the override
-        // contract. The dev working copy must be first. The user directory must
-        // precede any packaged root.
         let roots = skill_roots();
         assert_eq!(
             roots[0],
@@ -332,7 +315,6 @@ mod tests {
 
     #[test]
     fn skill_resource_resolution_is_locked_down() {
-        // Traversal and malformed shapes fail before any filesystem access.
         assert!(resolve_skill_resource("git-repo/../secrets.txt").is_err());
         assert!(resolve_skill_resource("git-repo").is_err());
         assert!(resolve_skill_resource("no-such-skill/references/x.md").is_err());

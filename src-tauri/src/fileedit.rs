@@ -177,6 +177,12 @@ pub(crate) fn parse_edit_ops(ops: &str) -> Result<Vec<EditOp>, String> {
     Ok(out)
 }
 
+struct Change {
+    anchor: usize,
+    removed: Vec<String>,
+    added: Vec<String>,
+}
+
 /// Ops apply bottom-up, so an earlier line number stays valid while later
 /// ops are applied. Returns per-op summaries plus a unified-style diff
 /// (`-`/`+` lines) in original file order.
@@ -207,39 +213,38 @@ pub(crate) fn apply_edit_ops(
     let mut sorted: Vec<&EditOp> = ops.iter().collect();
     sorted.sort_by_key(|o| std::cmp::Reverse(o.anchor()));
     let mut summaries = Vec::new();
-    // (original anchor, removed lines, added lines) per op.
-    let mut changes: Vec<(usize, Vec<String>, Vec<String>)> = Vec::new();
+    let mut changes: Vec<Change> = Vec::new();
     for op in sorted {
         match op {
             EditOp::Replace { lo, hi, body } => {
                 let removed = lines[(lo - 1)..*hi].to_vec();
                 lines.splice((lo - 1)..(*hi), body.iter().cloned());
-                changes.push((*lo, removed, body.clone()));
+                changes.push(Change { anchor: *lo, removed, added: body.clone() });
                 summaries.push(format!("PUT {lo}.{hi} -> {} line(s)", body.len()));
             }
             EditOp::Cut { lo, hi } => {
                 let removed = lines[(lo - 1)..*hi].to_vec();
                 lines.drain((lo - 1)..*hi);
-                changes.push((*lo, removed, Vec::new()));
+                changes.push(Change { anchor: *lo, removed, added: Vec::new() });
                 summaries.push(format!("CUT {lo}.{hi}"));
             }
             EditOp::InsertBefore { at, body } => {
                 lines.splice((*at - 1)..(*at - 1), body.iter().cloned());
-                changes.push((*at, Vec::new(), body.clone()));
+                changes.push(Change { anchor: *at, removed: Vec::new(), added: body.clone() });
                 summaries.push(format!("inserted {} line(s) before {at}", body.len()));
             }
             EditOp::InsertAfter { at, body } => {
                 lines.splice(*at..*at, body.iter().cloned());
-                changes.push((at + 1, Vec::new(), body.clone()));
+                changes.push(Change { anchor: at + 1, removed: Vec::new(), added: body.clone() });
                 summaries.push(format!("inserted {} line(s) after {at}", body.len()));
             }
         }
     }
-    changes.sort_by_key(|(at, _, _)| *at);
+    changes.sort_by_key(|c| c.anchor);
     let mut diff = Vec::new();
-    for (_, removed, added) in changes {
-        diff.extend(removed.iter().map(|l| format!("-{l}")));
-        diff.extend(added.iter().map(|l| format!("+{l}")));
+    for c in changes {
+        diff.extend(c.removed.into_iter().map(|l| format!("-{l}")));
+        diff.extend(c.added.into_iter().map(|l| format!("+{l}")));
     }
     Ok((summaries, diff))
 }
@@ -292,8 +297,8 @@ pub(crate) fn result_tag(result: &str) -> Option<String> {
     (t.len() == 4).then_some(t)
 }
 
-/// The `edit_file` result already carries that diff, and the ledger reuses
-/// the diff verbatim.
+/// The `edit_file` result carries the unified diff. `report.rs` copies the
+/// extracted diff into the ledger verbatim.
 pub(crate) fn extract_diff_fence(s: &str) -> Option<String> {
     let marker = "```diff\n";
     let start = s.find(marker)? + marker.len();

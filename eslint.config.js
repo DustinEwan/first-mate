@@ -9,8 +9,8 @@ export default [
   skipFormatting,
   {
     rules: {
-      // Ledger markup is intentionally terse. Keep the Vue patterns
-      // these rules flag.
+      // Ledger markup is intentionally terse. Keep the markup patterns
+      // that the four vue/* rules flag.
       "vue/multi-word-component-names": "off",
       "vue/singleline-html-element-content-newline": "off",
       "vue/max-attributes-per-line": "off",

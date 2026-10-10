@@ -40,9 +40,6 @@ use crate::settings::{HOTKEY, get_hotkey, get_settings, save_settings};
 use crate::skills::{get_system_prompt, list_skills};
 use crate::window::{open_settings, open_settings_inner, toggle_window};
 
-// IPC command glue lives here, beside the handler list that keeps these
-// functions in the app binary. Feature modules stay free of tauri command
-// machinery. See the note in elevate.rs.
 #[tauri::command]
 fn elevation_status(app: tauri::AppHandle) -> elevate_mod::ElevStatus {
     elevate_mod::status_snapshot(&app)
@@ -150,7 +147,6 @@ pub fn run() {
                     }
                 })?;
 
-            // The app keeps running in the tray.
             if let Some(window) = app.get_webview_window("main") {
                 let win = window.clone();
                 window.on_window_event(move |event| {

@@ -1,10 +1,11 @@
 name: Release Build
 
-# Triggered by the Release PR workflow completing on main — that workflow
-# creates the GitHub Release, but releases published via GITHUB_TOKEN do
-# NOT fire `on: release` for other workflows (Actions loop protection), so
-# workflow_run is the reliable hook. workflow_dispatch allows a manual
-# (re)build against the latest release.
+# The Release PR workflow creates the GitHub Release. That workflow
+# completing on main triggers this workflow. A release that GITHUB_TOKEN
+# publishes does not fire `on: release` in another workflow, because
+# Actions loop protection blocks the event. So workflow_run is the
+# reliable trigger. workflow_dispatch allows a manual rebuild against
+# the latest release.
 
 on:
   workflow_run:
@@ -22,10 +23,10 @@ jobs:
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main')
     runs-on: windows-latest
-    # checkout@v4 isolates git config (GIT_CONFIG_GLOBAL), so the runner's
-    # system-level core.autocrlf/core.eol must be overridden via
-    # GIT_CONFIG_COUNT env, or the checkout is CRLF and prettier
-    # (endOfLine: lf) fails on every file.
+    # checkout@v4 isolates git config through GIT_CONFIG_GLOBAL, so this
+    # job overrides the runner's system-level core.autocrlf/core.eol
+    # through the GIT_CONFIG_COUNT env block. Otherwise the checkout is
+    # CRLF, and prettier (endOfLine: lf) fails on every file.
     env:
       GIT_CONFIG_COUNT: "2"
       GIT_CONFIG_KEY_0: core.autocrlf

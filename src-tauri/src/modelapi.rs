@@ -1,7 +1,3 @@
-//! Model discovery and connectivity tests, driven by the provider catalog.
-//! Every branch here switches on the catalog row's `api` or `auth`, so no
-//! branch may test a provider id.
-
 use crate::provider_catalog::{self, Api};
 
 /// The frontend renders these rows verbatim.
@@ -337,8 +333,6 @@ mod tests {
 
     #[tokio::test]
     async fn unversioned_path_root_still_gets_v1() {
-        // A base ending at `/openai` is not a version segment, so `/v1` is
-        // appended.
         let (base, rx) = mock(r#"{"data":[{"id":"mix"}]}"#);
         list_models("deepinfra".into(), format!("{base}/v1/openai"), "k".into()).await.unwrap();
         assert!(head(&rx).starts_with("GET /v1/openai/v1/models"));

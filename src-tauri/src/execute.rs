@@ -93,7 +93,7 @@ async fn execute_tool_notify(
 ) -> Result<String, String> {
     // This is the dispatch gate, a client policy rather than a spec rule. A
     // tool whose usage rules live in a skill's instructions is refused until
-    // that skill is loaded. The refusal text teaches the model the load path.
+    // that skill is loaded.
     if let Some(skill) = skill_required(name) {
         if !loaded.contains(skill) {
             return Err(format!(
@@ -111,10 +111,6 @@ async fn execute_tool_notify(
                      quoting, no truncation)."
                 ));
             }
-            // Elevated Control ON: winapp runs in the elevated
-            // session, so it drives elevated windows too. UIPI
-            // refuses MEDIUM input against HIGH targets silently.
-            // The check matches only the first token.
             if let Some(app) = app {
                 if elevation_active(app) && is_winapp_call(command) {
                     log("RUN winapp via elevated session");
@@ -223,8 +219,6 @@ async fn execute_tool_notify(
                 cmd.current_dir(cwd);
             }
             if background {
-                // The scratch script must outlive the spawn; tmp/ is
-                // LRU-trimmed at startup, so it cannot leak forever.
                 return spawn_background_notify(notifier, cmd, command).await;
             }
             exec_or_background(notifier, cmd, command, script_path).await
@@ -521,7 +515,6 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.contains("Blocked") && err.contains("list_dir"), "{err}");
-        // Without the owning skill loaded, run_command does not intercept.
         let ok = execute_tool_inner("run_command", &serde_json::json!({ "command": "echo dir" }))
             .await
             .unwrap();
@@ -624,7 +617,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(tag_of(&again), new_tag);
-        // A stale tag is refused, so an outdated anchor cannot corrupt the file.
         let err = fs_call(
             "edit_file",
             serde_json::json!({ "path": &p, "tag": &tag, "ops": "CUT 1.=1" }),
@@ -663,7 +655,6 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.contains("unknown op"), "{err}");
-        // A rejected edit must leave the file untouched.
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "a\nb\nc\n");
         std::fs::remove_file(&p).ok();
     }
@@ -672,7 +663,6 @@ mod tests {
     async fn write_file_requires_read_before_overwrite() {
         let p = temp_path("guard.txt");
         std::fs::remove_file(&p).ok();
-        // A brand-new file needs no tag.
         let res = fs_call(
             "write_file",
             serde_json::json!({ "path": &p, "content": "v1\n" }),
@@ -680,8 +670,6 @@ mod tests {
         .await
         .unwrap();
         assert!(res.contains("wrote 3 bytes"), "{res}");
-        // An existing file with no tag is refused. The error must
-        // not leak the current tag.
         let err = fs_call(
             "write_file",
             serde_json::json!({ "path": &p, "content": "v2\n" }),
@@ -700,7 +688,6 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "v2\n");
-        // An external change invalidates the last-seen tag.
         std::fs::write(&p, "external\n").unwrap();
         let err = fs_call(
             "write_file",
@@ -747,7 +734,6 @@ mod tests {
             async move { execute_tool_notify(None, n, loaded, &name, &args).await }
         };
 
-        // The persistent session keeps state and cwd across calls.
         call(
             "run_command",
             serde_json::json!({ "command": "$x = 21 * 2", "shell": "powershell", "cwd": &dpath }),
@@ -764,7 +750,6 @@ mod tests {
         .unwrap();
         assert!(r.contains("x=42") && r.to_lowercase().contains("fm-e2e"), "{r}");
 
-        // The filesystem skill is loaded, so the interceptor refuses `dir`.
         let err = call("run_command", serde_json::json!({ "command": "dir" }))
             .await
             .unwrap_err();
@@ -793,7 +778,6 @@ mod tests {
             std::fs::read_to_string(&fpath).unwrap(),
             "# Notes\nline TWO\nline three\n"
         );
-        // The stale pre-edit tag cannot overwrite the file.
         let err = call(
             "write_file",
             serde_json::json!({ "path": &fpath, "content": "gone\n", "tag": &t }),
@@ -803,8 +787,6 @@ mod tests {
         assert!(err.contains("changed") || err.contains("read_file"), "{err}");
         assert!(std::fs::read_to_string(&fpath).unwrap().contains("line TWO"));
 
-        // A slow foreground command is adopted into the background
-        // and must not be polled.
         std::env::set_var("FIRSTMATE_AUTO_BG_SECS", "1");
         let r = call(
             "run_command",
@@ -842,7 +824,6 @@ mod tests {
         assert!(kill_noted, "killed job must announce its exit");
         rec.0.lock().unwrap().clear();
 
-        // A background:true job reports completion through the notifier.
         let r = call(
             "run_command",
             serde_json::json!({ "command": "ping -n 2 127.0.0.1", "background": true }),
@@ -878,8 +859,6 @@ mod tests {
 
     #[tokio::test]
     async fn gated_tool_refuses_until_its_skill_is_loaded() {
-        // With no skill loaded, gated tools refuse and the refusal
-        // names the skill path. Ungated tools execute normally.
         let err = execute_tool_inner("list_dir", &serde_json::json!({ "path": "." }))
             .await
             .expect_err("filesystem tools must refuse before the skill loads");

@@ -3,8 +3,7 @@ use std::collections::HashSet;
 
 /// A text-only turn that declares an action instead of answering: short
 /// and action-declaring ("Let me check X"), or ending mid-thought. Small
-/// models emit prose when they mean to call a tool. The agent loop nudges
-/// once per run, so the declared action executes.
+/// models emit prose when they mean to call a tool.
 pub(crate) fn looks_like_unexecuted_intent(text: &str) -> bool {
     let t = text.trim();
     if t.is_empty() || t.chars().count() > 400 {
@@ -59,7 +58,6 @@ mod tests {
             "Right — browser session ≠ CLI auth. Those are separate, so `gh` is still unauthenticated. Let me set up the device flow; since your browser session is now signed in, I should be able to complete the authorization myself."
         ));
         assert!(looks_like_unexecuted_intent("First, a quick check:"));
-        // A real final answer must end the run without a nudge.
         assert!(!looks_like_unexecuted_intent(
             "Done. Git 2.52 and gh 2.91 are installed and on PATH."
         ));

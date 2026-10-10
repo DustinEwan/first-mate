@@ -4,7 +4,6 @@ import vue from "@vitejs/plugin-vue";
 import process from "node:process";
 const host = process.env.TAURI_DEV_HOST;
 
-// https://vite.dev/config/
 export default defineConfig(() => ({
   plugins: [vue()],
   // Vite clearing the terminal would hide cargo errors.

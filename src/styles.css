@@ -12,7 +12,6 @@ body {
   overflow: hidden;
 }
 
-/* Shared titlebar (drag region) */
 .titlebar {
   display: flex;
   justify-content: space-between;
@@ -234,7 +233,6 @@ body {
   background: rgba(224, 82, 82, 0.12);
 }
 
-/* Chat window layout */
 .chat {
   display: flex;
   flex-direction: column;
@@ -258,14 +256,14 @@ body {
   overflow: auto;
 }
 
-/* The scroller's item views are absolutely positioned, so they shrink-wrap
-   their content; force full width so centered tables/math can center. */
+/* The scroller positions its item views absolutely, so each item view
+   shrink-wraps its content. `.scroller .vue-recycle-scroller__item-view` sets
+   full width so centered tables and math can center. */
 .scroller .vue-recycle-scroller__item-view {
   width: 100%;
   box-sizing: border-box;
 }
 
-/* Scrollbar styling to match theme */
 .scroller::-webkit-scrollbar {
   width: 8px;
 }
@@ -309,10 +307,10 @@ body {
 }
 
 /* Compaction divider: a rule across the console, not a chat bubble. The
-   summary starts collapsed — the point of the divider is that the rows above
-   it left the MODEL's context, not that they should be hidden from the user,
-   so the whole scrollback stays put and this row only records what replaced
-   them. */
+   summary starts collapsed. The divider marks the rows above as gone from the
+   MODEL's context. The divider does not hide those rows from the user. The
+   whole scrollback stays put, and the divider row only records what replaced
+   those rows. */
 .msg.summary {
   padding: 6px 12px 12px;
   color: #8a8f98;
@@ -356,11 +354,11 @@ body {
   word-break: break-word;
 }
 
-/* Tool report: one bordered panel with identity / effect / metadata
-   sections, mirroring the TUI's boxed tool output. Spacing lives as
-   padding on the wrapper: the virtual scroller positions items by the
-   measured height of this root element, and margins would be excluded
-   from that measurement (stacked panels would touch). */
+/* Tool report: one bordered panel with identity / effect / metadata sections,
+   mirroring the TUI's boxed tool output. Spacing lives as padding on the
+   `.rb-wrap` wrapper. The virtual scroller positions items by the measured
+   height of the root element, and that measurement excludes margins. Margins
+   outside that measurement would let stacked panels touch. */
 .rb-wrap {
   padding: 4px 12px 12px;
 }
@@ -411,7 +409,6 @@ body {
   font-style: italic;
 }
 
-/* Markdown-rendered assistant output. */
 .msg.md {
   white-space: normal;
   line-height: 1.5;
@@ -515,7 +512,6 @@ body {
   border-top: 1px solid #2c2c31;
 }
 
-/* Settings window layout */
 .settings {
   display: flex;
   flex-direction: column;

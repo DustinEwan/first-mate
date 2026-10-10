@@ -1,9 +1,8 @@
 use crate::log::log;
 
-/// This is the ONLY path by which anything leaves the webview. http and
-/// https open the browser. `file://` opens the default app for the file type.
-/// Every other scheme is refused, so a caller cannot name an executable or a
-/// shell command.
+/// `open_path` is the only path by which anything leaves the webview. http
+/// and https open the browser. `file://` opens the default app for the file
+/// type.
 #[tauri::command]
 pub(crate) fn open_path(target: String) -> Result<(), String> {
     let result = open_path_inner(&target);
@@ -30,8 +29,6 @@ fn resolve_open_target(target: &str) -> Result<String, String> {
         if decoded.contains('"') {
             return Err("path contains a quote character".to_string());
         }
-        // file:///C:/x -> C:\x
-        // file://server/share -> \\server\share (UNC)
         // The default handler receives backslashes. A forward slash breaks
         // naive argv parsers.
         let is_unc = !t.starts_with("file:///");
@@ -89,7 +86,7 @@ fn shell_open(target: &str) -> Result<(), String> {
     Err(format!("no default handler support on this platform: {target}"))
 }
 
-/// A '+' stays a literal '+'; a '+' is not a space.
+/// Percent decoding keeps '+' a literal '+'.
 fn percent_decode(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -123,7 +120,6 @@ mod tests {
             resolve_open_target("https://example.com/&calc|x").unwrap(),
             "https://example.com/&calc|x"
         );
-        // Handlers receive a file:// path as a backslash path.
         assert_eq!(
             resolve_open_target("file:///C:/Windows/System32/drivers/etc/hosts").unwrap(),
             "C:\\Windows\\System32\\drivers\\etc\\hosts"

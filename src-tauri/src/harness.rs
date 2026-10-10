@@ -1,9 +1,12 @@
 use crate::exec::{AppNotifier, spawn_background_notify};
 
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 pub(crate) async fn cli_version(name: &str) -> Option<String> {
     let mut cmd = tokio::process::Command::new(name);
     #[cfg(windows)]
-    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    cmd.creation_flags(CREATE_NO_WINDOW);
     let out = cmd
         .arg("--version")
         .stdout(std::process::Stdio::piped())
@@ -59,7 +62,7 @@ fn winapp_install_cmd() -> tokio::process::Command {
         "--disable-interactivity",
     ]);
     #[cfg(windows)]
-    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    cmd.creation_flags(CREATE_NO_WINDOW);
     cmd
 }
 
@@ -78,8 +81,6 @@ mod tests {
         let argv: Vec<_> = cmd.as_std().get_args().map(|a| a.to_string_lossy().into_owned()).collect();
         assert_eq!(argv[0], "install");
         assert_eq!(argv[1], "Microsoft.WinAppCli");
-        // The install must run unattended: no agreement prompt, no
-        // interactive source choice.
         assert!(argv.contains(&"--accept-package-agreements".to_string()));
         assert!(argv.contains(&"--accept-source-agreements".to_string()));
         assert!(argv.contains(&"--disable-interactivity".to_string()));

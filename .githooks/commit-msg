@@ -1,10 +1,8 @@
 #!/bin/sh
 # Conventional Commits gate (https://www.conventionalcommits.org).
 # Pure POSIX sh: runs in Git for Windows' bundled sh with no node/npm.
-# Enable once per clone: git config core.hooksPath .githooks
 
 msg_file="$1"
-# First non-empty line, CR-stripped (CRLF checkouts).
 subject=$(tr -d '\r' < "$msg_file" | sed '/^[[:space:]]*$/d' | head -n 1)
 
 # fixup!/squash! auto-squash markers pass through untouched.
@@ -32,7 +30,6 @@ EOF
   exit 1
 fi
 
-# Body lines (if any) must wrap at 100.
 long=$(tr -d '\r' < "$msg_file" | sed '1d' | awk 'length > 100 { print; exit }')
 if [ -n "$long" ]; then
   echo "✗ Commit body line over 100 characters:" >&2

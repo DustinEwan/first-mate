@@ -24,8 +24,7 @@ pub(crate) fn stop_chat() {
     }
 }
 
-/// Convert a request to JSON. `lmkit::ChatRequest` does not implement
-/// `Serialize`.
+/// `lmkit::ChatRequest` does not implement `Serialize`.
 fn request_to_json(
     history: &[lmkit::ChatMessage],
     tools: &[lmkit::ToolDefinition],
@@ -93,8 +92,7 @@ struct ChatParams {
     /// seeds the dispatch gate, so tools unlocked on an earlier turn stay
     /// unlocked.
     loaded_skills: Vec<String>,
-    /// Tokens the model can hold. 0 means ask the endpoint
-    /// (docs/COMPACTION.md).
+    /// `docs/COMPACTION.md` defines the `context_window` 0 sentinel.
     context_window: u32,
     compact_at_percent: u8,
 }
@@ -202,9 +200,8 @@ fn history_msgs(rows: &[HistoryItem]) -> Vec<serde_json::Value> {
 
 /// Where the persisted transcript begins, and where the kept tail begins.
 ///
-/// A `summary` row is framing, not a turn. The row belongs in the system
-/// prompt. Everything the summary already compressed never goes back on the
-/// wire. What is left is cut by tokens, and only ever at a turn boundary.
+/// Rows the summary compressed never return to the wire. `plan_history` cuts
+/// the rest by tokens, and only at a turn boundary.
 fn plan_history(prior: &[HistoryItem], keep_budget: usize) -> (Option<String>, usize, usize) {
     let mut summary = None;
     let mut start = 0usize;
@@ -498,10 +495,6 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
     // Tool results are remembered for this run only, so a repeat can be
     // deduped or truncated.
     let mut seen: HashMap<String, String> = HashMap::new();
-    // The dispatch gate's state for THIS conversation. The set starts from the
-    // ledger the frontend sent. A skill loaded on an earlier turn therefore
-    // keeps its gated tools unlocked. A skill loaded during this run joins the
-    // set too.
     let mut loaded_skills: std::collections::HashSet<String> =
         loaded_skills.into_iter().collect();
     let mut turn = 0;
@@ -512,7 +505,6 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
             let _ = app.emit("stream_done", serde_json::json!({}));
             return Ok("(stopped)".to_string());
         }
-        // The tool array never changes mid-run, so this is identical per turn.
         let tools: Vec<ToolDefinition> = to_tool_defs(&active);
         log(&format!("TURN {}: history_msgs={} tools={}", turn, history.len(), tools.len()));
         let request = ChatRequest {
@@ -719,8 +711,6 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
     }
     let url = format!("{}/chat/completions", provider_catalog::root(base));
     let system_prompt = system_prompt_with_skills(&system_prompt, &loaded_skills);
-    // The persisted transcript is cut to the window this run must fit. The brief
-    // stands in for the rows dropped to make it fit (docs/COMPACTION.md).
     let client = reqwest::Client::new();
     let (window, window_src) =
         resolve_window(&provider, base, &api_key, &model, context_window).await;
@@ -787,8 +777,6 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
     }
     msgs.push(serde_json::json!({ "role": "user", "content": message }));
 
-    // The full registry rides every request. The dispatch gate in `execute.rs`
-    // enforces the skill contract.
     let tools: Vec<serde_json::Value> = agent_tools().as_array().expect("tool array").clone();
     let mut seen: HashMap<String, String> = HashMap::new();
     let mut loaded_skills: std::collections::HashSet<String> =
@@ -1071,7 +1059,6 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
             continue;
         }
 
-        // Nudge once per run. The lmkit path applies the same rule.
         if !nudged && looks_like_unexecuted_intent(&text) {
             nudged = true;
             log(&format!("INTENT NUDGE: turn {turn} declared action without a tool call: {text:?}"));
@@ -1106,16 +1093,11 @@ mod tests {
             row("user", "task two"),
             row("assistant", "done"),
         ];
-        // A starved budget drops a whole older turn, never half of one. The
-        // kept tail begins at a user row, so the request still carries its
-        // instruction.
         let (summary, start, cut) = plan_history(&prior, 10);
         assert_eq!(summary, None);
         assert_eq!((start, cut), (0, 2));
         assert_eq!(prior[start + cut].role, "user");
 
-        // A saved brief is framing, not a turn. It goes to the system prompt,
-        // and everything it already compressed stays off the wire.
         let with_brief = vec![
             row("user", &format!("ancient {long}")),
             row("summary", "the brief"),
@@ -1129,7 +1111,6 @@ mod tests {
         assert_eq!((start, cut), (2, 2), "the pre-brief rows are not counted twice");
         assert_eq!(with_brief[start + cut].role, "user");
 
-        // A single turn cannot be split, however small the budget.
         let one_turn = vec![row("user", "task"), row("assistant", "done")];
         assert_eq!(plan_history(&one_turn, 1).1, 0);
     }
@@ -1137,10 +1118,7 @@ mod tests {
     #[test]
     fn the_summarizer_is_shown_the_instruction_it_must_carry() {
         let long = "x".repeat(400);
-        // The in-run shape: the cut keeps the opening row on the wire. The
-        // middle being folded therefore holds no instruction at all. Without
-        // the pin, the summarizer invents a placeholder for a request it never
-        // saw.
+        // The in-run shape: the cut keeps the opening row on the wire.
         let wire = vec![
             serde_json::json!({"role": "user", "content": "count the fonts folder"}),
             serde_json::json!({"role": "assistant", "content": format!("listing {long}")}),
@@ -1174,8 +1152,6 @@ mod tests {
 
     #[test]
     fn a_fold_lands_under_the_threshold_with_room_to_grow() {
-        // Trimming to the exact threshold leaves the next tool result over the
-        // line. A long run would then need a summarizer call on every turn.
         let long = "x".repeat(400);
         let prior: Vec<HistoryItem> = (0..40)
             .map(|i| {
@@ -1204,10 +1180,8 @@ mod tests {
 
     #[test]
     fn the_brief_rules_are_content_not_code() {
-        // The summarizer's instructions are prompt text, so they live in
-        // prompts/COMPACT.md and the binary carries none. In the dev layout the
-        // fold must read the working copy under test. Any difference means the
-        // rules crept back into Rust.
+        // A difference between `brief_rules()` and `prompts/COMPACT.md` means
+        // Rust carries the rules again.
         assert_eq!(
             brief_rules().unwrap(),
             std::fs::read_to_string("../prompts/COMPACT.md").unwrap()
@@ -1234,13 +1208,11 @@ mod tests {
         // The call names itself, so the result that follows is identifiable.
         assert!(t.contains("[assistant run_command]"));
         assert!(t.contains("[tool] 0 entries"));
-        // Image parts contribute their text, not their base64.
         assert!(t.contains("a screenshot was captured") && !t.contains("AAAA"));
     }
 
     #[test]
     fn resumed_skills_carry_their_instructions_into_the_prompt() {
-        // The ledger names the skills. The prompt must carry their rules too.
         let loaded = ["winapp".to_string(), "filesystem".to_string(), "winapp".to_string()];
         let out = system_prompt_with_skills("BASE", &loaded);
         assert!(out.starts_with("BASE\n\n## Loaded skill: "));

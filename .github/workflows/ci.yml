@@ -7,9 +7,10 @@ on:
 
 jobs:
   pr-title:
-    # Conventional Commits are enforced at PR granularity (release-please
-    # reads PR titles for the changelog); branch commits are checked by
-    # release-please flagging the release PR.
+    # This job enforces Conventional Commits at pull-request granularity.
+    # release-please reads the pull request title for the changelog.
+    # release-please flags the release pull request when a branch commit
+    # breaks the convention.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:

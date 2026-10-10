@@ -160,10 +160,8 @@ pub(crate) fn agent_tools() -> serde_json::Value {
                 }
             }
         },
-        // Skill-gated tools ride every request, because the tool array is
-        // static. Their schemas must therefore be self-describing: minimal
-        // prose that names the skill whose instructions govern them. The
-        // dispatch gate refuses the tool until that skill is loaded. The
+        // A skill-gated tool schema must be self-describing: minimal prose
+        // that names the skill whose instructions govern the tool. The
         // SKILL.md file stays the real documentation.
         {
             "type": "function",
@@ -199,11 +197,6 @@ pub(crate) fn agent_tools() -> serde_json::Value {
     ])
 }
 
-/// Client policy, not the Agent Skills spec. The spec has no tool concept, so
-/// a portable SKILL.md cannot require a tool. These tools carry their usage
-/// rules inside a skill's instructions. The dispatch gate in `execute.rs`
-/// refuses them until that skill is loaded. The refusal message teaches the
-/// model the path.
 pub(crate) fn skill_required(tool: &str) -> Option<&'static str> {
     match tool {
         "read_file" | "edit_file" | "write_file" | "list_dir" | "search_files" | "list_processes" => {
@@ -286,8 +279,6 @@ mod tests {
 
     #[test]
     fn full_registry_is_disclosed_every_request() {
-        // The tool array is static, so nothing mutates the schema per run.
-        // Provider prefix caching stays warm across the whole conversation.
         let all = agent_tools().as_array().expect("tool array").clone();
         let names: Vec<&str> = all
             .iter()

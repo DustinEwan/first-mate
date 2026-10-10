@@ -21,8 +21,6 @@ struct LlmSettings {
     /// which reports `max_model_len` (llama.cpp) or nothing. An endpoint
     /// that reports nothing falls back to `context::DEFAULT_WINDOW_TOKENS`.
     context_window: u32,
-    /// Compaction starts when the request reaches this percentage of the
-    /// context window.
     compact_at_percent: u8,
 }
 
