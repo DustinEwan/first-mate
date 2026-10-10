@@ -69,6 +69,25 @@ Each conversation earns capability on its own. The `load_skill` entries in the
 ledger re-seed the tool gate on every later turn, including after a resume. A
 loaded skill stays loaded for that chat.
 
+### Every file on disk is encrypted
+
+First Mate encrypts every file it writes that holds your data: each `.chat`
+transcript, `settings.json`, `entity_registry.json`, each exec spill under
+`output/`, `firstmate.log`, and each request dump. Encryption is not a setting,
+and no store stays plaintext.
+
+Each file carries its own AES-256 key. The `FMENC1` envelope stores that key
+twice: once wrapped under the Platform Crypto Provider key that the TPM holds,
+and once wrapped under your recovery key. Every `NCrypt` call passes
+`NCRYPT_SILENT_FLAG`, so the app reads its own files at logon with no prompt.
+
+The setup wizard shows the recovery key, and keeps it on screen until you choose
+**I saved it**. `recovery.ack` beside `settings.json` records that choice, so a
+run that ends early asks again. A TPM reset or a new PC makes those files
+unreadable without the key. The app never shows the key again after you
+acknowledge, so keep it somewhere outside this PC. `docs/ENCRYPTION.md` holds
+the mechanism, the spike measurement, and the tests that cover the envelope.
+
 ### Links leave the chat window
 
 A link in an answer opens outside the chat window, through the `open_path`
@@ -90,9 +109,9 @@ which is the same call that Explorer's own user interface uses.
   skill folders. The installer packages these as resources, because the binary
   must contain no prompt text.
 - **`docs/`** — design documentation. `ROADMAP.md` records direction and build
-  order. `SKILLS.md` explains the skill system, and `COMPACTION.md` explains the
-  context window. `roadmap/` contains the design detail that a roadmap item
-  points to.
+  order. `SKILLS.md` explains the skill system, `COMPACTION.md` explains the
+  context window, and `ENCRYPTION.md` explains the file envelope. `roadmap/`
+  contains the design detail that a roadmap item points to.
 - **`AGENTS.md`** — guidance for coding agents working on this repo.
 
 ## Configuration

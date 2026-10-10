@@ -7,8 +7,8 @@ A trust layer makes it safe to point an agent at a machine full of personal
 data.
 
 This is a **living document**. The document records direction and build order.
-§1–6 describe features, §7 records the reception evidence, §8 lists derived
-capabilities, and §9 lists the build order. The last section lists the
+§1–5 describe features, §6 records the reception evidence, §7 lists derived
+capabilities, and §8 lists the build order. The last section lists the
 non-goals. When priorities move, update this document, because the document is
 only as accurate as its last update. Design detail lives in the documents this
 one points to, not here.
@@ -30,7 +30,7 @@ sends every tool on every task. That agent is mediocre at everything.
   agent said what.
 - Each profile binds a model. For example, a local model suits anything that
   touches files, and a strong cloud model suits research. That binding makes
-  §4 mostly declarative.
+  §3 mostly declarative.
 - Two profiles ship built-in: `general`, which is today's behavior, and
   `sysadmin`, which is exec-heavy and defaults to a local model.
 - Creating a profile starts as editing the TOML file. A Settings UI tab comes
@@ -68,59 +68,7 @@ log.
 open, along with the re-approval flow. The rule for retiring a skill that has
 gone stale is also open. No scoring design supports that rule yet.
 
-## 3. Encryption at rest
-
-**Problem.** First Mate writes four stores in plaintext. `conversations.rs`
-writes each `.chat` transcript under `%USERPROFILE%\.firstmate\conversations`.
-`log.rs` writes each exec spill under `%USERPROFILE%\.firstmate\output`.
-`settings.rs` writes `settings.json` and `entity_registry.json` under
-`%APPDATA%\com.dusti.firstmate`. An agent that touches mail or banking leaves
-plaintext evidence of that work in all four stores.
-
-**Design sketch.**
-
-- First Mate encrypts every file it writes. Encryption is not a setting, and no
-  store stays plaintext.
-- AES-256-GCM encrypts each file, and the header `FMENC1` names the format.
-- The Platform Crypto Provider holds each file key in the TPM. `NCrypt` exposes
-  that provider as `MS_PLATFORM_KEY_STORAGE_PROVIDER`.
-  `NCryptEncrypt` wraps each file key with RSA-OAEP and SHA-256, and
-  `NCryptDecrypt` unwraps it. `NCryptExportKey` cannot wrap a key, because the
-  Microsoft providers reject the `hExportKey` parameter with
-  `NTE_INVALID_HANDLE`.
-- The app unwraps that key at start with no prompt. The app must read its own
-  settings, registry, and transcripts at logon, so no prompt may block a read.
-- No key material is ever on disk in the clear.
-- `entity_registry.json` holds raw sensitive values by design, so it needs the
-  same envelope as a transcript.
-- Windows Hello does not gate this key. Hello gates display, and §5 defines that
-  policy.
-- The first run after an upgrade rewrites every plaintext file inside the
-  envelope, so no store stays readable after that run.
-- A TPM reset or hardware loss makes the data unrecoverable. The app therefore
-  shows a recovery key during first-run setup. The wizard keeps that key on
-  screen until the user says they saved it, and then never shows it again. Each
-  file key carries a second wrap under a key derived from that secret.
-
-**Spike result (2026-10-10).** The provider works, and no call showed a prompt.
-`PCP_PLATFORM_TYPE` returns `TPM-Version:2.0`, vendor `AMD`, firmware 196700.5.
-`NCryptFinalizeKey` created a persisted RSA-2048 key with `NCRYPT_SILENT_FLAG`.
-`NCryptEncrypt` wrapped a 32-byte file key with OAEP and SHA-256. A fresh
-process unwrapped that key with `NCryptDecrypt` in 72 ms. AES-256-GCM in
-`BCrypt` then opened the file with that key, and the auth tag passed. The key
-reports `Export Policy` `0`, and `NCryptExportKey` refuses `RSAPRIVATEBLOB` with
-`NTE_BAD_TYPE`, so the key cannot leave the TPM. The store keeps the key at
-`%LOCALAPPDATA%\Microsoft\Crypto\PCPKSP\<sid hash>\*.PCPKEY`. `icacls` grants
-that folder to the user, `BUILTIN\Administrators`, and `SYSTEM`, so a second
-standard account cannot read the blob. `crypto.rs` now writes the envelope.
-The live `settings.json` starts with `FMENC1`, and no byte of the stored API
-key appears in it. A test deletes a second PCP key with `NCryptDeleteKey`. That
-key's wrap then refuses to open, so no key material travels with a file.
-
-§7 records the reception evidence for this design. That evidence rejects ambient
-capture and plaintext-at-rest storage, not encryption.
-
-## 4. Sensitive-Info Obfuscation
+## 3. Sensitive-Info Obfuscation
 
 **Problem.** A public model must never see credentials, addresses, health data,
 or financial data. The dividing line is not "local vs remote". The dividing
@@ -147,10 +95,10 @@ because detokenize restores the real text everywhere the user can see. Full
 design: `docs/roadmap/REDACTION.md`.
 
 **Dependency.** Profile model bindings (§1) decide which provider a turn uses,
-and that provider's switch states whether redaction runs. §3 decides what is
-worth protecting on disk instead.
+and that provider's switch states whether redaction runs. Encryption at rest
+decides what is worth protecting on disk instead.
 
-## 5. Privacy — two axes, one Settings section
+## 4. Privacy — two axes, one Settings section
 
 The transit pass and the screen answer different threats, so the product exposes
 two controls, not one ladder. A receiver sees one provider's text. A reader
@@ -162,7 +110,7 @@ under a `Privacy` section, away from the provider and model fields.
 | **Hide from the LLM** | per provider | `off`, `exact`, `wide` | A receiver the user does not trust |
 | **Hide on screen** | global | `show`, `blur`, `hello` | A reader of the screen, screenshots, screen sharing |
 
-- `exact` runs §4 Layers 1–2. It redacts a value with a checksum, or a value in
+- `exact` runs §3 Layers 1–2. It redacts a value with a checksum, or a value in
   the entity registry. `wide` adds Layer 4 context, which also tokenizes a
   benign id that sits near a trigger word. `off` sends real values. A receiver
   the user owns is the only case for `off`.
@@ -170,8 +118,8 @@ under a `Privacy` section, away from the provider and model fields.
   `hello` adds the Windows Hello check that the reveal session below defines.
   `show` is today's behavior.
 - One dependency crosses the two axes, and it is disk, not threat.
-  Click-to-reveal needs the real value on disk. §4 keeps real values in the
-  stored transcript, so §3 encryption is a precondition for `blur` and `hello`.
+  Click-to-reveal needs the real value on disk. §3 keeps real values in the
+  stored transcript, so encryption at rest is a precondition for `blur` and `hello`.
 - A profile may raise either axis. A profile may not lower either axis.
 - Before `wide` ships, the entity registry must ask before it grows. A false
   positive that enters the registry matches that value everywhere, forever.
@@ -184,7 +132,7 @@ under a `Privacy` section, away from the provider and model fields.
 
 `hello` gates display, not the key. One state governs the console: the reveal
 session is open or closed. While the session is closed, the console shows the
-tokens from the §4 pass, and the API key field shows a masked value. While the
+tokens from the §3 pass, and the API key field shows a masked value. While the
 session is open, the console shows real values.
 
 | Event | Effect |
@@ -209,7 +157,7 @@ session is open, the console shows real values.
   `CloseRequested` handler in `lib.rs`. Both paths must close the session.
 - Extend costs a Windows Hello check. A free extension would keep real values
   shown forever after one check.
-- Expiry closes display only. The §3 key stays unlocked, because the app must
+- Expiry closes display only. The file key stays unlocked, because the app must
   read its own files. An expiry is not a data lock, and the UI must not say one.
 - The mask must come from the render path. The transcript uses a virtualized
   scroller, so a mask applied to the document alone would show a real value
@@ -223,7 +171,7 @@ session is open, the console shows real values.
   the app keeps `blur` behavior, allows click-to-reveal, and states in the
   Privacy section that no passkey check runs on this machine.
 
-## 6. Workspaces
+## 5. Workspaces
 
 **Problem.** The agent's work product has no home. One disk-inventory task wrote
 nine `.ps1` scripts and ten `.txt` reports into `%USERPROFILE%`. Its closing
@@ -260,16 +208,17 @@ no link to the task that made them, and nothing sends the agent's writes there.
 is open. Whether the user can point a workspace at a real project folder is also
 open. That choice puts the agent's scratch beside the work it is doing.
 
-## 7. The Copilot lesson: usefulness, not features
+## 6. The Copilot lesson: usefulness, not features
 
 The 2025–2026 reception evidence for Copilot leaves four jobs standing. The
 four are: recover lost context, use what's in front of me, bounded delegation,
 and low-friction intent capture. Users consistently reject one combination:
 plaintext at rest, plus an unconfirmed action that can change any file or
-account. §3–4 and the trust tiers answer those two complaints. Evidence and
+account. Encryption at rest, §3, and the trust tiers answer those two complaints.
+Evidence and
 full analysis: `docs/roadmap/COPILOT-ANALYSIS.md`.
 
-## 8. Derived capabilities
+## 7. Derived capabilities
 
 Each entry states its job first. First Mate chooses the mechanism.
 
@@ -286,7 +235,7 @@ a searchable archive for humans. The _agent_ resurfaces relevant history at the
 moment of relevance. An example: "you restructured these logs in March — same
 failure?". First Mate already owns the raw material: every conversation, every
 spilled output, and every skill execution. Index that material with embeddings
-over encrypted data (§3), and let the active profile query its own past. There is
+over the encrypted stores, and let the active profile query its own past. There is
 no ambient capture. Continuous screen recording was Recall's most expensive and
 least valued choice. First Mate serves the same job from work product First Mate
 already owns.
@@ -304,7 +253,7 @@ missing piece is a way to write the result back into the source application.
 **Later — Voice input.** _(job: capture intent at speed of thought)_ The user
 holds the summon hotkey, talks, and releases. The console then shows the
 transcribed request. Speech-to-text is local only, with whisper.cpp or the
-Windows Speech API, because voice must never cross the §3/§4 boundary. This
+Windows Speech API, because voice must never cross the §3 boundary. This
 capability is input-only. Full voice control of the OS belongs to Voice Access,
 and Voice Access does that well.
 
@@ -315,17 +264,15 @@ and reports into the console. The approved §2
 skill is itself the approval artifact. That is why self-authored skills must
 ship with review, versioning, and tier binding before automation exists.
 
-## 9. Execution checklist
+## 8. Execution checklist
 
-The dependency spine is **A → B → C → D → E → F → G**. Redaction comes first,
+The dependency spine is **A → B → C → D → E → F**. Redaction comes first,
 because that work is self-contained and protects every turn whose receiver the
-user does not trust. Phase H (§6) has no dependency, because its scratch
+user does not trust. Phase G (§5) has no dependency, because its scratch
 directories already exist and need only routing. Profiles come next, because
-three items depend on a profile. Encryption comes before self-authored skills,
-because the product must not gain agent-written skills
-while conversations are still plaintext.
+three items depend on a profile.
 
-### Phase A — Sensitive-info redaction (§4)
+### Phase A — Sensitive-info redaction (§3)
 
 - [x] Trust registry: `hide_sensitive` on the resolved provider is the single
       trigger source. The settings UI checks that box for public providers. An
@@ -341,7 +288,8 @@ while conversations are still plaintext.
       real values, so its output needs no detokenize pass.
 - [x] A repair pass fixes mangled tokens by fuzzy match on `⟦…⟧` shapes.
 - [ ] The entity registry stores the values that profiles seed, and it grows by
-      confirmation from layer-1 and layer-3 hits. §3 encrypts that registry.
+      confirmation from layer-1 and layer-3 hits. Encryption at rest covers that
+      registry.
 - [ ] Provenance marks sensitive-path reads, UIA field names, and banking
       origins. The harness blocks password-manager clipboard reads.
 - [ ] Each class has its own toggle, and a disclose-once override exists.
@@ -364,41 +312,15 @@ while conversations are still plaintext.
       defaults to a local model.
 - [ ] The console has a profile switcher, and `use profile <name>` is a routed
       command.
-- [ ] Model binding, §4's trigger, and §2's skill ownership each read the
+- [ ] Model binding, §3's trigger, and §2's skill ownership each read the
       profile.
 - **Accept:** two profiles with different models and skills, verifiable from a
   conversation's recorded profile.
 
-### Phase C — Encryption at rest (§3)
+### Phase C — Privacy section (§4)
 
-- [x] Spike: the Platform Crypto Provider key works. Create it, wrap a test key,
-      and unwrap it in a fresh process, all with no prompt. §3 records the
-      result, and names the API that wraps a key.
-- [x] Spike: show that a sealed file holds no plaintext byte, and that it stays
-      closed once you delete the TPM key, so no key material travels with a file.
-- [x] The `FMENC1` container encrypts each `.chat` transcript with AES-256-GCM.
-- [x] The envelope covers `settings.json`, `entity_registry.json`, each `fm_out`
-      exec spill, `firstmate.log`, and each request dump, so no store stays
-      plaintext.
-- [x] The first run after an upgrade rewrites every plaintext file in the
-      envelope.
-- [x] Every `NCrypt` call in `crypto.rs` passes `NCRYPT_SILENT_FLAG`, so no
-      call can raise a prompt. A fresh process unwrapped the key in 72 ms.
-- [x] The recovery-key flow shows the key until the user says they saved it.
-      Each file key carries a second wrap under the derived key. The app states
-      plainly that a TPM loss makes data unrecoverable.
-- [x] Encryption has no setting and no per-session choice.
-- [x] The first-run wizard shows the recovery key before setup can finish, so no
-      user starts the product without reading it.
-- [x] `recovery.ack` records the acknowledge, so a run that closed before the
-      acknowledge opens the wizard on the Privacy step again.
-- **Accept:** no byte that a task wrote appears in plaintext on disk, and a
-  sealed file stays closed once you delete the TPM key. The app opens every
-  store at logon after a reboot with zero prompts.
-
-### Phase D — Privacy section (§5)
-
-The screen axis needs Phase C first, because the transcript holds real values.
+Encryption at rest ships, and the screen axis depends on it, because the
+transcript holds real values.
 
 - [ ] The Settings UI gains a `Privacy` section, and the `Hide sensitive
       information` checkbox leaves the provider form.
@@ -409,7 +331,7 @@ The screen axis needs Phase C first, because the transcript holds real values.
       three on-machine rows keep `off`.
 - [ ] The registry asks once before it grows, and that gate opens `wide`.
 - [ ] The screen axis adds `blur`: tokens in the console, one click reveals one
-      item, and the log stores the real text, encrypted under §3.
+      item, and the log stores the real text, which the envelope encrypts.
 - [ ] The `hello` level adds the reveal session: one Windows Hello check opens
       it, a hide or a 10-minute lifetime closes it, and Extend costs a check.
 - [ ] The app logs one line per session event, with the reason it closed.
@@ -419,7 +341,7 @@ The screen axis needs Phase C first, because the transcript holds real values.
   console shows masked values on the next summon until one Hello check passes,
   and a provider set to `off` sends the real value.
 
-### Phase E — Agent-defined skills (§2)
+### Phase D — Agent-defined skills (§2)
 
 - [ ] The `propose_skill` tool writes drafts into the `skills/_proposed/`
       staging directory.
@@ -431,7 +353,7 @@ The screen axis needs Phase C first, because the transcript holds real values.
 - **Accept:** the agent proposes, you approve, and the next session uses that
   skill under one profile only.
 
-### Phase F — Harness trust tiers (§8 "Next")
+### Phase E — Harness trust tiers (§7 "Next")
 
 - [ ] The exec harness enforces tiers 0–3, and that enforcement extends the
       gate that `route.rs` already implements.
@@ -443,9 +365,9 @@ The screen axis needs Phase C first, because the transcript holds real values.
 - **Accept:** a `general`-profile agent cannot delete outside its workspace
   without an explicit confirm.
 
-### Phase G — Derived capabilities (§8), in this order
+### Phase F — Derived capabilities (§7), in this order
 
-- [ ] Continuity (needs C) adds embeddings over encrypted conversations and
+- [ ] Continuity adds embeddings over encrypted conversations and
       outputs, plus agent-side relevance queries. The item excludes ambient
       capture.
 - [ ] Focus transfer (needs B) adds UIA selection capture. The focused
@@ -453,15 +375,15 @@ The screen axis needs Phase C first, because the transcript holds real values.
       writes the result back to the source application.
 - [ ] Voice input (needs A) adds push-to-talk on the summon hotkey, and
       speech-to-text is local only.
-- [ ] Scheduled delegation (needs E + F) binds an approved skill to a trigger
+- [ ] Scheduled delegation (needs D + E) binds an approved skill to a trigger
       and runs that skill under its tier.
 
-Cross-cutting: every G capability respects the §3/§4/§5 boundary. Voice,
+Cross-cutting: every F capability respects the §3 and §4 boundary. Voice,
 embeddings, and selections leave the machine only when the redaction pass ran on
-that turn. Nothing in E or G ships without its review gate
+that turn. Nothing in D or F ships without its review gate
 and its tier gate.
 
-### Phase H — Workspaces (§6)
+### Phase G — Workspaces (§5)
 
 - [ ] A conversation gets a workspace folder, and a run gets a subfolder of it.
 - [ ] `write_file`, the screenshot path, and tool-output spill resolve to the
@@ -476,9 +398,9 @@ and its tier gate.
 
 ## Non-goals
 
-- Ambient screen capture, which is a Recall-style recorder. §8 serves the
+- Ambient screen capture, which is a Recall-style recorder. §7 serves the
   continuity job from First Mate's own work product. Continuous capture would
-  reintroduce the exposure that §3 exists to prevent.
+  reintroduce the exposure that encryption at rest exists to prevent.
 - Full voice control of the OS. Voice Access already does that job, and Voice
   Access puts accessibility first.
 - Being a coding harness. The console stays a task runner, and deep coding

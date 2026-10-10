@@ -1,6 +1,6 @@
 # Sensitive-Info Redaction — Design
 
-This document is the design detail for roadmap §4 (Phase A). The `§`
+This document is the design detail for roadmap §3 (Phase A). The `§`
 references below point to `docs/ROADMAP.md`.
 
 **Problem.** A public model must never see credentials, addresses, health data,
@@ -32,7 +32,7 @@ selected provider's `Hide sensitive information` checkbox is checked, redact.
   mints a fresh map, and the old token then reaches a tool as a literal name.
 - Detokenize happens at three harness boundaries, never in the model.
   - **Display**: the console renders the real value, or obfuscates that value
-    under the §5 `Hide on screen` axis.
+    under the §4 `Hide on screen` axis.
   - **Tool/action execute**: a tool call such as "email `⟦EMAIL_1⟧` the
     summary" contains a token. Execution substitutes the real address at that
     point, under the profile's trust tier. The harness refuses a call whose
@@ -70,7 +70,7 @@ That target set is tiny and closed.
 - The registry grows from Layer 1 and Layer 3 hits after a one-time user
   confirmation.
 - The registry then matches exact values anywhere, in any format.
-- §3 encrypts that registry.
+- `docs/ENCRYPTION.md` records the envelope that seals that registry.
 
 **Layer 3 — provenance.** Content from a marked origin is sensitive regardless
 of its shape. Layer 3 marks the following origins:
@@ -113,15 +113,16 @@ against over-redaction degrading model task quality.
 
 ## On-disk truth and the console indicator
 
-How much real text the chat log stores is a choice in the §5 Privacy section.
+How much real text the chat log stores is a choice in the §4 Privacy section.
 The store-only-redacted-text option minimizes on-disk truth. The `blur` and
-`hello` levels need the real text on disk, so they need §3 encryption first,
-as §3 describes. The console can therefore reveal that truth on demand.
+`hello` levels need the real text on disk, so they need the envelope that
+`docs/ENCRYPTION.md` describes. The console can therefore reveal that truth on
+demand.
 
 The console shows a "Redacted N items" chip on each turn whose pass replaced a value.
 Clicking that
 chip shows which classes fired, and never shows the values.
 
 **Dependency:** Profile model bindings (§1) decide which provider a turn uses, and
-that provider's checkbox decides whether the pass runs. §3
+that provider's checkbox decides whether the pass runs. Encryption at rest
 decides what is worth protecting on disk instead.

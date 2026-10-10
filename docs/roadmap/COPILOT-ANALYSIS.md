@@ -22,6 +22,7 @@ from the pattern in that feedback. Four jobs survive the evidence:
 
 Users' negative feedback is just as clear. Users consistently reject only two
 things: plaintext-at-rest storage, and an unconfirmed action that can change any
-file or account. Roadmap §3–4 and the trust tiers answer those two complaints.
+file or account. The README encryption section, roadmap §3, and the trust tiers
+answer those two complaints.
 The roadmap can therefore pursue the four jobs above without taking on the same
 plaintext-at-rest exposure.

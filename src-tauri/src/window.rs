@@ -8,7 +8,7 @@ pub(crate) fn anchor_icon() -> tauri::image::Image<'static> {
         .expect("icons/window.png must be a valid PNG")
 }
 
-/// The console leaves the screen only through this function. §5 of
+/// The console leaves the screen only through this function. §4 of
 /// `docs/ROADMAP.md` closes the reveal session here, so a second hide path
 /// would leave real values shown.
 pub(crate) fn hide_window(app: &tauri::AppHandle) {

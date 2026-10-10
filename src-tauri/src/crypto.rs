@@ -1,5 +1,5 @@
-//! The `FMENC1` envelope. `docs/ROADMAP.md` §3 requires it on every file First
-//! Mate writes that holds user data.
+//! The `FMENC1` envelope. Every file First Mate writes that holds user data
+//! carries it, and `docs/ENCRYPTION.md` records the design.
 //!
 //! Each file carries its own AES-256 key. That key travels inside the file in
 //! two wraps: one under the Platform Crypto Provider key, which the TPM holds,
@@ -68,7 +68,7 @@ fn open_key(name: &str) -> Result<NCRYPT_KEY_HANDLE, String> {
 
 /// The persisted RSA key `name`, created with no prompt when it is absent.
 /// `NCRYPT_SILENT_FLAG` on create and on finalize is what keeps the TPM from
-/// asking for consent, and §3 requires a silent read at logon.
+/// asking for consent, because the app must read its own files at logon.
 fn persisted_key(name: &str) -> Result<NCRYPT_KEY_HANDLE, String> {
     if let Ok(key) = open_key(name) {
         return Ok(key);
