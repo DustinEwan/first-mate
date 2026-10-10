@@ -84,6 +84,10 @@ plaintext evidence of that work in all four stores.
 - AES-256-GCM encrypts each file, and the header `FMENC1` names the format.
 - The Platform Crypto Provider holds each file key in the TPM. `NCrypt` exposes
   that provider as `MS_PLATFORM_KEY_STORAGE_PROVIDER`.
+  `NCryptEncrypt` wraps each file key with RSA-OAEP and SHA-256, and
+  `NCryptDecrypt` unwraps it. `NCryptExportKey` cannot wrap a key, because the
+  Microsoft providers reject the `hExportKey` parameter with
+  `NTE_INVALID_HANDLE`.
 - The app unwraps that key at start with no prompt. The app must read its own
   settings, registry, and transcripts at logon, so no prompt may block a read.
 - No key material is ever on disk in the clear.
@@ -96,6 +100,19 @@ plaintext evidence of that work in all four stores.
 - A TPM reset or hardware loss makes the data unrecoverable. The app therefore
   prints a recovery key once at the first run, and the user keeps it offline.
   Each file key carries a second wrap under a key derived from that secret.
+
+**Spike result (2026-10-10).** The provider works, and no call showed a prompt.
+`PCP_PLATFORM_TYPE` returns `TPM-Version:2.0`, vendor `AMD`, firmware 196700.5.
+`NCryptFinalizeKey` created a persisted RSA-2048 key with `NCRYPT_SILENT_FLAG`.
+`NCryptEncrypt` wrapped a 32-byte file key with OAEP and SHA-256. A fresh
+process unwrapped that key with `NCryptDecrypt` in 72 ms. AES-256-GCM in
+`BCrypt` then opened the file with that key, and the auth tag passed. The key
+reports `Export Policy` `0`, and `NCryptExportKey` refuses `RSAPRIVATEBLOB` with
+`NTE_BAD_TYPE`, so the key cannot leave the TPM. The store keeps the key at
+`%LOCALAPPDATA%\Microsoft\Crypto\PCPKSP\<sid hash>\*.PCPKEY`. `icacls` grants
+that folder to the user, `BUILTIN\Administrators`, and `SYSTEM`, so a second
+standard account cannot read the blob. Two checks stay open: the read test under
+a real second account, and survival across a reboot.
 
 §7 records the reception evidence for this design. That evidence rejects ambient
 capture and plaintext-at-rest storage, not encryption.
@@ -351,9 +368,11 @@ while conversations are still plaintext.
 
 ### Phase C — Encryption at rest (§3)
 
-- [ ] Spike first. The unknown is the Platform Crypto Provider key. Create it,
-      wrap a test key, unwrap it at start with no prompt, and confirm that a
-      second Windows account on the same disk reads only ciphertext.
+- [x] Spike: the Platform Crypto Provider key works. Create it, wrap a test key,
+      and unwrap it in a fresh process, all with no prompt. §3 records the
+      result, and names the API that wraps a key.
+- [ ] Spike: confirm that a second Windows account on the same disk reads only
+      ciphertext, and that the key survives a reboot.
 - [ ] The `FMENC1` container encrypts each `.chat` transcript with AES-256-GCM.
 - [ ] The envelope covers `settings.json`, `entity_registry.json`, and each
       `fm_out` exec spill, so no store stays plaintext.
