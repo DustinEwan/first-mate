@@ -206,12 +206,45 @@ laptop. Jev itself is API-only, so Jev cannot serve this role.
   covered it. The score on new assistant text covers that case.
 - Calibration. The slider is honest only after a measurement on First Mate
   transcripts. Calibration depends on the data, so vendor numbers do not transfer.
+  The spike below shows the compression on this machine.
 - Observe-only mode comes first. The gate scores and logs, and blocks nothing. You
   see the audit rate before you trust the gate, and the log gives the calibration
   curve.
 - `tokenize_msgs` (`redact.rs:497`) walks every string in the outbound copy,
   including the base64 blob. Whether a Layer 1 pattern can corrupt an image is
   untested.
+
+### Spike: local decision model, measured 2026-10-10
+
+`StrandsAgents/strands-decider-2B-qwen3.5-v1-2610`, Apache-2.0, 4.55 GB of
+weights. The host is an RTX 3060 with 12 GB and 12 CPU cores.
+
+| Measurement | GPU | CPU |
+| --- | --- | --- |
+| One span, one question | 109 ms | 1767 ms |
+| Warm-cache load | 17.7 s | 17.7 s |
+| Memory | 6 GB VRAM, 2.2 GB RSS | about 9 GB RSS |
+
+- 44 labeled spans. AUC 0.891 on GPU and 0.887 on CPU, so the ranking is real and
+  device-independent.
+- The scores are compressed. Positives median 0.238, negatives median 0.092, floor
+  0.070. Recall 0.95 needs threshold 0.10, and that costs 9 false positives of 24.
+- 199 spans of real agent work. Mean 0.165, median 0.144, max 0.487. At threshold
+  0.15 the audit rate is 44.7 percent, and at 0.10 it is 98.5 percent. No threshold
+  separates the two classes on real work.
+- Two failure classes. Private prose scores low: the salary sentence 0.12, the
+  therapy note 0.19, the internal SKU scheme 0.07. Examples of secrets score high: a
+  spec sample SSN 0.672, a placeholder key 0.465.
+- An embedding model is cheaper and worse. `all-MiniLM-L6-v2`, 23M parameters,
+  59 ms per span on CPU, 1.02 GB RSS, scores a span by similarity to labeled
+  exemplars: AUC 0.735. Its four lowest scores are the four private prose facts.
+- Consequence. The blocking gate above is contradicted by the audit rate, because a
+  gate that interrupts 44.7 percent of spans turns you into a rubber stamp. The
+  registry and the declared paths are the only mechanisms that caught the value the
+  models scored at 0.07. A decision model can rank the audit dialog, because ranking
+  needs no calibration.
+- The 270M Gemma clone stayed untested. Gemma 3 270M is gated, so it needs a
+  Hugging Face login.
 
 ## Mitigation (class 2)
 
