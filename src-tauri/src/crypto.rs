@@ -7,7 +7,7 @@
 
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex, OnceLock};
+use std::sync::{LazyLock, OnceLock};
 
 use sha2::{Digest, Sha256};
 use windows::core::{Error, PCWSTR, w};
@@ -373,10 +373,10 @@ fn remove_plain_dumps() -> usize {
     removed
 }
 
-/// The recovery key is 32 random bytes, shown once and kept offline. Its
-/// derived form wraps every file key, so a lost TPM costs the user one typed
-/// key instead of every transcript. SHA-256 over a domain string is enough
-/// because the secret holds 256 random bits, so no stretching applies.
+/// The recovery key is 32 random bytes, shown until the user says they kept
+/// it. Its derived form wraps every file key, so a lost TPM costs the user one
+/// typed key instead of every transcript. SHA-256 over a domain string is
+/// enough because the secret holds 256 random bits, so no stretching applies.
 fn recovery_secret() -> Result<Vec<u8>, String> {
     let path = store_dir().join("recovery.bin");
     if let Ok(wrapped) = std::fs::read(&path) {
@@ -386,9 +386,6 @@ fn recovery_secret() -> Result<Vec<u8>, String> {
     let mut secret = [0u8; FILE_KEY];
     random(&mut secret)?;
     std::fs::write(&path, wrap(&secret)?).map_err(|e| e.to_string())?;
-    if let Ok(mut held) = NEW_KEY.lock() {
-        *held = Some(secret.iter().map(|byte| format!("{byte:02x}")).collect());
-    }
     Ok(secret.to_vec())
 }
 
@@ -399,21 +396,27 @@ fn derive_recovery(secret: &[u8]) -> Vec<u8> {
     hash.finalize().to_vec()
 }
 
-/// The key text lives only in memory on the run that created it, so the reveal
-/// must happen on that run. `recovery_key` copies, `ack_recovery_key` deletes.
-static NEW_KEY: Mutex<Option<String>> = Mutex::new(None);
+/// `recovery.bin` holds the wrapped secret, so any run can show the key
+/// again. `recovery.ack` records that the user said they kept the key, so the
+/// pending state survives a crash or a close during setup.
+fn ack_path() -> std::path::PathBuf {
+    store_dir().join("recovery.ack")
+}
 
 pub fn recovery_key_pending() -> bool {
-    NEW_KEY.lock().ok().map(|held| held.is_some()).unwrap_or(false)
+    store_dir().join("recovery.bin").exists() && !ack_path().exists()
 }
 
 pub fn recovery_key() -> Option<String> {
-    NEW_KEY.lock().ok().and_then(|held| held.clone())
+    let wrapped = std::fs::read(store_dir().join("recovery.bin")).ok()?;
+    let secret = unwrap(&wrapped).ok()?;
+    Some(secret.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
-/// `true` means a held key was discarded, so the banner leaves the Settings UI.
+/// `true` means a pending key stopped pending, so the Settings banner leaves
+/// and the setup wizard may pass the Privacy step.
 pub fn ack_recovery_key() -> bool {
-    NEW_KEY.lock().ok().and_then(|mut held| held.take()).is_some()
+    recovery_key_pending() && std::fs::write(ack_path(), b"").is_ok()
 }
 
 #[cfg(test)]
@@ -463,5 +466,25 @@ mod tests {
         assert!(open_key(&name).is_err(), "the deleted TPM key came back");
         assert!(unwrap(&wrapped).is_err(), "another TPM key opened the wrap");
         assert!(!record.windows(4).any(|window| window == b"4111"), "the card number survived");
+    }
+
+    /// The setup gate reads this state: a secret with no marker is pending, and
+    /// the acknowledge ends the pending state without destroying the key.
+    #[test]
+    fn an_unacknowledged_recovery_key_stays_pending() {
+        if !tpm_ready() {
+            return;
+        }
+        init(std::env::temp_dir().join("fm-envelope"));
+        let dir = store_dir();
+        let _ = std::fs::remove_file(dir.join("recovery.bin"));
+        let _ = std::fs::remove_file(dir.join("recovery.ack"));
+        recovery_secret().unwrap();
+        assert!(recovery_key_pending(), "a new secret reported no pending key");
+        assert_eq!(recovery_key().unwrap().len(), FILE_KEY * 2);
+        assert!(ack_recovery_key(), "the acknowledge found no pending key");
+        assert!(!recovery_key_pending(), "the acknowledge left the key pending");
+        assert!(!ack_recovery_key(), "a second acknowledge claimed a key");
+        assert_eq!(recovery_key().unwrap().len(), FILE_KEY * 2);
     }
 }
