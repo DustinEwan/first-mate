@@ -98,8 +98,9 @@ plaintext evidence of that work in all four stores.
 - The first run after an upgrade rewrites every plaintext file inside the
   envelope, so no store stays readable after that run.
 - A TPM reset or hardware loss makes the data unrecoverable. The app therefore
-  prints a recovery key once at the first run, and the user keeps it offline.
-  Each file key carries a second wrap under a key derived from that secret.
+  shows a recovery key during first-run setup. The wizard keeps that key on
+  screen until the user says they saved it, and then never shows it again. Each
+  file key carries a second wrap under a key derived from that secret.
 
 **Spike result (2026-10-10).** The provider works, and no call showed a prompt.
 `PCP_PLATFORM_TYPE` returns `TPM-Version:2.0`, vendor `AMD`, firmware 196700.5.
@@ -383,11 +384,14 @@ while conversations are still plaintext.
       envelope.
 - [ ] After a reboot, the app unwraps the key at logon with no prompt, so the
       app starts with no interaction.
-- [x] The recovery-key flow prints the key once and stores a second wrap of each
-      file key. The app states plainly that a TPM loss makes data unrecoverable.
+- [x] The recovery-key flow shows the key until the user says they saved it.
+      Each file key carries a second wrap under the derived key. The app states
+      plainly that a TPM loss makes data unrecoverable.
 - [x] Encryption has no setting and no per-session choice.
 - [x] The first-run wizard shows the recovery key before setup can finish, so no
       user starts the product without reading it.
+- [x] `recovery.ack` records the acknowledge, so a run that closed before the
+      acknowledge opens the wizard on the Privacy step again.
 - **Accept:** no byte that a task wrote appears in plaintext on disk, and a
   sealed file stays closed once you delete the TPM key. The app opens every
   store at logon after a reboot with zero prompts.
