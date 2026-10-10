@@ -7,21 +7,19 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-/// One `noul` question per span. A choice question over categories invites a
-/// topic answer, and the measured model scores the topic, not the privacy of
-/// the topic.
+/// A choice question over categories invites a topic answer. The measured model
+/// scored the topic, not the privacy of the topic.
 const QUESTION: &str = "Does this text contain potentially sensitive information?";
 
-/// The server holds one window per span. Longer prose is scored on its head,
-/// because the head carries the identity of a file.
+/// The server scores the head of long prose, because the head carries the
+/// identity of a file.
 const MAX_SPAN_CHARS: usize = 6000;
 
-/// A server that answers at or above this on a benign span reports a floor,
-/// not a probability. H2O's shim ships a 0.801 yes/no floor as shipped.
+/// A server that answers at or above this on a benign span reports a floor, not
+/// a probability. The H2O shim ships a 0.801 yes/no floor.
 pub(crate) const FLOOR: f64 = 0.8;
 
-/// The gate must not stall a request. The measured p95 is 74 ms, so two
-/// seconds is 27 times that measurement, and a slower answer is an outage.
+/// The measured p95 is 74 ms. Two seconds is 27 times that measurement.
 const GATE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The first answer can pay a server-side compile, so setup waits longer.
@@ -29,11 +27,10 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 
 static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
 
-/// The two spans the setup probe sends. Neither holds a real value.
+/// Neither span holds a real value.
 const BENIGN: &str = "The build finished in 41 seconds and 3 tests failed on Windows.";
 const CREDENTIAL: &str = "Paste this into the console: sk-live-1234567890abcdef1234567890abcd";
 
-/// The two answers that decide whether a server can drive the gate.
 pub(crate) struct Probe {
     pub benign: f64,
     pub credential: f64,
@@ -52,8 +49,7 @@ pub(crate) async fn score(base: &str, span: &str) -> Result<f64, String> {
     ask(base, span, QUESTION, GATE_TIMEOUT).await
 }
 
-/// The setup measurement for one server, so the slider maps to this server's
-/// behaviour and not to another model's.
+/// The slider maps to the measured server, not to another model's behaviour.
 pub(crate) async fn probe(base: &str) -> Result<Probe, String> {
     let benign = ask(base, BENIGN, QUESTION, PROBE_TIMEOUT).await?;
     let credential = ask(base, CREDENTIAL, QUESTION, PROBE_TIMEOUT).await?;

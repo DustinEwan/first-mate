@@ -30,7 +30,6 @@ const provider = ref("");
 const baseUrl = ref("");
 const apiKey = ref("");
 const model = ref("");
-// Nullable because the input can be cleared. A cleared input saves the field's default.
 const contextWindow = ref<number | null>(0);
 const compactAtPercent = ref<number | null>(85);
 const hideSensitive = ref<Partial<Record<string, boolean>>>({});
@@ -65,9 +64,6 @@ const showBaseUrl = computed(
   () => !!currentSpec.value && (currentSpec.value.isLocal || proxy.value),
 );
 
-// A provider id with no stored entry shows the roster default. With no
-// provider selected, the checkbox shows the redacted state. An empty provider
-// id stores nothing, so settings.json never gains a blank key.
 const hideSensitiveDefault = computed(() => currentSpec.value?.hideSensitiveDefault ?? true);
 const hideSensitiveChecked = computed({
   get: () => hideSensitive.value[provider.value] ?? hideSensitiveDefault.value,
@@ -86,13 +82,12 @@ function onProviderChange(id: string) {
   proxy.value = false;
 }
 
-// Clearing Proxy restores the roster default, so a stale proxy URL never
-// reaches the saved settings.
+// A cleared Proxy must not leave a proxy URL in the saved settings.
 function onProxyChange(checked: boolean) {
   if (!checked && currentSpec.value) baseUrl.value = currentSpec.value.base;
 }
 
-// A saved model may be absent from discovery; keep it selectable.
+// A saved model may be absent from discovery. Keep that model selectable.
 function modelOptions() {
   const opts = models.value.map((m) => ({ label: m, value: m }));
   if (model.value && !models.value.includes(model.value)) {
@@ -189,8 +184,8 @@ async function test() {
   }
 }
 
-// The two scores are the operating points. A server that answers at its floor
-// flags every span, so the probe refuses it.
+// A server that answers at its floor flags every span, so the probe refuses
+// that server.
 async function probeServer() {
   status.value = "Probing decision server…";
   try {

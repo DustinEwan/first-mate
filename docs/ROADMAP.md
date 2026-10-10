@@ -79,7 +79,7 @@ product exposes is the user's intent toward the destination. That control is
 never an inference drawn from an IP address.
 
 **The switch.** The Settings UI shows one checkbox per provider, named `Hide
-sensitive information`, and the label says what the checkbox does. The checkbox
+sensitive information`. The label says what the checkbox does. The checkbox
 starts checked for every public provider. Whether the checkbox also starts
 checked for user-added endpoints is the open call. That choice would make
 redaction opt-out everywhere. `Spec::is_local` stays exactly what it is today:
@@ -89,9 +89,9 @@ the hint that shows the Base URL field.
 whose provider has the switch on. That pass runs detect → tokenize → send.
 Detokenize happens at the harness boundaries: display, tool execute, and
 inbound tool output. Detokenize never happens in the model. Detection stacks
-deterministic shape+checksum checks, a user-seeded entity registry, provenance
-marks, and a decision server that you run and the app calls over the typed-decision
-API.
+four controls: deterministic shape and checksum checks, a user-seeded entity
+registry, provenance marks, and a decision server. You run the decision server,
+and the app calls that server over the typed-decision API.
 Over-redaction is the accepted bias,
 because detokenize restores the real text everywhere the user can see. Full
 design: `docs/roadmap/REDACTION.md`.
@@ -134,7 +134,7 @@ under a `Privacy` section, away from the provider and model fields.
 
 `hello` gates display, not the key. One state governs the console: the reveal
 session is open or closed. While the session is closed, the console shows the
-tokens from the §3 pass, and the API key field shows a masked value. While the
+tokens from the §3 pass. The API key field shows a masked value. While the
 session is open, the console shows real values.
 
 | Event | Effect |
@@ -162,16 +162,16 @@ session is open, the console shows real values.
 - Expiry closes display only. The file key stays unlocked, because the app must
   read its own files. An expiry is not a data lock, and the UI must not say one.
 - The mask must come from the render path. The transcript uses a virtualized
-  scroller, so a mask applied to the document alone would show a real value
-  again when that row scrolls back into view.
+  scroller. A mask on the document alone would show a real value again when the
+  row scrolls back into view.
 - The agent cannot open, extend, or close a session. A passkey answers a
   physical-presence question, and the agent has no answer to give. Contrast
   `delevate`, which the agent may call, because the agent can finish the work
   that needed elevation.
 - The app logs one line per session event, with the reason it closed.
-- `CheckAvailabilityAsync` reports a machine with no passkey configured. There
-  the app keeps `blur` behavior, allows click-to-reveal, and states in the
-  Privacy section that no passkey check runs on this machine.
+- `CheckAvailabilityAsync` reports a machine with no passkey configured. On such
+  a machine the app keeps `blur` behavior, and allows click-to-reveal. The
+  Privacy section states that no passkey check runs on this machine.
 
 ## 5. Workspaces
 
@@ -289,9 +289,9 @@ three items depend on a profile.
 - [x] Detokenize runs at display, and at tool and action execute. A tool receives
       real values, so its output needs no detokenize pass.
 - [x] A repair pass fixes mangled tokens by fuzzy match on `⟦…⟧` shapes.
-- [ ] The entity registry stores the values that profiles seed, and it grows by
-      confirmation from layer-1 and layer-3 hits. Encryption at rest covers that
-      registry.
+- [ ] The entity registry stores the values that profiles seed. The registry
+      grows by confirmation from layer-1 and layer-3 hits. Encryption at rest
+      covers that registry.
 - [ ] Provenance marks sensitive-path reads, UIA field names, and banking
       origins. The harness blocks password-manager clipboard reads.
 - [ ] Each class has its own toggle, and a disclose-once override exists.
@@ -303,8 +303,8 @@ three items depend on a profile.
       threshold. Unset or unchecked means the exact rules alone.
 - [x] The client posts one `noul` question per span to `POST {base}/v1/systemone`.
       A non-loopback URL needs your confirmation before the first span leaves.
-- [x] Setup probes one benign span and one credential span, and reports a server
-      whose two answers both land at or above 0.8 as unusable.
+- [x] Setup probes one benign span and one credential span. Setup calls a server
+      unusable when both answers land at or above 0.8.
 - [ ] An unreachable scorer shows in the console. Today the log carries one
       `GATE:` line that names the failing address.
 - **Accept:** a checked box produces the same tokenized request on a local
@@ -312,8 +312,8 @@ three items depend on a profile.
   and an email. A registry-seeded account number with no checksum also leaves
   tokenized. That turn renders correctly on return. An unchecked box leaves the
   text unchanged. With a decision server configured, a private sentence that no
-  pattern matches still leaves tokenized; with no server, that same sentence
-  leaves unchanged.
+  pattern matches still leaves the machine tokenized. With no server, that
+  sentence leaves the machine unchanged.
 
 ### Phase B — Agent profiles (§1)
 
@@ -349,9 +349,9 @@ transcript holds real values.
 - [ ] The app logs one line per session event, with the reason it closed.
 - [ ] A profile holds a floor for each axis, and can raise either axis but never
       lower it.
-- **Accept:** a screenshot under `blur` contains zero sensitive values, a hidden
-  console shows masked values on the next summon until one Hello check passes,
-  and a provider set to `off` sends the real value.
+- **Accept:** a screenshot under `blur` contains zero sensitive values. A hidden
+  console shows masked values on the next summon until one Hello check passes. A
+  provider set to `off` sends the real value.
 
 ### Phase D — Agent-defined skills (§2)
 
@@ -387,8 +387,8 @@ transcript holds real values.
       writes the result back to the source application.
 - [ ] Voice input (needs A) adds push-to-talk on the summon hotkey, and
       speech-to-text is local only.
-- [ ] Scheduled delegation (needs D + E) binds an approved skill to a trigger
-      and runs that skill under its tier.
+- [ ] Scheduled delegation (needs D + E) binds an approved skill to a trigger.
+      The bound skill runs under its tier.
 
 Cross-cutting: every F capability respects the §3 and §4 boundary. Voice,
 embeddings, and selections leave the machine only when the redaction pass ran on
@@ -406,7 +406,7 @@ and its tier gate.
 - [ ] Deleting a conversation deletes its workspaces, and `trim_dir` becomes a
       backstop instead of the only lifetime rule.
 - **Accept:** a task that writes ten files leaves ten files in one folder that
-  the console links, while `git status` and `%USERPROFILE%` stay clean.
+  the console links. `git status` and `%USERPROFILE%` stay clean.
 
 ## Non-goals
 

@@ -11,8 +11,8 @@ use crate::route::looks_like_unexecuted_intent;
 use crate::settings;
 use crate::tooldefs::{agent_tools, to_tool_defs};
 
-/// The tool loop has no turn cap, so a stop request is the only bound on
-/// it. The loop checks this flag between turns and between each tool call.
+/// The tool loop has no turn cap, so a stop request is the only bound on the
+/// loop.
 pub(crate) static CHAT_STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn chat_stop_requested() -> bool {
@@ -100,9 +100,9 @@ struct ChatParams {
     compact_at_percent: u8,
 }
 
-// Each parameter is one JSON field in the frontend IPC contract, so the
-// flat signature is required. ChatParams groups the fields for the
-// provider paths.
+// Each parameter maps to one JSON field of the frontend IPC contract, so the
+// command signature stays flat. ChatParams groups the fields for the provider
+// paths.
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub(crate) async fn chat_with_llm(
@@ -141,9 +141,6 @@ pub(crate) async fn chat_with_llm(
     }
 }
 
-/// The redaction pass for this run, or `None` when the provider's `Hide
-/// sensitive information` box is unchecked. The trigger is read here from the
-/// stored setting, so no caller can put a request on the wire without it.
 fn redactor(app: &tauri::AppHandle, provider: &str) -> Option<redact::Redactor> {
     let (hide, values) = settings::redaction_for(app, provider);
     if !hide {
@@ -156,7 +153,6 @@ fn redactor(app: &tauri::AppHandle, provider: &str) -> Option<redact::Redactor> 
     Some(red)
 }
 
-/// The decision server for this run, or `None` when the user left it off.
 struct Scorer {
     base: String,
     threshold: f64,
@@ -167,11 +163,8 @@ fn scorer(app: &tauri::AppHandle) -> Option<Scorer> {
     Some(Scorer { base, threshold })
 }
 
-/// Ask the server about each span this request carries for the first time, and
-/// replace a flagged span with one token. A server that fails leaves the exact
-/// rules in force, because the gate only advances detection and one unanswered
-/// question must not end a turn. A span the gate never asked about stays
-/// unscored, so the next turn asks again.
+/// The gate only adds detection, so one unanswered question must not end a
+/// turn.
 async fn gate(red: &mut redact::Redactor, scorer: &Scorer, spans: Vec<String>) {
     for span in spans {
         match decide::score(&scorer.base, &span).await {
@@ -188,11 +181,10 @@ async fn gate(red: &mut redact::Redactor, scorer: &Scorer, spans: Vec<String>) {
     }
 }
 
-/// The summarizer writes new text, and the brief rides in the system message,
-/// which the gate never scores. When the scorer clears the brief, First Mate
-/// folds the rows into it. A flagged brief stops the fold, because the rows that
-/// the fold would drop then reach the span gate as their own spans. A scorer
-/// outage allows the fold, because an outage must not break compaction.
+/// The summarizer writes new text, and First Mate puts that text in the system
+/// message, which the gate never scores. A flagged brief stops the fold, so the
+/// dropped rows reach the span gate as separate spans. An outage allows the fold,
+/// because an outage must not break compaction.
 async fn brief_clears_gate(
     red: &Option<redact::Redactor>,
     scorer: &Option<Scorer>,
@@ -214,8 +206,8 @@ async fn brief_clears_gate(
     }
 }
 
-/// The wire copy of the history. The stored transcript keeps real values, so
-/// the pass runs at this boundary and nowhere else.
+/// The stored transcript keeps real values, so the pass runs at this boundary
+/// and nowhere else.
 fn tokenize_chat(red: &mut redact::Redactor, msgs: &mut [lmkit::ChatMessage]) {
     for m in msgs.iter_mut() {
         if let Some(content) = m.content.as_mut() {
@@ -227,8 +219,7 @@ fn tokenize_chat(red: &mut redact::Redactor, msgs: &mut [lmkit::ChatMessage]) {
     }
 }
 
-/// What the console shows for one streamed delta. A token that straddles two
-/// chunks waits in `carry` for its close.
+/// A token that straddles two chunks waits in `carry` for its close.
 fn shown(red: &Option<redact::Redactor>, carry: &mut String, delta: &str) -> String {
     match red {
         Some(r) => r.detokenize_stream(carry, delta),
@@ -236,7 +227,7 @@ fn shown(red: &Option<redact::Redactor>, carry: &mut String, delta: &str) -> Str
     }
 }
 
-/// The chip event. A run that replaced nothing emits nothing.
+/// A run that replaced nothing emits nothing.
 fn emit_redacted(app: &tauri::AppHandle, red: &Option<redact::Redactor>) {
     let Some(r) = red else { return };
     let count = r.redacted_count();
@@ -276,15 +267,14 @@ fn system_prompt_with_skills(base: &str, loaded: &[String]) -> String {
 
 /// The brief rules are content, not code. They live in `prompts/COMPACT.md`,
 /// layered like `AGENTS.md`, so the memory policy is editable without a
-/// rebuild. With no copy at any layer, nothing instructs the summarizer.
-/// Folding is skipped. The oversized request goes out instead. The log
-/// records that choice.
+/// rebuild. With no copy at any layer, nothing instructs the summarizer. First
+/// Mate skips the fold, sends the oversized request, and logs that choice.
 fn brief_rules() -> Option<String> {
     crate::skills::prompt_content("COMPACT.md")
 }
 
-/// The window this run must fit, and who said so. The user's setting beats
-/// the endpoint's report. The endpoint's report beats the fallback.
+/// The first field is the window this run must fit. The second field names who
+/// set it.
 async fn resolve_window(
     provider: &str,
     base: &str,
@@ -301,7 +291,7 @@ async fn resolve_window(
     }
 }
 
-/// History rows as the wire messages the window is measured in.
+/// The window estimate counts these messages, not the stored rows.
 fn history_msgs(rows: &[HistoryItem]) -> Vec<serde_json::Value> {
     rows.iter()
         .map(|h| serde_json::json!({ "role": h.role, "content": h.content }))
@@ -332,9 +322,9 @@ fn plan_history(prior: &[HistoryItem], keep_budget: usize) -> (Option<String>, u
 /// The brief rules require the request as the first line. A summarizer cannot
 /// copy a line it was never shown. The in-run cut keeps the opening row on the
 /// wire, so the dropped middle lacks that line. The pre-run cut on a later fold
-/// sees only the previous brief. Without the pin, the request would be
-/// re-paraphrased on every fold until it drifts. Every fold is therefore handed
-/// the original text, not the last summary.
+/// sees only the previous brief. Without the pin, the summarizer rewrites the
+/// request on every fold until the line drifts. Every fold therefore gets the
+/// original text, not the last summary.
 fn pinned_opening(
     rows: &[serde_json::Value],
     drop_start: usize,
@@ -402,8 +392,8 @@ fn brief_transcript(
         };
         out.push_str(&format!("[{label}] {text}\n"));
     }
-    // The brief is bounded by its own request. Keep the opening (the task)
-    // and the tail (what is pending). Drop the middle.
+    // The transcript carries a size bound. Keep the opening (the task) and the
+    // tail (what is pending). Drop the middle.
     let max = 60_000;
     let count = out.chars().count();
     if count <= max {
@@ -504,8 +494,8 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
         _ => Provider::OpenAI, // openai / custom / any OpenAI-compatible endpoint
     };
 
-    // Google's base URL already carries its version segment (/v1beta); the
-    // others are rooted at bare hosts and take /v1.
+    // Google's base URL already carries its version segment (/v1beta). The other
+    // providers sit on bare hosts and take /v1.
     let config = if matches!(provider_enum, Provider::Google) {
         ProviderConfig::with_base_url(provider_enum, api_key, base, model)
     } else {
@@ -607,8 +597,8 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
     }
     history.push(ChatMessage::user(message));
 
-    // Tool results are remembered for this run only, so a repeat can be
-    // deduped or truncated.
+    // First Mate remembers tool results for one run, so a later turn can drop or
+    // shorten a repeat.
     let mut seen: HashMap<String, String> = HashMap::new();
     let mut loaded_skills: std::collections::HashSet<String> =
         loaded_skills.into_iter().collect();
@@ -621,10 +611,8 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
             return Ok("(stopped)".to_string());
         }
         let tools: Vec<ToolDefinition> = to_tool_defs(&active);
-        // The token map lives for one run, so the live history keeps real
-        // values and only the outbound copy carries handles. A handle stored in
-        // the live history reaches the transcript, and the next run's fresh map
-        // cannot restore it.
+        // A handle written into the live history reaches the transcript, and the
+        // next run's fresh map cannot restore that handle.
         let mut wire = history.clone();
         if let Some(r) = red.as_mut() {
             if let Some(s) = scorer.as_ref() {
@@ -906,9 +894,9 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
                 summary = Some(b);
                 kept_from = start + cut;
             }
-            // No brief means no cut. Dropping rows with nothing standing in
-            // for them would lose the task silently. An oversized request that
-            // the endpoint refuses is at least visible.
+            // No brief means no cut. Dropping rows with nothing in their place
+            // loses the task silently. The endpoint refuses an oversized request,
+            // and that refusal shows.
             Err(e) => log(&format!(
                 "COMPACT: summary call failed ({e}); sending the full history"
             )),
@@ -1035,8 +1023,6 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
                 }
             }
         }
-        // The token map lives for one run, so the live buffer keeps real values
-        // and only the outbound copy carries handles.
         let mut wire = msgs.clone();
         if let Some(r) = red.as_mut() {
             if let Some(s) = scorer.as_ref() {
@@ -1331,8 +1317,8 @@ mod tests {
         );
         assert!(t.contains("[tool] 338 entries"), "the folded rows follow it: {t}");
 
-        // The pre-run shape: the cut is a prefix. When it swallows the opening
-        // row, the dropped material already carries the instruction.
+        // The pre-run shape: the cut is a prefix. When the cut swallows the
+        // opening row, the dropped material already carries the instruction.
         let ledger = history_msgs(&[row("user", "count the fonts folder"), row("assistant", "did it")]);
         assert_eq!(pinned_opening(&ledger, 0, 1), None);
         assert_eq!(
@@ -1397,7 +1383,7 @@ mod tests {
         assert!(t.starts_with("Earlier brief"), "the old brief is folded in: {t}");
         assert!(t.contains("user wanted drivers"));
         assert!(t.contains("[user] open the drivers page"));
-        // The call names itself, so the result that follows is identifiable.
+        // The call names itself, so the later result carries that name.
         assert!(t.contains("[assistant run_command]"));
         assert!(t.contains("[tool] 0 entries"));
         assert!(t.contains("a screenshot was captured") && !t.contains("AAAA"));

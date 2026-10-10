@@ -1,6 +1,4 @@
 <script setup lang="ts">
-// First-run stepper for model setup and harness readiness. The parent
-// opens the stepper when no model is configured; the tray can reopen it.
 import { invoke } from "@tauri-apps/api/core";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
@@ -33,8 +31,8 @@ interface LlmSettings {
   base_url: string;
 }
 
-// The wizard posts a whole `Settings` object, so every field it does not show
-// must come from the stored copy, or the wizard erases it.
+// The wizard posts a whole `Settings` object, so a field the wizard does not
+// carry is erased.
 interface Settings {
   llm: LlmSettings;
   hide_sensitive: Record<string, boolean>;
@@ -98,9 +96,6 @@ const showBaseUrl = computed(
   () => !!currentSpec.value && (currentSpec.value.isLocal || proxy.value),
 );
 
-// A provider id with no stored entry shows the roster default. With no
-// provider selected, the checkbox shows the redacted state. An empty provider
-// id stores nothing, so settings.json never gains a blank key.
 const hideSensitiveDefault = computed(() => currentSpec.value?.hideSensitiveDefault ?? true);
 const hideSensitiveChecked = computed({
   get: () => hideSensitive.value[provider.value] ?? hideSensitiveDefault.value,
@@ -125,8 +120,7 @@ async function refreshModels() {
       baseUrl: baseUrl.value,
       apiKey: apiKey.value,
     });
-    // Preselect the first discovered model so the step is valid on
-    // arrival; the user may override.
+    // Preselect the first discovered model, so the step is valid on arrival.
     if (!model.value && models.value.length > 0) {
       model.value = models.value[0];
     }
@@ -184,8 +178,8 @@ async function installWinapp() {
   installing.value = true;
   try {
     await invoke<string>("install_winapp");
-    // The install announces progress in the ledger. Poll until the CLI
-    // answers.
+    // The install reports progress in the ledger, so the poll waits for the CLI
+    // to answer.
     poll = setInterval(async () => {
       await checkHarness();
       if (boot.value?.winapp) {

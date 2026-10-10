@@ -1,6 +1,4 @@
 //! Sensitive-info redaction. `docs/roadmap/REDACTION.md` is the design.
-//! The outbound pass replaces each detected value with a `⟦CLASS_N⟧` token,
-//! and detokenize runs at the harness boundaries.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
@@ -8,30 +6,23 @@ use std::sync::LazyLock;
 use regex::Regex;
 use sha2::{Digest, Sha256};
 
-/// A token opens with this character. A model that mangles a token still
-/// copies the pair, so the repair pass keys on it.
+/// A model that mangles a token still copies the pair.
 const OPEN: char = '⟦';
 const CLOSE: char = '⟧';
 
-/// A held fragment longer than this is prose, not a token. Without the cap, a
-/// model that emits one bare `⟦` holds the rest of its answer in the carry.
 const MAX_TOKEN_CHARS: usize = 48;
 
-/// A span shorter than this holds no fact for a decision server to judge, and
-/// the measured audit used the same floor.
+/// The measured audit used a 60-character floor.
 const MIN_SCORE_CHARS: usize = 60;
 
-/// One request scores at most this many spans, so a first turn over a large
-/// file cannot spend its whole latency budget on scoring.
+/// Each score costs one round trip, so the cap bounds request latency.
 const MAX_SPANS_PER_REQUEST: usize = 16;
 
-/// One `⟦…⟧` span, so a stray handle in tool arguments can be named.
 static RE_TOKEN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"⟦[^⟧]{1,48}⟧").unwrap());
 
-/// The key of the argument whose value carries a token, deepest first. The
-/// refusal names the key, because copying the handle back into the transcript
-/// gives the model another handle to reuse.
+/// The refusal names the key, because copying the handle back into the
+/// transcript gives the model another handle to reuse.
 pub(crate) fn stray_argument(args: &serde_json::Value) -> Option<String> {
     match args {
         serde_json::Value::Object(map) => map.iter().find_map(|(key, value)| {
@@ -55,7 +46,6 @@ fn has_token(value: &serde_json::Value) -> bool {
     }
 }
 
-/// A detected class. The console breakdown names this value.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum Class {
     Card,
@@ -69,17 +59,15 @@ pub(crate) enum Class {
     Email,
     Phone,
     UserPath,
-    /// A value the registry supplied, because no shape identifies it. A US
-    /// account number is 8 to 17 digits and is indistinguishable from an
+    /// A US account number is 8 to 17 digits and is indistinguishable from an
     /// order id.
     Entity,
-    /// A span a decision server flagged. The whole span leaves as one token,
-    /// because a probability carries no offset.
+    /// The token replaces the whole span, because a probability carries no
+    /// offset.
     Span,
 }
 
 impl Class {
-    /// The label inside a token: `IBAN` in `⟦IBAN_2⟧`.
     pub(crate) fn label(self) -> &'static str {
         match self {
             Class::Card => "CARD",
@@ -98,9 +86,9 @@ impl Class {
         }
     }
 
-    /// Detection order, lowest first. A span that two detectors claim goes to
-    /// the earlier class: an IBAN holds an 18-digit run that passes Luhn as an
-    /// Amex, and a JWT holds a payload that can hold an email.
+    /// A span that two detectors claim goes to the earlier class: an IBAN holds
+    /// an 18-digit run that passes Luhn as an Amex. A JWT holds a payload that
+    /// can hold an email.
     fn rank(self) -> u8 {
         match self {
             Class::Entity => 0,
@@ -136,8 +124,8 @@ impl Class {
     ];
 }
 
-/// ISO 3166-1 alpha-2. A BIC's country must be one of these, which is what
-/// separates `DEUTDEFF` from the word `CORRESPONDS`.
+/// ISO 3166-1 alpha-2. A BIC's country must be one of these codes. The country
+/// check separates `DEUTDEFF` from the word `CORRESPONDS`.
 const ISO_CC: &str = "AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ \
  BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE \
  DJ DK DM DO DZ EC EE EG ER ES ET FI FJ FK FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS \
@@ -151,8 +139,8 @@ fn is_country(cc: &str) -> bool {
     ISO_CC.split(' ').any(|c| c == cc)
 }
 
-/// IBAN lengths per country, from ISO 13616. An unlisted country has no
-/// length to check, so layer 1 refuses the match rather than guess.
+/// An unlisted country has no length to check, so layer 1 refuses the match
+/// rather than guess.
 fn iban_len(cc: &str) -> Option<usize> {
     const TABLE: &[(&str, usize)] = &[
         ("AD", 24), ("AE", 23), ("AL", 28), ("AT", 20), ("AZ", 28), ("BA", 20), ("BE", 16),
@@ -177,8 +165,8 @@ static RE_CARD: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\b(?:\d[ -]?){12,18}\d\b").unwrap());
 static RE_IBAN: LazyLock<Regex> = LazyLock::new(|| {
     // A printed IBAN uses groups of exactly four. A group of one to four would
-    // let the tail of the next word join the match, and the length check would
-    // then reject a real IBAN.
+    // let the tail of the next word join the match. The length check would then
+    // reject a real IBAN.
     Regex::new(
         r"(?i)\b[A-Z]{2}\d{2}(?:[A-Z0-9]{8,30}|(?: [A-Z0-9]{4}){1,6}(?: [A-Z0-9]{1,4})?)\b",
     )
@@ -215,8 +203,8 @@ static RE_PHONE_INTL: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\+\d{1,3}(?:[ .-]?\d){6,15}\b").unwrap());
 static RE_PHONE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\b\(?\d{3}\)?[ .-]\d{3}[ .-]\d{4}\b").unwrap());
-/// A path under the user-profile root. `docs/roadmap/REDACTION.md` names this
-/// root, because it holds mail stores, browser profiles, and credential files.
+/// `docs/roadmap/REDACTION.md` names this root, because the root holds mail
+/// stores, browser profiles, and credential files.
 static RE_USER_PATH: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?i)\b[A-Z]:\\+Users\\+[^\\/:*?"<>|\r\n]+(?:\\+[^\\/:*?"<>|\r\n]+)*"#).unwrap()
 });
@@ -246,7 +234,7 @@ fn luhn(digits: &str) -> bool {
 }
 
 /// A Luhn-valid digit run outside these ranges is an order id or a tracking
-/// number, so layer 1 leaves it in the clear.
+/// number.
 fn known_bin(digits: &str) -> bool {
     let p2: u32 = digits[..2].parse().unwrap_or(99);
     let p3: u32 = digits[..3].parse().unwrap_or(999);
@@ -298,7 +286,7 @@ fn aba_ok(digits: &str) -> bool {
 }
 
 /// SSN validity is positional: the area, group, and serial each rule out
-/// values that no issued card uses.
+/// values that no issued number uses.
 fn ssn_ok(ssn: &str) -> bool {
     let area: u32 = ssn[..3].parse().unwrap_or(999);
     let group: u32 = ssn[4..6].parse().unwrap_or(99);
@@ -336,8 +324,8 @@ fn base58_check_ok(s: &str) -> bool {
     &digest[..4] == sum
 }
 
-/// BIP 173 `polymod`. The five generators are the spec's, and a wrong one
-/// rejects every real address.
+/// The five generators come from BIP 173. A wrong generator rejects every real
+/// address.
 fn polymod(values: &[u8]) -> u32 {
     const GEN: [u32; 5] = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3];
     let mut chk = 1u32;
@@ -379,9 +367,8 @@ fn bech32_ok(s: &str) -> bool {
     chk == 1 || chk == 0x2bc8_30a3
 }
 
-/// ISO 9362 allows 8 or 11 characters. A 9- or 10-character all-caps run is
-/// not a BIC, which is what keeps most all-caps English words out of this
-/// class.
+/// ISO 9362 allows 8 or 11 characters. A 9- or 10-character all-caps run is not
+/// a BIC.
 fn swift_ok(token: &str) -> bool {
     (token.len() == 8 || token.len() == 11) && is_country(&token[4..6])
 }
@@ -392,20 +379,20 @@ struct Hit {
     class: Class,
 }
 
-/// The token map for one run. Nothing here is persisted: a map on disk is a
-/// key that opens every token in every earlier conversation.
+/// First Mate never writes these maps to disk: a map on disk is a key that opens
+/// every token in every earlier conversation.
 #[derive(Default)]
 pub(crate) struct Redactor {
     /// `⟦EMAIL_1⟧` → the real value.
     values: HashMap<String, String>,
-    /// The real value → its token, so one value keeps one token across a run.
+    /// The real value → its token.
     tokens: HashMap<String, String>,
     /// A normalized token interior → its token, for the repair pass.
     repairs: HashMap<String, String>,
     counters: HashMap<Class, usize>,
     registry: Vec<String>,
-    /// Spans the decision server already scored. The agent loop re-sends the
-    /// whole window on every tool turn, and a rescore repeats one audit.
+    /// The agent loop re-sends the whole window on every tool turn. A rescore
+    /// repeats one audit.
     scored: HashSet<String>,
 }
 
@@ -414,18 +401,15 @@ impl Redactor {
         Self::default()
     }
 
-    /// Layer 2: a value the user declared sensitive. It has no shape, so only
-    /// this exact string matches.
+    /// A declared value has no shape, so only an exact match finds the value.
     pub(crate) fn seed(&mut self, value: &str) {
         if value.chars().count() >= 4 && !self.registry.iter().any(|v| v == value) {
             self.registry.push(value.to_string());
         }
     }
 
-    /// The strings one JSON request carries that no server has scored, newest
-    /// message first. A system message is authored content, so the gate scores
-    /// none of it. A false positive on the instruction set replaces that whole
-    /// set with one token, which breaks the run and protects nothing.
+    /// A false positive on a system message replaces the instruction set with
+    /// one token, which breaks the run.
     pub(crate) fn pending(&self, msgs: &mut [serde_json::Value]) -> Vec<String> {
         let mut found: Vec<String> = Vec::new();
         for msg in msgs.iter_mut().rev() {
@@ -437,15 +421,10 @@ impl Redactor {
         self.budget(found)
     }
 
-    /// The same choice for a caller that holds plain strings, because the
-    /// Anthropic and Gemini request is not JSON at this point.
     pub(crate) fn pending_from<'a>(&self, spans: impl Iterator<Item = &'a str>) -> Vec<String> {
         self.budget(spans.map(str::to_string).collect())
     }
 
-    /// The shared choice: long enough to judge, never scored before, and at most
-    /// `MAX_SPANS_PER_REQUEST`. Caller order is priority order, because the
-    /// message the user just typed must not lose the budget to older history.
     fn budget(&self, found: Vec<String>) -> Vec<String> {
         let mut kept: Vec<String> = found
             .into_iter()
@@ -455,8 +434,6 @@ impl Redactor {
         kept
     }
 
-    /// Record one answer. A span at or above `threshold` becomes one token, and a
-    /// scored span is never scored again. The return says whether the span left.
     pub(crate) fn record_score(&mut self, span: &str, score: f64, threshold: f64) -> bool {
         self.scored.insert(span.to_string());
         if score >= threshold {
@@ -482,8 +459,8 @@ impl Redactor {
         out
     }
 
-    /// Replace every token with its value. A token this map never issued stays
-    /// as written, because inventing a value is worse than showing a token.
+    /// A token this map never issued stays as written, because inventing a
+    /// value is worse than showing a token.
     pub(crate) fn detokenize(&self, text: &str) -> String {
         if !text.contains(OPEN) {
             return text.to_string();
@@ -510,8 +487,6 @@ impl Redactor {
         out
     }
 
-    /// Detokenize a stream piece. A token can straddle two SSE chunks, so an
-    /// unterminated `⟦…` waits in `carry` for its close.
     pub(crate) fn detokenize_stream(&self, carry: &mut String, chunk: &str) -> String {
         let mut buf = std::mem::take(carry);
         buf.push_str(chunk);
@@ -529,15 +504,14 @@ impl Redactor {
         head
     }
 
-    /// Emit what a stream left held. A run that ends inside a token shows the
-    /// token, because no value can be guessed for it.
+    /// A run that ends inside a token shows the token, because the map holds no
+    /// value for that token.
     pub(crate) fn flush(&self, carry: &mut String) -> String {
         let out = self.detokenize(carry);
         carry.clear();
         out
     }
 
-    /// The chip breakdown. It names classes and counts, and never a value.
     pub(crate) fn breakdown(&self) -> Vec<(&'static str, usize)> {
         let mut rows: Vec<(&'static str, usize)> = Class::ALL
             .iter()
@@ -556,16 +530,13 @@ impl Redactor {
         self.counters.values().sum()
     }
 
-    /// Tokenize every string in the `messages` array of one request: text
-    /// parts, tool call arguments, and tool results.
     pub(crate) fn tokenize_msgs(&mut self, msgs: &mut [serde_json::Value]) {
         for msg in msgs.iter_mut() {
             walk_strings(msg, &mut |s: &mut String| *s = self.tokenize(s));
         }
     }
 
-    /// Detokenize tool call arguments at execute, so the tool sees the real
-    /// value while the provider never sent it.
+    /// Detokenize at execute, so the tool sees the value the provider never saw.
     pub(crate) fn detokenize_json(&self, value: &mut serde_json::Value) {
         walk_strings(value, &mut |s: &mut String| *s = self.detokenize(s));
     }
@@ -736,9 +707,9 @@ fn walk_strings(value: &mut serde_json::Value, f: &mut dyn FnMut(&mut String)) {
         }
         serde_json::Value::Object(entries) => {
             for (key, item) in entries.iter_mut() {
-                // A screenshot part holds base64, which carries no user value
-                // the detectors could find. Running 12 detectors over 600 KB
-                // on every turn costs more than it protects.
+                // A screenshot part holds base64, and no detector finds a value
+                // in base64. Running 12 detectors over 600 KB on every turn costs
+                // more than the check protects.
                 if key == "image_url" {
                     continue;
                 }

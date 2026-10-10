@@ -114,9 +114,6 @@ fn read_text(path: &std::path::Path) -> tauri::Result<String> {
     Ok(String::from_utf8_lossy(&plain).to_string())
 }
 
-/// Read the stored settings. A missing or unreadable file yields defaults,
-/// and `Settings::hide_sensitive_for` redacts an unknown provider, so a broken
-/// settings file fails toward redaction.
 pub(crate) fn load(app: &tauri::AppHandle) -> tauri::Result<Settings> {
     let path = settings_file(app)?;
     if path.exists() {
@@ -147,8 +144,6 @@ fn registry_file(app: &tauri::AppHandle) -> tauri::Result<std::path::PathBuf> {
     Ok(app.path().app_config_dir()?.join("entity_registry.json"))
 }
 
-/// A missing or unreadable registry leaves layer 2 empty, so a broken file
-/// costs one detection class and never a chat turn.
 fn parse_registry(contents: &str) -> Vec<String> {
     serde_json::from_str(contents).unwrap_or_default()
 }
@@ -206,8 +201,8 @@ fn host_of(url: &str) -> String {
 }
 
 /// The setup probe: two spans, no real value, and the two probabilities that
-/// show the operating points. A server that floors its answer is refused,
-/// because a floor flags every span.
+/// show the operating points. The probe refuses a server that floors its
+/// answer, because a floor flags every span.
 #[tauri::command]
 pub(crate) async fn probe_decision_server(url: String) -> Result<serde_json::Value, String> {
     let probe = crate::decide::probe(url.trim()).await?;

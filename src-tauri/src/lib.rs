@@ -95,7 +95,7 @@ pub fn run() {
             trim_dir(&fm_tmp_dir(), 50);
             trim_dir(&fm_out_dir(), 50);
             // The winapp skill drives the desktop through the winapp CLI
-            // (microsoft/winappCli). This probe only detects the CLI.
+            // (microsoft/winappCli).
             // Installing software is the user's decision, taken in the Setup
             // wizard, which offers the unattended winget command on demand.
             tauri::async_runtime::spawn(async {
@@ -112,14 +112,12 @@ pub fn run() {
                 MenuItem::with_id(app, "setup", "Setup Wizard", true, None::<&str>)?;
             let quit_item =
                 MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            // update.rs enables and renames the item when the background
-            // check finds an update.
+            // When the background check finds an update, update.rs enables and
+            // renames the item.
             let update_item = MenuItem::with_id(app, "update", "Update…", false, None::<&str>)?;
             app.manage(update::UpdateItem(update_item.clone()));
             let menu = Menu::with_items(app, &[&toggle_item, &setup_item, &settings_item, &update_item, &quit_item])?;
 
-            // The tray icon is a pre-rendered anchor glyph (icons/tray.png,
-            // Segoe UI Emoji), not the default Tauri icon.
             let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))
                 .unwrap_or_else(|_| app.default_window_icon().unwrap().clone());
             TrayIconBuilder::new()
