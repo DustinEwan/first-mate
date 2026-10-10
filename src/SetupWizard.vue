@@ -33,6 +33,7 @@ const provider = ref("");
 const baseUrl = ref("");
 const apiKey = ref("");
 const model = ref("");
+const hideSensitive = ref<Partial<Record<string, boolean>>>({});
 const models = ref<string[]>([]);
 const modelStatus = ref("");
 
@@ -45,6 +46,7 @@ interface ProviderSpec {
   keyHint: string;
   keyOptional: boolean;
   isLocal: boolean;
+  hideSensitiveDefault: boolean;
 }
 
 const providerSpecs = ref<ProviderSpec[]>([]);
@@ -81,6 +83,17 @@ function onProxyChange(checked: boolean) {
 const showBaseUrl = computed(
   () => !!currentSpec.value && (currentSpec.value.isLocal || proxy.value),
 );
+
+// A provider id with no stored entry shows the roster default. With no
+// provider selected, the checkbox shows the redacted state. An empty provider
+// id stores nothing, so settings.json never gains a blank key.
+const hideSensitiveDefault = computed(() => currentSpec.value?.hideSensitiveDefault ?? true);
+const hideSensitiveChecked = computed({
+  get: () => hideSensitive.value[provider.value] ?? hideSensitiveDefault.value,
+  set: (on: boolean) => {
+    if (provider.value) hideSensitive.value[provider.value] = on;
+  },
+});
 
 function modelOptions() {
   const opts = models.value.map((m) => ({ label: m, value: m }));
@@ -128,6 +141,7 @@ async function saveModel() {
       api_key: apiKey.value,
       base_url: baseUrl.value,
     },
+    hide_sensitive: hideSensitive.value,
   };
   await invoke("save_settings", { settings });
 }
@@ -178,11 +192,15 @@ async function nextFromModel() {
 
 onMounted(async () => {
   hotkey.value = await invoke<string>("get_hotkey");
-  const [ps, s] = await Promise.all([providersReady, invoke<{ llm: LlmSettings }>("get_settings")]);
+  const [ps, s] = await Promise.all([
+    providersReady,
+    invoke<{ llm: LlmSettings; hide_sensitive: Record<string, boolean> }>("get_settings"),
+  ]);
   provider.value = s.llm.provider;
   baseUrl.value = s.llm.base_url;
   apiKey.value = s.llm.api_key;
   model.value = s.llm.model;
+  hideSensitive.value = s.hide_sensitive;
   const spec = ps.find((p) => p.id === s.llm.provider);
   proxy.value = !!spec && !spec.isLocal && s.llm.base_url !== "" && s.llm.base_url !== spec.base;
   if (provider.value && baseUrl.value) refreshModels();
@@ -252,6 +270,15 @@ onBeforeUnmount(() => {
                   &#8635; refresh
                 </n-button>
               </div>
+            </n-form-item>
+            <n-form-item :show-label="false">
+              <n-checkbox v-model:checked="hideSensitiveChecked">
+                Hide sensitive information
+              </n-checkbox>
+              <template #feedback>
+                Replaces card numbers, account numbers, credentials, and file paths with
+                placeholders before the request leaves this machine.
+              </template>
             </n-form-item>
           </n-form>
           <div v-if="modelStatus" class="status">{{ modelStatus }}</div>

@@ -32,6 +32,7 @@ const model = ref("");
 // Nullable because the input can be cleared. A cleared input saves the field's default.
 const contextWindow = ref<number | null>(0);
 const compactAtPercent = ref<number | null>(85);
+const hideSensitive = ref<Partial<Record<string, boolean>>>({});
 const models = ref<string[]>([]);
 const status = ref("");
 
@@ -44,6 +45,7 @@ interface ProviderSpec {
   keyHint: string;
   keyOptional: boolean;
   isLocal: boolean;
+  hideSensitiveDefault: boolean;
 }
 
 const providerSpecs = ref<ProviderSpec[]>([]);
@@ -55,6 +57,17 @@ const currentSpec = computed(() => providerSpecs.value.find((p) => p.id === prov
 const showBaseUrl = computed(
   () => !!currentSpec.value && (currentSpec.value.isLocal || proxy.value),
 );
+
+// A provider id with no stored entry shows the roster default. With no
+// provider selected, the checkbox shows the redacted state. An empty provider
+// id stores nothing, so settings.json never gains a blank key.
+const hideSensitiveDefault = computed(() => currentSpec.value?.hideSensitiveDefault ?? true);
+const hideSensitiveChecked = computed({
+  get: () => hideSensitive.value[provider.value] ?? hideSensitiveDefault.value,
+  set: (on: boolean) => {
+    if (provider.value) hideSensitive.value[provider.value] = on;
+  },
+});
 
 // Only the select calls this, so loading saved settings never overwrites
 // a custom base URL.
@@ -85,7 +98,10 @@ function modelOptions() {
 // non-default saved endpoint means Proxy was on.
 Promise.all([
   invoke<ProviderSpec[]>("list_providers"),
-  invoke<{ llm: LlmSettings }>("get_settings"),
+  invoke<{
+    llm: LlmSettings;
+    hide_sensitive: Record<string, boolean>;
+  }>("get_settings"),
 ]).then(([ps, s]) => {
   providerSpecs.value = ps;
   providerOptions.value = [
@@ -98,6 +114,7 @@ Promise.all([
   model.value = s.llm.model;
   contextWindow.value = s.llm.context_window ?? 0;
   compactAtPercent.value = s.llm.compact_at_percent ?? 85;
+  hideSensitive.value = s.hide_sensitive;
   const spec = ps.find((p) => p.id === s.llm.provider);
   proxy.value = !!spec && !spec.isLocal && s.llm.base_url !== "" && s.llm.base_url !== spec.base;
 });
@@ -127,6 +144,7 @@ async function save() {
       context_window: contextWindow.value ?? 0,
       compact_at_percent: compactAtPercent.value ?? 85,
     },
+    hide_sensitive: hideSensitive.value,
   };
   try {
     await invoke("save_settings", { settings });
@@ -201,6 +219,15 @@ function closeWindow() {
               />
               <n-button size="small" secondary @click="refreshModels"> &#8635; refresh </n-button>
             </n-space>
+          </n-form-item>
+          <n-form-item :show-label="false">
+            <n-checkbox v-model:checked="hideSensitiveChecked">
+              Hide sensitive information
+            </n-checkbox>
+            <template #feedback>
+              Replaces card numbers, account numbers, credentials, and file paths with placeholders
+              before the request leaves this machine.
+            </template>
           </n-form-item>
           <n-form-item label="Context window (tokens)">
             <n-input-number v-model:value="contextWindow" :min="0" :show-button="false" />

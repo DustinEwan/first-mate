@@ -3,7 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { ref, onMounted, watch, nextTick } from "vue";
-import { NConfigProvider, NInput, darkTheme } from "naive-ui";
+import { NConfigProvider, NInput, NPopover, darkTheme } from "naive-ui";
 import { DynamicScroller, DynamicScrollerItem } from "vue-virtual-scroller";
 import { Marked } from "marked";
 import { markedHighlight } from "marked-highlight";
@@ -85,6 +85,13 @@ interface ToolReport {
   body?: { kind: string; text: string };
 }
 
+// One redaction pass summary. The payload carries class labels and
+// counts, never a redacted value.
+interface RedactReport {
+  count: number;
+  classes: [string, number][];
+}
+
 interface Msg {
   id: number;
   text: string;
@@ -95,6 +102,8 @@ interface Msg {
   tool?: ToolReport;
   // View-only: a reopened conversation shows the divider without a count.
   folded?: number;
+  // View-only: a reopened conversation has no chip.
+  redact?: RedactReport;
 }
 
 const TOOL_GLYPH: Record<string, string> = {
@@ -211,6 +220,7 @@ const scrollerRef = ref();
 const isThinking = ref(false);
 const inputRef = ref<HTMLElement>();
 let liveMsgId = -1;
+let pendingRedact: RedactReport | undefined;
 const spinnerChar = ref("⠋");
 
 interface ConvInfo {
@@ -447,6 +457,12 @@ onMounted(() => {
   listen<{ summary: string; tokensBefore: number; dropped: number }>("compact", (event) => {
     addMsg(event.payload.summary, "summary", { folded: event.payload.dropped });
   });
+  // The redaction pass reports once per run, before the run's final
+  // commit. Chunks still arrive after it and rebuild the live row.
+  // submit() attaches the payload when it commits the final message.
+  listen<RedactReport>("redact", (event) => {
+    pendingRedact = event.payload;
+  });
 });
 
 const systemPromptBase = ref("");
@@ -523,6 +539,7 @@ async function submit() {
 
   isThinking.value = true;
   liveMsgId = -1;
+  pendingRedact = undefined;
 
   try {
     const final = await invoke<string>("chat_with_llm", {
@@ -539,8 +556,11 @@ async function submit() {
       compactAtPercent: llmSettings.compact_at_percent ?? 85,
     });
     if (liveMsgId < 0) {
-      if (final.trim()) addMsg(final, "assistant");
+      if (final.trim()) addMsg(final, "assistant", { redact: pendingRedact });
       else addMsg("(no response)", "dim");
+    } else if (pendingRedact) {
+      const idx = messages.value.findIndex((m) => m.id === liveMsgId);
+      if (idx >= 0) messages.value[idx] = { ...messages.value[idx], redact: pendingRedact };
     }
   } catch (e) {
     const msg = typeof e === "string" ? e : e && e.message ? e.message : String(e);
@@ -551,6 +571,7 @@ async function submit() {
   } finally {
     isThinking.value = false;
     liveMsgId = -1;
+    pendingRedact = undefined;
     persistConversation();
   }
 }
@@ -705,6 +726,20 @@ window.addEventListener("keydown", (e) => {
                   <pre v-if="openSummaries.has(item.id)" class="summary-body">{{ item.text }}</pre>
                 </div>
                 <div v-else class="msg" :class="item.cls">{{ item.text }}</div>
+                <div v-if="item.redact" class="redact-row">
+                  <n-popover trigger="click" placement="bottom-start">
+                    <template #trigger>
+                      <button class="redact-chip">Redacted {{ item.redact.count }} items</button>
+                    </template>
+                    <div
+                      v-for="[label, n] in item.redact.classes"
+                      :key="label"
+                      class="redact-class"
+                    >
+                      {{ label }} — {{ n }}
+                    </div>
+                  </n-popover>
+                </div>
               </DynamicScrollerItem>
             </template>
           </DynamicScroller>
@@ -770,3 +805,28 @@ window.addEventListener("keydown", (e) => {
     </div>
   </n-config-provider>
 </template>
+
+<style scoped>
+/* A status marker, not a call to action: dim gray, quiet border. */
+.redact-row {
+  padding: 0 12px 12px;
+}
+.redact-chip {
+  padding: 1px 8px;
+  border: 1px solid #2c2c31;
+  border-radius: 4px;
+  background: none;
+  color: #8a8f98;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.redact-chip:hover {
+  color: #c9ced6;
+}
+.redact-class {
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+</style>
