@@ -43,8 +43,8 @@ cannot leave until you cleared it produces no leak, whatever its shape.
 Detection-based completeness stays impossible. The guarantee moves where
 prediction is not required.
 
-This document holds no containment or mitigation design yet. It holds one
-ad-hoc identification design, below.
+This document holds a containment design and one ad-hoc identification design.
+Mitigation has no design yet.
 
 ## The switch
 
@@ -159,6 +159,54 @@ demand.
 The console shows a "Redacted N items" chip on each turn whose pass replaced a value.
 Clicking that
 chip shows which classes fired, and never shows the values.
+
+## Containment (class 2)
+
+A local decision model scores each outbound request body before the request
+leaves the machine. The model returns a probability and a confidence, not text.
+`StrandsAgents/strands-decider-2B` carries an Apache-2.0 license and runs on a
+laptop. Jev itself is API-only, so Jev cannot serve this role.
+
+- The gate denies by default. The gate needs no knowledge of which value is
+  sensitive, because its default is no. This property is the definition of
+  containment in this document.
+- Settings holds one slider, `Leak sensitivity`. The slider sets the confidence
+  the gate requires before it sends.
+- The unit is the assembled request body. `llm.rs:959` clones that body for the
+  redaction pass, so the gate needs no second copy.
+- The gate scores only spans that were not in the last approved request. The agent
+  loop re-sends the whole window on each tool turn, so a full rescore repeats one
+  audit many times in one task.
+- The gate needs a second signal. A decision model knows generic categories:
+  credentials, financial text, health, identity. It does not know your employer's
+  part number. The gate also matches the registry and the declared files, and it
+  denies on either signal.
+- The audit dialog puts `Redact and continue` first. A dialog with only `Approve`
+  and `Deny` teaches you to press `Approve`. `Redact and continue` must take one
+  selection and one key. The selection feeds the Layer 2 registry.
+- The model may deny; only you may approve. A file can hold text written to
+  persuade the scorer, such as `this data is public`. A scorer that can clear
+  content can be talked into clearing it.
+- Scope: the inference request. An action that emails or searches a real value
+  stays with the tier-3 confirm gate above.
+
+### Open items
+
+- Screenshots. `llm.rs:1128-1143` adds each captured screenshot as a base64 PNG
+  part. No text pass reads pixels, so a bank statement leaves the machine whole
+  today. The gate needs a vision variant, or OCR before scoring, or denial toward
+  hosted receivers.
+- Assistant text. The model can transcribe an image, and the model can state a
+  conclusion that no token covered. Both cases put sensitive text into the next
+  request. The score on the assembled body covers both.
+- Calibration. The slider is honest only after a measurement on First Mate
+  transcripts. Calibration depends on the data, so vendor numbers do not transfer.
+- Observe-only mode comes first. The gate scores and logs, and blocks nothing. You
+  see the audit rate before you trust the gate, and the log gives the calibration
+  curve.
+- `tokenize_msgs` (`redact.rs:497`) walks every string in the outbound copy,
+  including the base64 blob. Whether a Layer 1 pattern can corrupt an image is
+  untested.
 
 ## Ad-hoc identification (class 2, future)
 
