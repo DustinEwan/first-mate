@@ -21,7 +21,7 @@ sends every tool on every task. That agent is mediocre at everything.
 **Design sketch.**
 
 - A profile is `{name, system_prompt, model_binding, skill_allowlist,
-  tier_default, privacy_level}` stored under `~/.firstmate/profiles/*.toml`.
+  tier_default, privacy_floor}` stored under `~/.firstmate/profiles/*.toml`.
 - The existing per-conversation system prompt resolution
   (`skills::get_system_prompt`) becomes profile-scoped.
 - The console header shows a profile switcher, and `use profile <name>` is a
@@ -130,29 +130,36 @@ design: `docs/roadmap/REDACTION.md`.
 and that provider's switch states whether redaction runs. §3 decides what is
 worth protecting on disk instead.
 
-## 5. Privacy level — one slider over §3–4
+## 5. Privacy — two axes, one Settings section
 
-§3, §4, and screen rendering are one user-facing setting, not three separate
-controls:
+The transit pass and the screen answer different threats, so the product exposes
+two controls, not one ladder. A receiver sees one provider's text. A reader
+behind the user sees every provider's text. The Settings UI shows both controls
+under a `Privacy` section, away from the provider and model fields.
 
-| Level | Posture | Threat it answers |
-| --- | --- | --- |
-| **L0 — local encryption only** | §3 sealing is on. First Mate obfuscates nothing in transit or on screen. | A stolen disk, or another account on the machine |
-| **L1 — + obfuscation to untrusted receivers** | §4 round-trip is on wherever the provider's switch is on. The chat log stores _redacted_ text. | Exposure at the receiver |
-| **L2 — + hidden on screen** | The console renders obfuscated text (tokens or blurs), and each item reveals on click. | Someone reading the screen over the user's shoulder, screenshots, screen sharing |
-| **L3 — + reveal requires passkey** | Every reveal is a Windows Hello event, and each reveal writes an audit line. Screenshots capture only obfuscated text. | An unattended machine |
+| Control | Scope | Levels | Threat it answers |
+| --- | --- | --- | --- |
+| **Hide from the LLM** | per provider | `off`, `exact`, `wide` | A receiver the user does not trust |
+| **Hide on screen** | global | `show`, `blur`, `hello` | A reader of the screen, screenshots, screen sharing |
 
-- The trade is explicit at L2. Click-to-reveal needs the real text on disk, so
-  L2 and L3 store that real text sealed (§3). L1 stores only redacted text.
-  L1 therefore stores less real text on disk, and L2/L3 obfuscate at _render_
-  time instead.
-- The privacy level is a global default. A profile can raise that level but
-  never lower it (`profile.privacy_level >= global`).
-- §4 runs wherever the provider's `Hide sensitive information` switch is on.
-  A LAN endpoint is a recipient like any other. L2 and above still apply to
-  rendering, because the L2 threat is a reader of the screen, not a receiver.
-- An L3 reveal is per item, not per session. One Hello prompt per reveal is the
-  point.
+- `exact` runs §4 Layers 1–2. It redacts a value with a checksum, or a value in
+  the entity registry. `wide` adds Layer 4 context, which also tokenizes a
+  benign id that sits near a trigger word. `off` sends real values. A receiver
+  the user owns is the only case for `off`.
+- `blur` renders tokens or blurs in the console, and each item reveals on click.
+  `hello` makes each reveal a Windows Hello event and writes one audit line.
+  `show` is today's behavior.
+- One dependency crosses the two axes, and it is disk, not threat.
+  Click-to-reveal needs the real value on disk. §4 keeps real values in the
+  stored transcript today. `blur` and `hello` therefore need §3 sealing first,
+  because that log then holds real values.
+- A profile may raise either axis. A profile may not lower either axis.
+- Before `wide` ships, the entity registry must ask before it grows. A false
+  positive that enters the registry matches that value everywhere, forever.
+  `docs/roadmap/REDACTION.md` "Detection layers" holds the layer detail.
+- A later control may store only redacted text. That control removes the real
+  value from disk, so it also removes click-to-reveal. The UI must state that
+  loss beside the control.
 
 ## 6. Workspaces
 
@@ -288,7 +295,7 @@ while conversations are still plaintext.
 
 ### Phase B — Agent profiles (§1)
 
-- [ ] `profiles.rs` defines the TOML schema `{name, system_prompt, model_binding, skill_allowlist, tier_default, privacy_level}`.
+- [ ] `profiles.rs` defines the TOML schema `{name, system_prompt, model_binding, skill_allowlist, tier_default, privacy_floor}`.
 - [ ] `get_system_prompt` becomes profile-scoped, and conversations record
       their profile.
 - [ ] The built-in profiles are `general` and `sysadmin`, and `sysadmin`
@@ -317,16 +324,25 @@ while conversations are still plaintext.
 - **Accept:** a sealed file is ciphertext to a second Windows account on the
   same disk. The same file opens with one Hello prompt.
 
-### Phase D — Privacy slider (§5)
+### Phase D — Privacy section (§5)
 
-- [ ] `privacy_level` is a global setting, and a profile can raise that level
-      but never lower it.
-- [ ] L1 turns §4 on, and the chat log stores redacted text.
-- [ ] L2 obfuscates at render time and adds click-to-reveal, and the log stores
-      the real text sealed.
-- [ ] L3 gates each reveal behind Hello and writes a reveal audit line.
-- **Accept:** a screenshot at L2 contains zero sensitive values, and a reveal
-  works with one Hello.
+The screen axis needs Phase C first, because the transcript holds real values.
+
+- [ ] The Settings UI gains a `Privacy` section, and the `Hide sensitive
+      information` checkbox leaves the provider form.
+- [ ] The `hide_sensitive` map of booleans becomes a map to `off`, `exact`, or
+      `wide`. `true` migrates to `exact`, `false` migrates to `off`, and a
+      provider outside the roster still lands on `exact`.
+- [ ] The roster key `hideSensitiveDefault` becomes `redactionDefault`, and the
+      three on-machine rows keep `off`.
+- [ ] The registry asks once before it grows, and that gate opens `wide`.
+- [ ] The screen axis adds `blur`: tokens in the console, one click reveals one
+      item, and the log stores the real text sealed under §3.
+- [ ] `hello` gates each reveal behind Windows Hello and writes one audit line.
+- [ ] A profile holds a floor for each axis, and can raise either axis but never
+      lower it.
+- **Accept:** a screenshot under `blur` contains zero sensitive values, one Hello
+  opens one item, and a provider set to `off` sends the real value.
 
 ### Phase E — Agent-defined skills (§2)
 

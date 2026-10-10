@@ -31,8 +31,8 @@ selected provider's `Hide sensitive information` checkbox is checked, redact.
   values, because a stored token outlives the map that restores it. The next run
   mints a fresh map, and the old token then reaches a tool as a literal name.
 - Detokenize happens at three harness boundaries, never in the model.
-  - **Display**: the console renders the real value, or obfuscates that value at
-    the §5 privacy level.
+  - **Display**: the console renders the real value, or obfuscates that value
+    under the §5 `Hide on screen` axis.
   - **Tool/action execute**: a tool call such as "email `⟦EMAIL_1⟧` the
     summary" contains a token. Execution substitutes the real address at that
     point, under the profile's trust tier. The harness refuses a call whose
@@ -113,10 +113,10 @@ against over-redaction degrading model task quality.
 
 ## On-disk truth and the console indicator
 
-How much real text the chat log stores is a privacy-level choice, decided in §5.
-Level L1 stores _redacted_ text, which minimizes on-disk truth. Level L2 and
-above store sealed truth, as §3 describes. The console can therefore reveal that
-truth on demand.
+How much real text the chat log stores is a choice in the §5 Privacy section.
+The store-only-redacted-text option minimizes on-disk truth. The `blur` and
+`hello` levels need the real text on disk, so they need §3 sealing first, as §3
+describes. The console can therefore reveal that truth on demand.
 
 The console shows a "Redacted N items" chip on each turn whose pass replaced a value.
 Clicking that
