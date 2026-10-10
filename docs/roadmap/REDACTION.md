@@ -43,8 +43,8 @@ cannot leave until you cleared it produces no leak, whatever its shape.
 Detection-based completeness stays impossible. The guarantee moves where
 prediction is not required.
 
-This document holds a containment design and one ad-hoc identification design.
-Mitigation has no design yet.
+This document holds a containment design, a mitigation design, and one ad-hoc
+identification design.
 
 ## The switch
 
@@ -212,6 +212,66 @@ laptop. Jev itself is API-only, so Jev cannot serve this role.
 - `tokenize_msgs` (`redact.rs:497`) walks every string in the outbound copy,
   including the base64 blob. Whether a Layer 1 pattern can corrupt an image is
   untested.
+
+## Mitigation (class 2)
+
+Mitigation starts after a value left the machine. The receiver controls retention,
+and no provider gives a control that deletes one string from its logs. So the app
+offers four small controls and promises nothing beyond them.
+
+- Stop the re-send. `ChatView.vue:533` sends the whole transcript on each turn, so
+  one leaked value leaves again on every turn. The `<!>` mark on the turn tells you
+  to start a new conversation or to switch the provider.
+- Name the one action for the value class. Rotation is the only mitigation that
+  works whatever the receiver does.
+
+  | Value | Rotatable | Action you can take |
+  | --- | --- | --- |
+  | Password, API key, session token | Yes | Rotate the value. |
+  | Card number | Yes | Cancel the card and take a new one. |
+  | Bank account number | No | Monitoring: alerts from the bank. |
+  | SSN | No | Monitoring: credit freeze and fraud alerts. |
+  | Health fact, employer, salary | No | No action exists. |
+
+- Count the receivers. The same transcript sent to three providers is three
+  exposures. Settings shows which providers received which conversation.
+- Write a leak report.
+
+### Leak report
+
+The leak report is the artifact that policy and compliance read. First Mate's work
+ends at that record.
+
+- Each row names the class and never the value. A report that carried the value
+  would become a second store for the secret. The chip in "On-disk truth and the
+  console indicator" follows the same rule.
+- Each row holds: the time, the provider id and Base URL, the model, the class, the
+  count, the conversation id, the row id, the tool that produced the span, and the
+  retention terms of that provider at that moment.
+- The retention terms make the row compliance-grade. The row states the exposure
+  window: 30 days, flagged and up to 2 years, zero retention, or unknown.
+- Each row records your response: rotated, frozen, or ignored. Detection without
+  action leaves the case open.
+- The file is append-only JSONL, and the envelope in `docs/ENCRYPTION.md` seals it.
+ The report shows which files held sensitive content, even with no values inside.
+- Export is required. A report you cannot hand to a lawyer or a bank is not
+  evidence.
+- Scope: the report covers sends First Mate made. It cannot cover a leak by another
+  route, and it cannot confirm deletion by a receiver.
+- The report inherits the gate's recall. It records what the gate saw, so the
+  observe-only measurement and the calibration curve come first.
+
+### Provider terms that bound mitigation
+
+- OpenAI API data is not used to train models, unless you opt in. Abuse-monitoring
+  logs last up to 30 days. See
+  `https://developers.openai.com/api/docs/guides/your-data`.
+- Anthropic keeps no prompt content by default, except Covered Models at 30 days. A
+  flagged chat may last 2 years even under zero retention. See
+  `https://platform.claude.com/docs/en/manage-claude/api-and-data-retention`.
+- Zero Data Retention needs a sales arrangement, per organization. An individual
+  cannot obtain it, so the retention tail for a normal user is 30 days, or 2 years
+  when content is flagged.
 
 ## Ad-hoc identification (class 2, future)
 
