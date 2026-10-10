@@ -188,6 +188,32 @@ async fn gate(red: &mut redact::Redactor, scorer: &Scorer, spans: Vec<String>) {
     }
 }
 
+/// The summarizer writes new text, and the brief rides in the system message,
+/// which the gate never scores. When the scorer clears the brief, First Mate
+/// folds the rows into it. A flagged brief stops the fold, because the rows that
+/// the fold would drop then reach the span gate as their own spans. A scorer
+/// outage allows the fold, because an outage must not break compaction.
+async fn brief_clears_gate(
+    red: &Option<redact::Redactor>,
+    scorer: &Option<Scorer>,
+    brief: &str,
+) -> bool {
+    let Some(s) = scorer.as_ref().filter(|_| red.is_some()) else {
+        return true;
+    };
+    match decide::score(&s.base, brief).await {
+        Ok(p) if p >= s.threshold => {
+            log(&format!("COMPACT: the scorer flagged the brief at {p:.2}"));
+            false
+        }
+        Ok(_) => true,
+        Err(e) => {
+            log(&format!("COMPACT: {e}; folding without a score"));
+            true
+        }
+    }
+}
+
 /// The wire copy of the history. The stored transcript keeps real values, so
 /// the pass runs at this boundary and nowhere else.
 fn tokenize_chat(red: &mut redact::Redactor, msgs: &mut [lmkit::ChatMessage]) {
@@ -546,15 +572,17 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
         .await;
         match brief {
             Ok(b) if !b.is_empty() => {
-                log(&format!(
-                    "COMPACT: {cut} rows folded into the brief ({window_src} window of {window})"
-                ));
-                let _ = app.emit(
-                    "compact",
-                    serde_json::json!({ "summary": &b, "tokensBefore": threshold, "dropped": cut }),
-                );
-                summary = Some(b);
-                kept_from = start + cut;
+                if brief_clears_gate(&red, &scorer, &b).await {
+                    log(&format!(
+                        "COMPACT: {cut} rows folded into the brief ({window_src} window of {window})"
+                    ));
+                    let _ = app.emit(
+                        "compact",
+                        serde_json::json!({ "summary": &b, "tokensBefore": threshold, "dropped": cut }),
+                    );
+                    summary = Some(b);
+                    kept_from = start + cut;
+                }
             }
             Ok(_) => log("COMPACT: the summarizer returned nothing; sending the full history"),
             Err(e) => log(&format!(
@@ -602,6 +630,9 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
             if let Some(s) = scorer.as_ref() {
                 let mut found: Vec<&str> = Vec::new();
                 for m in wire.iter().rev() {
+                    if matches!(m.role, lmkit::Role::System) {
+                        continue;
+                    }
                     if let Some(c) = m.content.as_deref() {
                         found.push(c);
                     }
@@ -980,17 +1011,19 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
                         );
                         match summarize_http(&client, &url, &api_key, &model, &rules, &transcript).await {
                             Ok(b) => {
-                                msgs.drain(1 + head..1 + tail);
-                                context::set_summary(&mut msgs[0], Some(&b));
-                                measured = None;
-                                let _ = app.emit("compact", serde_json::json!({
-                                    "summary": &b, "tokensBefore": est, "dropped": dropped.len()
-                                }));
-                                log(&format!(
-                                    "COMPACT: {} rows folded into the brief, ~{est} -> ~{} tokens",
-                                    dropped.len(),
-                                    context::estimate_tokens(&msgs) + overhead
-                                ));
+                                if brief_clears_gate(&red, &scorer, &b).await {
+                                    msgs.drain(1 + head..1 + tail);
+                                    context::set_summary(&mut msgs[0], Some(&b));
+                                    measured = None;
+                                    let _ = app.emit("compact", serde_json::json!({
+                                        "summary": &b, "tokensBefore": est, "dropped": dropped.len()
+                                    }));
+                                    log(&format!(
+                                        "COMPACT: {} rows folded into the brief, ~{est} -> ~{} tokens",
+                                        dropped.len(),
+                                        context::estimate_tokens(&msgs) + overhead
+                                    ));
+                                }
                             }
                             Err(e) => log(&format!(
                                 "COMPACT: summary call failed ({e}); sending the oversized request"

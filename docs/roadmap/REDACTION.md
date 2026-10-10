@@ -220,6 +220,23 @@ POST {base}/v1/systemone
   budget on scoring.
 - One request scores the newest messages first, so the sentence the user just
   typed cannot lose the budget to restored history.
+- The gate scores no authored text. `prompts/AGENTS.md` and each loaded
+  `SKILL.md` form the system message, and you review that content before it
+  ships. A false positive there replaces the whole instruction set with
+  one token, so that false positive breaks the task and protects nothing.
+- The gate scores assistant text, tool output, and tool-call arguments, because a
+  model writes new strings that no input score ever saw.
+- A model restates a missed value in new words, and a new sentence carries no
+  shape for Layer 1. The assistant message then re-leaves on every later turn, so
+  one miss becomes a permanent leak unless a later score stops it.
+- The brief rides inside the system message, so the span gate scores no brief.
+  First Mate scores the brief before the fold. A flagged brief stops the fold, so
+  the rows that the fold would drop reach the span gate as their own spans.
+- A model also copies a value into a tool-call argument. The score on the tool
+  output hides the original, and the copy is a different string, so the argument
+  needs its own span.
+- The gate still runs the exact rules over the system message. Layer 1 costs
+  nothing there, and a credential in a prompt is a defect you want caught.
 - The gate needs a second signal. A decision model knows generic categories:
   credentials, financial text, health, identity. It does not know your employer's
   part number. The gate also matches the registry and the declared files, and it

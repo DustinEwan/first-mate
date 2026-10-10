@@ -423,10 +423,15 @@ impl Redactor {
     }
 
     /// The strings one JSON request carries that no server has scored, newest
-    /// message first.
+    /// message first. A system message is authored content, so the gate scores
+    /// none of it. A false positive on the instruction set replaces that whole
+    /// set with one token, which breaks the run and protects nothing.
     pub(crate) fn pending(&self, msgs: &mut [serde_json::Value]) -> Vec<String> {
         let mut found: Vec<String> = Vec::new();
         for msg in msgs.iter_mut().rev() {
+            if msg.get("role").and_then(|r| r.as_str()) == Some("system") {
+                continue;
+            }
             walk_strings(msg, &mut |s: &mut String| found.push(s.clone()));
         }
         self.budget(found)
@@ -1011,6 +1016,21 @@ mod tests {
         assert!(
             offered.iter().any(|s| s.starts_with("just typed:")),
             "the newest message lost the budget to older history"
+        );
+    }
+
+    #[test]
+    fn the_gate_scores_no_authored_text() {
+        let private = "I told my doctor I stopped taking the pills the pharmacy gave me last August.";
+        let mut msgs = serde_json::json!([
+            {"role": "system", "content": private},
+            {"role": "user", "content": private}
+        ]);
+        let r = Redactor::new();
+        assert_eq!(
+            r.pending(msgs.as_array_mut().unwrap().as_mut_slice()),
+            vec![private.to_string()],
+            "the instruction set must never reach the scorer"
         );
     }
 
