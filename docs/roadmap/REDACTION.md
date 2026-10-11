@@ -112,8 +112,8 @@ The Layer 2 target set is tiny and closed.
 - The registry grows from Layer 1 and Layer 3 hits after a one-time user
   confirmation.
 - The registry then matches exact values anywhere, in any format.
-- `docs/ENCRYPTION.md` records the envelope. The envelope seals the entity
-  registry.
+- `docs/ENCRYPTION.md` records the envelope. First Mate encrypts the entity
+  registry like every other store.
 
 **Layer 3 — provenance.** Content from a marked origin is sensitive regardless
 of the shape of the content. Layer 3 marks the following origins:
@@ -388,9 +388,9 @@ ends at the leak report.
   window: 30 days, flagged and up to 2 years, zero retention, or unknown.
 - Each row records your response: rotated, frozen, or ignored. Detection without
   action leaves the case open.
-- The file is append-only JSONL, and the envelope in `docs/ENCRYPTION.md` seals
-  the file. The report names each file holding sensitive content, even with no
-  values inside.
+- The file is append-only JSONL, and First Mate encrypts it with the envelope
+  in `docs/ENCRYPTION.md`. The report names each file holding sensitive content,
+  even with no values inside.
 - The app must export the report. A report you cannot hand to a lawyer or a bank
   is not evidence.
 - Scope: the report covers sends First Mate made. The report cannot cover a leak

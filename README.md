@@ -69,17 +69,21 @@ Each conversation earns capability on its own. The `load_skill` entries in the
 ledger re-seed the tool gate on every later turn, including after a resume. A
 loaded skill stays loaded for that chat.
 
-### Every file on disk is encrypted
+### Every store on disk is encrypted
 
 First Mate encrypts every file it writes that holds your data: each `.chat`
 transcript, `settings.json`, `entity_registry.json`, each exec spill under
-`output/`, `firstmate.log`, and each request dump. Encryption is not a setting,
-and no store stays plaintext.
+`output/`, and each request dump. Encryption is not a setting, and no store
+stays plaintext. The log at `%TEMP%\firstmate.log` is the one exception today.
+That log records each tool call with its arguments.
 
-Each file carries its own AES-256 key. The `FMENC1` envelope stores that key
-twice: once wrapped under the Platform Crypto Provider key that the TPM holds,
-and once wrapped under your recovery key. Every `NCrypt` call passes
-`NCRYPT_SILENT_FLAG`, so the app reads its own files at logon with no prompt.
+Each file carries its own AES-256 key. The `FMENC1` header beside the ciphertext
+holds that key twice: once wrapped under the Platform Crypto Provider key that
+the TPM holds, and once wrapped under your recovery key. That header is the
+envelope. The word follows the industry term envelope encryption. Envelope
+encryption means a data key that only a second key can unwrap. Every `NCrypt`
+call passes `NCRYPT_SILENT_FLAG`, so the app reads its own files at logon with
+no prompt.
 
 The setup wizard shows the recovery key, and keeps it on screen until you choose
 **I saved it**. `recovery.ack` beside `settings.json` records that choice, so a

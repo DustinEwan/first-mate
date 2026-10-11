@@ -277,8 +277,8 @@ three items depend on a profile.
 Two shipped items sit outside that spine, because they predate this checklist.
 Context compaction in `src-tauri/src/context.rs` folds a long conversation before
 the window overflows; `docs/COMPACTION.md` holds the design. Encryption at rest in
-`src-tauri/src/crypto.rs` seals every store file; `docs/ENCRYPTION.md` holds the
-design.
+`src-tauri/src/crypto.rs` encrypts every store file; `docs/ENCRYPTION.md` holds
+the design.
 
 ### Phase A — Sensitive-info redaction (§3)
 
@@ -295,9 +295,9 @@ design.
 - [x] Detokenize runs at display, and at tool and action execute. A tool receives
       real values, so its output needs no detokenize pass.
 - [x] A repair pass fixes mangled tokens by fuzzy match on `⟦…⟧` shapes.
-- [x] `entity_registry.json` holds the exact strings the pass replaces, and the
-      envelope encrypts that file. `settings::registry` reads that file, and each
-      run seeds the pass from it.
+- [x] `entity_registry.json` holds the exact strings the pass replaces, and
+      First Mate encrypts that file. `settings::registry` reads that file, and
+      each run seeds the pass from it.
 - [ ] Profiles seed that file, and the registry grows by confirmation from
       layer-1 and layer-3 hits.
 - [ ] Provenance marks sensitive-path reads, UIA field names, and banking
@@ -353,7 +353,7 @@ transcript holds real values.
       three on-machine rows keep `off`.
 - [ ] The registry asks once before it grows, and that gate opens `wide`.
 - [ ] The screen axis adds `blur`: tokens in the console, one click reveals one
-      item, and the log stores the real text, which the envelope encrypts.
+      item, and the log stores the real text, which First Mate encrypts.
 - [ ] The `hello` level adds the reveal session: one Windows Hello check opens
       it, a hide or a 10-minute lifetime closes it, and Extend costs a check.
 - [ ] The app logs one line per session event, with the reason it closed.

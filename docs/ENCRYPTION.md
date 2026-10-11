@@ -8,9 +8,11 @@ This document holds the mechanism and the measurement behind it.
 - First Mate encrypts every file it writes. Encryption is not a setting, and no
   store stays plaintext.
 - AES-256-GCM encrypts each file, and the header `FMENC1` names the format.
-- Each file carries its own key. The envelope stores that key twice: one wrap
-  under the Platform Crypto Provider key, which the TPM holds, and one wrap under
-  the recovery key, which the user keeps offline.
+- The header is the envelope: a block that carries a key, not the data. The
+  industry calls this scheme envelope encryption.
+- Each file carries its own key. The envelope stores that key twice. One wrap
+  sits under the Platform Crypto Provider key, which the TPM holds. The other
+  wrap sits under the recovery key, which the user keeps offline.
 - The Platform Crypto Provider exposes itself as
   `MS_PLATFORM_KEY_STORAGE_PROVIDER`. `NCryptEncrypt` wraps each file key with
   RSA-OAEP and SHA-256, and `NCryptDecrypt` unwraps it. `NCryptExportKey` cannot
@@ -20,24 +22,28 @@ This document holds the mechanism and the measurement behind it.
   settings, registry, and transcripts at logon, so no prompt may block a read.
   Every `NCrypt` call passes `NCRYPT_SILENT_FLAG`.
 - No key material is ever on disk in the clear.
-- The sealed stores are each `.chat` transcript under
-  `~/.firstmate/conversations`, `settings.json` and `entity_registry.json` under
-  `%APPDATA%\com.dusti.firstmate`, each `fm_out` exec spill under
-  `~/.firstmate/output`, `firstmate.log`, and each request dump.
+- The sealed stores are the `.chat` transcripts under
+  `~/.firstmate/conversations`, plus `settings.json` and
+  `entity_registry.json` under `%APPDATA%\com.dusti.firstmate`.
+- The list also covers each `fm_out` exec spill under `~/.firstmate/output`,
+  and each request dump.
+- The log at `%TEMP%\firstmate.log` stays plaintext, because `upgrade_stores`
+  covers only the stores above. That log records each tool call with its
+  arguments.
 - `entity_registry.json` holds raw sensitive values by design, so it needs the
   same envelope as a transcript.
 - Windows Hello does not gate this key. Hello gates display, and roadmap §4
   defines that policy.
-- The first run after an upgrade rewrites every plaintext file inside the
-  envelope, so no store stays readable after that run. `remove_plain_dumps`
-  deletes the plaintext request dumps an older run left in the temp directory.
+- The first run after an upgrade rewrites every plaintext file in that
+  format. No store stays readable after that run. `remove_plain_dumps` deletes
+  the plaintext request dumps an older run left in the temp directory.
 
 ## The recovery key
 
-- A TPM reset or hardware loss makes the data unrecoverable, so each file key
-  carries a second wrap under a key derived from a 32-byte random secret. SHA-256
-  over a domain string derives that key, because the secret holds 256 random
-  bits, so no stretching applies.
+- A TPM reset or hardware loss makes the data unreadable. Each file key
+  therefore carries a second wrap. That wrap uses a key that SHA-256 derives
+  from a 32-byte random secret, over a domain string. The secret holds 256
+  random bits, so no stretching applies.
 - The setup wizard shows the secret as hex, and keeps it on screen until the user
   chooses **I saved it**. The app never shows the key again after that choice.
 - `%APPDATA%\com.dusti.firstmate\recovery.ack` records the choice, so a run that
@@ -64,8 +70,8 @@ appears in it.
 ## Tests
 
 `cargo test` covers the envelope. A sealed file round-trips and holds no
-plaintext byte. A torn ciphertext fails the auth tag. A test deletes a second PCP
-key with `NCryptDeleteKey`, and that key's wrap then refuses to open, so no key
-material travels with a file. One test asserts the recovery states: a secret with
-no marker is pending, and the acknowledge ends the pending state without
-destroying the key.
+plaintext byte. A torn ciphertext fails the auth tag. A test deletes a second
+PCP key with `NCryptDeleteKey`. That key's wrap then refuses to open, so no
+key material travels with a file.
+One test asserts the recovery states: a secret with no marker is pending, and
+the acknowledge ends the pending state without destroying the key.
