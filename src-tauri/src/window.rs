@@ -55,7 +55,7 @@ pub(crate) fn open_settings_inner(app: &tauri::AppHandle) {
         tauri::WebviewUrl::App("settings.html".into()),
     )
     .title("First Mate — Settings")
-    .inner_size(480.0, 600.0)
+    .inner_size(560.0, 600.0)
     .decorations(false)
     .shadow(true)
     .icon(anchor_icon())

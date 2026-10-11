@@ -12,6 +12,8 @@ import {
   NButton,
   NCheckbox,
   NSpace,
+  NTabs,
+  NTabPane,
   darkTheme,
 } from "naive-ui";
 import RecoveryKey from "./RecoveryKey.vue";
@@ -41,6 +43,7 @@ const decisionHost = ref("");
 const decisionRemote = ref(false);
 const models = ref<string[]>([]);
 const status = ref("");
+const activeTab = ref("model");
 
 interface ProviderSpec {
   id: string;
@@ -241,115 +244,131 @@ function closeWindow() {
       <main class="content">
         <recovery-key />
 
-        <n-form label-placement="top" :show-require-mark="false">
-          <n-form-item label="Provider">
-            <n-select
-              v-model:value="provider"
-              :options="providerOptions"
-              @update:value="onProviderChange"
-            />
-          </n-form-item>
-          <n-form-item v-if="currentSpec && !currentSpec.isLocal" :show-label="false">
-            <n-checkbox v-model:checked="proxy" @update:checked="onProxyChange">Proxy</n-checkbox>
-          </n-form-item>
-          <n-form-item v-if="showBaseUrl" label="Base URL">
-            <n-input v-model:value="baseUrl" placeholder="e.g. http://localhost:11434" />
-          </n-form-item>
-          <n-form-item label="API key">
-            <n-input
-              v-model:value="apiKey"
-              type="password"
-              show-password-on="click"
-              :placeholder="keyPlaceholder"
-            />
-          </n-form-item>
-          <n-form-item label="Model">
-            <n-space align="center" :wrap="false">
-              <n-select
-                v-model:value="model"
-                :options="modelOptions()"
-                placeholder="— none —"
-                clearable
-              />
-              <n-button size="small" secondary @click="refreshModels"> &#8635; refresh </n-button>
-            </n-space>
-          </n-form-item>
-          <n-form-item :show-label="false">
-            <n-checkbox v-model:checked="hideSensitiveChecked">
-              Hide sensitive information
-            </n-checkbox>
-            <template #feedback>
-              Replaces card numbers, account numbers, credentials, and file paths with placeholders
-              before the request leaves this machine.
-            </template>
-          </n-form-item>
-          <n-form-item label="Context window (tokens)">
-            <n-input-number v-model:value="contextWindow" :min="0" :show-button="false" />
-            <template #feedback>
-              Detected from the model endpoint (max_model_len); set it when the endpoint reports
-              nothing. 0 = auto-detect.
-            </template>
-          </n-form-item>
-          <n-form-item label="Compact at % of context">
-            <n-input-number
-              v-model:value="compactAtPercent"
-              :min="10"
-              :max="100"
-              :show-button="false"
-            />
-            <template #feedback>
-              Compact the earlier turns once the conversation reaches this share of the context
-              window (10–100, default 85).
-            </template>
-          </n-form-item>
-        </n-form>
+        <n-tabs v-model:value="activeTab" type="line" placement="left" class="cats">
+          <n-tab-pane name="model" tab="Model">
+            <n-form label-placement="top" :show-require-mark="false">
+              <n-form-item label="Provider">
+                <n-select
+                  v-model:value="provider"
+                  :options="providerOptions"
+                  @update:value="onProviderChange"
+                />
+              </n-form-item>
+              <n-form-item v-if="currentSpec && !currentSpec.isLocal" :show-label="false">
+                <n-checkbox v-model:checked="proxy" @update:checked="onProxyChange">
+                  Proxy
+                </n-checkbox>
+              </n-form-item>
+              <n-form-item v-if="showBaseUrl" label="Base URL">
+                <n-input v-model:value="baseUrl" placeholder="e.g. http://localhost:11434" />
+              </n-form-item>
+              <n-form-item label="API key">
+                <n-input
+                  v-model:value="apiKey"
+                  type="password"
+                  show-password-on="click"
+                  :placeholder="keyPlaceholder"
+                />
+              </n-form-item>
+              <n-form-item label="Model">
+                <n-space align="center" :wrap="false">
+                  <n-select
+                    v-model:value="model"
+                    :options="modelOptions()"
+                    placeholder="— none —"
+                    clearable
+                  />
+                  <n-button size="small" secondary @click="refreshModels">
+                    &#8635; refresh
+                  </n-button>
+                </n-space>
+              </n-form-item>
+              <n-form-item label="Context window (tokens)">
+                <n-input-number v-model:value="contextWindow" :min="0" :show-button="false" />
+                <template #feedback>
+                  Detected from the model endpoint (max_model_len); set it when the endpoint reports
+                  nothing. 0 = auto-detect.
+                </template>
+              </n-form-item>
+              <n-form-item label="Compact at % of context">
+                <n-input-number
+                  v-model:value="compactAtPercent"
+                  :min="10"
+                  :max="100"
+                  :show-button="false"
+                />
+                <template #feedback>
+                  Compact the earlier turns once the conversation reaches this share of the context
+                  window (10–100, default 85).
+                </template>
+              </n-form-item>
+              <n-form-item :show-label="false">
+                <n-button @click="test">Test</n-button>
+                <template #feedback> Sends one short request to the model above.</template>
+              </n-form-item>
+            </n-form>
+          </n-tab-pane>
 
-        <n-form label-placement="top" :show-require-mark="false">
-          <n-form-item :show-label="false">
-            <n-checkbox v-model:checked="decisionEnabled"
-              >Ask a decision server about each span</n-checkbox
-            >
-            <template #feedback>
-              A small model you run judges each new span of text. A span it flags leaves as one
-              placeholder. First Mate never starts or downloads the server.
-            </template>
-          </n-form-item>
-          <n-form-item v-if="decisionEnabled" label="Decision server URL">
-            <n-space align="center" :wrap="false">
-              <n-input v-model:value="decisionUrl" placeholder="e.g. http://127.0.0.1:8741" />
-              <n-button size="small" secondary @click="probeServer">Test</n-button>
-            </n-space>
-            <template #feedback>
-              The server answers one yes/no question per span with a probability, and never receives
-              a prompt. Test reports the score of a benign span and of a credential span.
-            </template>
-          </n-form-item>
-          <n-form-item v-if="decisionEnabled && decisionRemote" :show-label="false">
-            <n-checkbox v-model:checked="decisionRemoteOk">
-              Send every scored span to {{ decisionHost }}
-            </n-checkbox>
-            <template #feedback>
-              That host is off this machine, and it then holds every span the gate sends. Without
-              this box First Mate scores nothing and sends only the exact rules.
-            </template>
-          </n-form-item>
-          <n-form-item v-if="decisionEnabled" label="Flag a span at probability">
-            <n-input-number
-              v-model:value="decisionThreshold"
-              :min="0"
-              :max="1"
-              :step="0.05"
-              :show-button="false"
-            />
-            <template #feedback>
-              A span whose score reaches this value leaves as one placeholder. Pick a value between
-              the two scores Test reports. Default 0.5.
-            </template>
-          </n-form-item>
-        </n-form>
-        <n-space align="center">
+          <n-tab-pane name="privacy" tab="Privacy">
+            <n-form label-placement="top" :show-require-mark="false">
+              <n-form-item :show-label="false">
+                <n-checkbox v-model:checked="hideSensitiveChecked">
+                  Hide sensitive information
+                </n-checkbox>
+                <template #feedback>
+                  Applies to {{ currentSpec ? currentSpec.label : provider }} only. Replaces card
+                  numbers, account numbers, credentials, and file paths with placeholders before the
+                  request leaves this machine.
+                </template>
+              </n-form-item>
+              <n-form-item :show-label="false">
+                <n-checkbox v-model:checked="decisionEnabled"
+                  >Ask a decision server about each span</n-checkbox
+                >
+                <template #feedback>
+                  A small model you run judges each new span of text. A span it flags leaves as one
+                  placeholder. First Mate never starts or downloads the server.
+                </template>
+              </n-form-item>
+              <n-form-item v-if="decisionEnabled" label="Decision server URL">
+                <n-space align="center" :wrap="false">
+                  <n-input v-model:value="decisionUrl" placeholder="e.g. http://127.0.0.1:8741" />
+                  <n-button size="small" secondary @click="probeServer">Test</n-button>
+                </n-space>
+                <template #feedback>
+                  The server answers one yes/no question per span with a probability, and never
+                  receives a prompt. Test reports the score of a benign span and of a credential
+                  span.
+                </template>
+              </n-form-item>
+              <n-form-item v-if="decisionEnabled && decisionRemote" :show-label="false">
+                <n-checkbox v-model:checked="decisionRemoteOk">
+                  Send every scored span to {{ decisionHost }}
+                </n-checkbox>
+                <template #feedback>
+                  That host is off this machine, and it then holds every span the gate sends.
+                  Without this box First Mate scores nothing and sends only the exact rules.
+                </template>
+              </n-form-item>
+              <n-form-item v-if="decisionEnabled" label="Flag a span at probability">
+                <n-input-number
+                  v-model:value="decisionThreshold"
+                  :min="0"
+                  :max="1"
+                  :step="0.05"
+                  :show-button="false"
+                />
+                <template #feedback>
+                  A span whose score reaches this value leaves as one placeholder. Pick a value
+                  between the two scores Test reports. Default 0.5.
+                </template>
+              </n-form-item>
+            </n-form>
+          </n-tab-pane>
+        </n-tabs>
+
+        <n-space align="center" class="footer">
           <n-button type="primary" @click="save">Save</n-button>
-          <n-button @click="test">Test</n-button>
         </n-space>
         <div v-if="status" class="status">{{ status }}</div>
       </main>
