@@ -333,20 +333,19 @@ function closeWindow() {
                 </n-checkbox>
                 <template #feedback>
                   Applies to {{ currentSpec ? currentSpec.label : provider }} only. First Mate hides
-                  card numbers, account numbers, passwords, and file paths from the model service.
-                  Your saved conversation keeps the real values.
+                  these before it sends your text: card and bank account numbers, SSNs, crypto
+                  addresses, API keys, email addresses, phone numbers, and your user folder paths.
+                  Nothing else needs installing. Your saved conversation keeps the real values.
                 </template>
               </n-form-item>
               <n-form-item :show-label="false">
-                <n-checkbox v-model:checked="decisionEnabled">
-                  Look for other sensitive information
-                </n-checkbox>
+                <n-checkbox v-model:checked="decisionEnabled"> Advanced detection </n-checkbox>
                 <template #feedback>
-                  Hide sensitive information catches only card numbers, account numbers, passwords,
-                  and file paths. A second model you run reads your text and looks for other
-                  sensitive information. First Mate hides what that model finds. Your saved
-                  conversation keeps the real values. First Mate never installs or starts that
-                  model.
+                  Some sensitive information has no obvious pattern: a password you type in a
+                  sentence, a project name, or a place. A second model does the reading. You install
+                  and run that model yourself. First Mate hides what the model flags. Your saved
+                  conversation keeps the real values. The model can flag ordinary text. Test shows
+                  how sharply the model tells the two apart.
                 </template>
               </n-form-item>
               <n-form-item v-if="decisionEnabled" label="Second model address">
