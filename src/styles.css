@@ -567,7 +567,16 @@ body {
   flex: 1;
   min-width: 0;
   overflow-y: auto;
-  padding-left: 16px;
+  padding: 0 14px 0 16px;
+}
+
+/* Proximity ties feedback to its control, so the gap goes after the feedback. */
+.settings .n-form-item {
+  margin-bottom: 24px;
+}
+
+.settings .n-form-item:last-child {
+  margin-bottom: 0;
 }
 
 .settings .footer {
