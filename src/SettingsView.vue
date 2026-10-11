@@ -339,12 +339,13 @@ function closeWindow() {
               </n-form-item>
               <n-form-item :show-label="false">
                 <n-checkbox v-model:checked="decisionEnabled">
-                  Ask a second model before First Mate sends new text
+                  Look for secrets the fixed rules miss
                 </n-checkbox>
                 <template #feedback>
-                  A second model reads each new block of text. The model guesses whether the block
-                  holds a secret. First Mate hides a flagged block, and your saved conversation
-                  keeps the real value. First Mate never installs or starts that model.
+                  First Mate already hides card numbers, account numbers, passwords, and file paths
+                  before it sends your text. A second model you run looks for anything else that
+                  reads like a secret. First Mate hides what it finds, and your saved conversation
+                  keeps the real values. First Mate never installs or starts that model.
                 </template>
               </n-form-item>
               <n-form-item v-if="decisionEnabled" label="Second model address">
@@ -353,25 +354,22 @@ function closeWindow() {
                   <n-button size="small" secondary @click="probeServer">Test</n-button>
                 </n-space>
                 <template #feedback>
-                  The second model sees one block of text at a time. It never sees your
-                  conversation. Test sends two samples: one ordinary sentence, and one sentence with
-                  a password.
+                  First Mate sends the second model only the words it needs checked, never your
+                  whole conversation. Test sends one ordinary sentence and one sentence with a
+                  password. The two scores should be far apart.
                 </template>
               </n-form-item>
               <n-form-item v-if="decisionEnabled && decisionRemote" :show-label="false">
                 <n-checkbox v-model:checked="decisionRemoteOk">
-                  Send each checked block to {{ decisionHost }}
+                  Let {{ decisionHost }} read the words First Mate checks
                 </n-checkbox>
                 <template #feedback>
-                  {{ decisionHost }} is another computer. It keeps every block First Mate sends
-                  there. Without this box, First Mate hides only card numbers, account numbers,
-                  passwords, and file paths.
+                  {{ decisionHost }} is not on this PC. That computer keeps what it reads. Without
+                  this box, First Mate hides only card numbers, account numbers, passwords, and file
+                  paths.
                 </template>
               </n-form-item>
-              <n-form-item
-                v-if="decisionEnabled"
-                label="Hide text when the second model is this sure"
-              >
+              <n-form-item v-if="decisionEnabled" label="Second model must be this sure">
                 <n-input-number
                   v-model:value="decisionThreshold"
                   :min="0"
@@ -380,8 +378,8 @@ function closeWindow() {
                   :show-button="false"
                 />
                 <template #feedback>
-                  A block at or above this level becomes hidden text. Test shows two scores. Pick a
-                  level between the two scores. Default 0.5.
+                  The model must reach this level before First Mate hides anything. A higher level
+                  hides less. Test shows two scores. Pick a level between them. Default 0.5.
                 </template>
               </n-form-item>
             </n-form>
