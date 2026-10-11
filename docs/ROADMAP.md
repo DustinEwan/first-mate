@@ -274,6 +274,12 @@ user does not trust. Phase G (§5) has no dependency, because its scratch
 directories already exist and need only routing. Profiles come next, because
 three items depend on a profile.
 
+Two shipped items sit outside that spine, because they predate this checklist.
+Context compaction in `src-tauri/src/context.rs` folds a long conversation before
+the window overflows; `docs/COMPACTION.md` holds the design. Encryption at rest in
+`src-tauri/src/crypto.rs` seals every store file; `docs/ENCRYPTION.md` holds the
+design.
+
 ### Phase A — Sensitive-info redaction (§3)
 
 - [x] Trust registry: `hide_sensitive` on the resolved provider is the single
@@ -289,22 +295,26 @@ three items depend on a profile.
 - [x] Detokenize runs at display, and at tool and action execute. A tool receives
       real values, so its output needs no detokenize pass.
 - [x] A repair pass fixes mangled tokens by fuzzy match on `⟦…⟧` shapes.
-- [ ] The entity registry stores the values that profiles seed. The registry
-      grows by confirmation from layer-1 and layer-3 hits. Encryption at rest
-      covers that registry.
+- [x] `entity_registry.json` holds the exact strings the pass replaces, and the
+      envelope encrypts that file. `settings::registry` reads that file, and each
+      run seeds the pass from it.
+- [ ] Profiles seed that file, and the registry grows by confirmation from
+      layer-1 and layer-3 hits.
 - [ ] Provenance marks sensitive-path reads, UIA field names, and banking
       origins. The harness blocks password-manager clipboard reads.
 - [ ] Each class has its own toggle, and a disclose-once override exists.
 - [x] The "Redacted N items" chip opens a class breakdown, and that breakdown
       never shows values.
-- [ ] Tests cover round-trip fidelity, untouched code blocks, and the rule that
-      nothing persists the token map.
+- [x] Tests cover round-trip fidelity and untouched code blocks.
+      `every_class_round_trips` and `a_fenced_config_block_returns_byte_identical`
+      hold those rules.
+- [ ] A test proves that nothing persists the token map.
 - [x] Settings holds the decision-server URL, the enable box, and the flag
       threshold. Unset or unchecked means the exact rules alone.
 - [x] The client posts one `noul` question per span to `POST {base}/v1/systemone`.
       A non-loopback URL needs your confirmation before the first span leaves.
-- [x] Setup probes one benign span and one credential span. Setup calls a server
-      unusable when both answers land at or above 0.8.
+- [x] The Settings `Test` action probes one benign span and one credential span.
+      That action calls a server unusable when both answers land at or above 0.8.
 - [ ] An unreachable scorer shows in the console. Today the log carries one
       `GATE:` line that names the failing address.
 - **Accept:** a checked box produces the same tokenized request on a local
