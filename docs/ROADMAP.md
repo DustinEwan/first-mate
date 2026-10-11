@@ -299,7 +299,7 @@ the design.
       First Mate encrypts that file. `settings::registry` reads that file, and
       each run seeds the pass from it.
 - [ ] Profiles seed that file, and the registry grows by confirmation from
-      layer-1 and layer-3 hits.
+      layer-1 and layer-3 hits. The seeding half needs Phase B.
 - [ ] Provenance marks sensitive-path reads, UIA field names, and banking
       origins. The harness blocks password-manager clipboard reads.
 - [ ] Each class has its own toggle, and a disclose-once override exists.
@@ -315,8 +315,8 @@ the design.
       A non-loopback URL needs your confirmation before the first span leaves.
 - [x] The Settings `Test` action probes one benign span and one credential span.
       That action calls a server unusable when both answers land at or above 0.8.
-- [ ] An unreachable scorer shows in the console. Today the log carries one
-      `GATE:` line that names the failing address.
+- [ ] An unreachable scorer shows in the console. Only a debug build records the
+      one `GATE:` line that names the failing address.
 - **Accept:** a checked box produces the same tokenized request on a local
   endpoint and on a public endpoint. That request carries a fake card, a JWT,
   and an email. A registry-seeded account number with no checksum also leaves
