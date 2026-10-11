@@ -64,6 +64,8 @@ async function onContentClick(e: MouseEvent) {
 
 const win = getCurrentWindow();
 
+const diagnostics = ref(false);
+
 // Backend-produced facts about one tool call. The backend also ships a
 // model-facing transcript; glyphs and wording in this file are UI-only.
 interface ToolReport {
@@ -405,6 +407,7 @@ onMounted(() => {
   invoke<boolean>("recovery_key_status").then((pending) => {
     if (pending) wizardOpen.value = true;
   });
+  invoke<boolean>("diagnostics_enabled").then((on) => (diagnostics.value = on));
   listen("open_setup", () => (wizardOpen.value = true));
   invoke<{ active: boolean; commands: number }>("elevation_status").then((s) => {
     elevActive.value = s.active;
@@ -579,10 +582,11 @@ async function submit() {
     }
   } catch (e) {
     const msg = typeof e === "string" ? e : e && e.message ? e.message : String(e);
-    addMsg(
-      `Error: ${msg}\n\nThe agent stopped. For details, open firstmate.log in your temp folder (Windows: Win+R → %temp%).`,
-      "error",
-    );
+    // A release build writes no debug log, so name that file only in a debug build.
+    const hint = diagnostics.value
+      ? " For details, open firstmate.log in your temp folder (Windows: Win+R → %temp%)."
+      : "";
+    addMsg(`Error: ${msg}\n\nThe agent stopped.${hint}`, "error");
   } finally {
     isThinking.value = false;
     liveMsgId = -1;

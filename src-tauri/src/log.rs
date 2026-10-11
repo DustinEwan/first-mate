@@ -1,3 +1,6 @@
+/// The debug log records each tool call with its arguments, so a release build
+/// writes no log file.
+#[cfg(debug_assertions)]
 pub(crate) fn log(msg: &str) {
     use std::io::Write;
     let path = std::env::temp_dir().join("firstmate.log");
@@ -7,6 +10,14 @@ pub(crate) fn log(msg: &str) {
             .unwrap_or_default();
         let _ = writeln!(f, "[{}.{:03}] {}", ts.as_secs(), ts.subsec_millis(), msg);
     }
+}
+
+#[cfg(not(debug_assertions))]
+pub(crate) fn log(_msg: &str) {}
+
+/// Whether this build writes the debug log.
+pub(crate) fn diagnostics_enabled_inner() -> bool {
+    cfg!(debug_assertions)
 }
 
 pub(crate) fn home_dir() -> std::path::PathBuf {

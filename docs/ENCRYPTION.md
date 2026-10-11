@@ -5,8 +5,8 @@ This document holds the mechanism and the measurement behind it.
 
 ## The envelope
 
-- First Mate encrypts every file it writes. Encryption is not a setting, and no
-  store stays plaintext.
+- First Mate encrypts every store file it writes. Encryption is not a setting,
+  and no store stays plaintext.
 - AES-256-GCM encrypts each file, and the header `FMENC1` names the format.
 - The header is the envelope: a block that carries a key, not the data. The
   industry calls this scheme envelope encryption.
@@ -27,9 +27,9 @@ This document holds the mechanism and the measurement behind it.
   `entity_registry.json` under `%APPDATA%\com.dusti.firstmate`.
 - The list also covers each `fm_out` exec spill under `~/.firstmate/output`,
   and each request dump.
-- The log at `%TEMP%\firstmate.log` stays plaintext, because `upgrade_stores`
-  covers only the stores above. That log records each tool call with its
-  arguments.
+- A debug build writes `%TEMP%\firstmate.log` in plaintext, and that log records
+  each tool call with its arguments. `upgrade_stores` covers only the stores
+  above, and a release build writes nothing there.
 - `entity_registry.json` holds raw sensitive values by design, so it needs the
   same envelope as a transcript.
 - Windows Hello does not gate this key. Hello gates display, and roadmap §4

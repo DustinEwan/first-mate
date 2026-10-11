@@ -74,8 +74,8 @@ loaded skill stays loaded for that chat.
 First Mate encrypts every file it writes that holds your data: each `.chat`
 transcript, `settings.json`, `entity_registry.json`, each exec spill under
 `output/`, and each request dump. Encryption is not a setting, and no store
-stays plaintext. The log at `%TEMP%\firstmate.log` is the one exception today.
-That log records each tool call with its arguments.
+stays plaintext. A debug build also writes `%TEMP%\firstmate.log`, and that file
+holds plaintext tool arguments. A release build writes no such file.
 
 Each file carries its own AES-256 key. The `FMENC1` header beside the ciphertext
 holds that key twice: once wrapped under the Platform Crypto Provider key that

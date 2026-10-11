@@ -36,7 +36,7 @@ use crate::conversations::{delete_conversation, list_conversations, load_convers
 use crate::elevate::{self as elevate_mod, ElevationState};
 use crate::harness::{bootstrap_status, cli_version, install_winapp};
 use crate::llm::{chat_with_llm, stop_chat};
-use crate::log::{fm_out_dir, fm_tmp_dir, log, trim_dir};
+use crate::log::{diagnostics_enabled_inner, fm_out_dir, fm_tmp_dir, log, trim_dir};
 use crate::modelapi::{list_models, list_providers, test_llm};
 use crate::openpath::open_path;
 use crate::settings::{
@@ -75,13 +75,18 @@ fn delevate(app: tauri::AppHandle) -> Result<String, String> {
     Ok(elevate_mod::delevate_core(&app, false))
 }
 
+#[tauri::command]
+fn diagnostics_enabled() -> bool {
+    diagnostics_enabled_inner()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, probe_decision_server, decision_host, list_models, list_providers, test_llm, chat_with_llm, stop_chat, list_skills, list_conversations, load_conversation, delete_conversation, save_conversation, get_system_prompt, open_path, bootstrap_status, install_winapp, open_settings, elevate, delevate, elevation_status, recovery_key_status, get_recovery_key, ack_recovery_key])
+        .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, probe_decision_server, decision_host, list_models, list_providers, test_llm, chat_with_llm, stop_chat, list_skills, list_conversations, load_conversation, delete_conversation, save_conversation, get_system_prompt, open_path, bootstrap_status, install_winapp, open_settings, elevate, delevate, elevation_status, recovery_key_status, get_recovery_key, ack_recovery_key, diagnostics_enabled])
         .setup(|app| {
             app.manage(ElevationState::default());
             let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
