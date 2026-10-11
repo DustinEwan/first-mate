@@ -339,12 +339,14 @@ function closeWindow() {
               </n-form-item>
               <n-form-item :show-label="false">
                 <n-checkbox v-model:checked="decisionEnabled">
-                  Look for secrets First Mate does not already hide
+                  Look for other sensitive information
                 </n-checkbox>
                 <template #feedback>
-                  A second model you run reads your text for anything that reads like a secret.
-                  First Mate hides what that model finds. Your saved conversation keeps the real
-                  values. First Mate never installs or starts that model.
+                  Hide sensitive information catches only card numbers, account numbers, passwords,
+                  and file paths. A second model you run reads your text and looks for other
+                  sensitive information. First Mate hides what that model finds. Your saved
+                  conversation keeps the real values. First Mate never installs or starts that
+                  model.
                 </template>
               </n-form-item>
               <n-form-item v-if="decisionEnabled" label="Second model address">
