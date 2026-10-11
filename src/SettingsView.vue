@@ -198,7 +198,7 @@ async function test() {
 // A server that answers at its floor flags every span, so the probe refuses
 // that server.
 async function probeServer() {
-  status.value = "Probing decision server…";
+  status.value = "Asking the second model…";
   try {
     const p = await invoke<{ benign: number; credential: number; usable: boolean }>(
       "probe_decision_server",
@@ -207,10 +207,10 @@ async function probeServer() {
     const benign = p.benign.toFixed(2);
     const credential = p.credential.toFixed(2);
     status.value = p.usable
-      ? `benign span ${benign}, credential span ${credential}`
-      : `benign span ${benign}, credential span ${credential}: this server answers at its floor`;
+      ? `ordinary text ${benign}, text with a password ${credential}`
+      : `ordinary text ${benign}, text with a password ${credential}: this model cannot tell the two apart`;
   } catch (e) {
-    status.value = `Probe failed: ${e}`;
+    status.value = `The second model did not answer: ${e}`;
   }
 }
 
@@ -332,41 +332,46 @@ function closeWindow() {
                   Hide sensitive information
                 </n-checkbox>
                 <template #feedback>
-                  Applies to {{ currentSpec ? currentSpec.label : provider }} only. Replaces card
-                  numbers, account numbers, credentials, and file paths with placeholders before the
-                  request leaves this machine.
+                  Applies to {{ currentSpec ? currentSpec.label : provider }} only. First Mate hides
+                  card numbers, account numbers, passwords, and file paths from the model service.
+                  Your saved conversation keeps the real values.
                 </template>
               </n-form-item>
               <n-form-item :show-label="false">
-                <n-checkbox v-model:checked="decisionEnabled"
-                  >Ask a decision server about each span</n-checkbox
-                >
+                <n-checkbox v-model:checked="decisionEnabled">
+                  Ask a second model before First Mate sends new text
+                </n-checkbox>
                 <template #feedback>
-                  A small model you run judges each new span of text. A span it flags leaves as one
-                  placeholder. First Mate never starts or downloads the server.
+                  A second model reads each new block of text. The model guesses whether the block
+                  holds a secret. First Mate hides a flagged block, and your saved conversation
+                  keeps the real value. First Mate never installs or starts that model.
                 </template>
               </n-form-item>
-              <n-form-item v-if="decisionEnabled" label="Decision server URL">
+              <n-form-item v-if="decisionEnabled" label="Second model address">
                 <n-space align="center" :wrap="false">
                   <n-input v-model:value="decisionUrl" placeholder="e.g. http://127.0.0.1:8741" />
                   <n-button size="small" secondary @click="probeServer">Test</n-button>
                 </n-space>
                 <template #feedback>
-                  The server answers one yes/no question per span with a probability, and never
-                  receives a prompt. Test reports the score of a benign span and of a credential
-                  span.
+                  The second model sees one block of text at a time. It never sees your
+                  conversation. Test sends two samples: one ordinary sentence, and one sentence with
+                  a password.
                 </template>
               </n-form-item>
               <n-form-item v-if="decisionEnabled && decisionRemote" :show-label="false">
                 <n-checkbox v-model:checked="decisionRemoteOk">
-                  Send every scored span to {{ decisionHost }}
+                  Send each checked block to {{ decisionHost }}
                 </n-checkbox>
                 <template #feedback>
-                  That host is off this machine, and it then holds every span the gate sends.
-                  Without this box First Mate scores nothing and sends only the exact rules.
+                  {{ decisionHost }} is another computer. It keeps every block First Mate sends
+                  there. Without this box, First Mate hides only card numbers, account numbers,
+                  passwords, and file paths.
                 </template>
               </n-form-item>
-              <n-form-item v-if="decisionEnabled" label="Flag a span at probability">
+              <n-form-item
+                v-if="decisionEnabled"
+                label="Hide text when the second model is this sure"
+              >
                 <n-input-number
                   v-model:value="decisionThreshold"
                   :min="0"
@@ -375,8 +380,8 @@ function closeWindow() {
                   :show-button="false"
                 />
                 <template #feedback>
-                  A span whose score reaches this value leaves as one placeholder. Pick a value
-                  between the two scores Test reports. Default 0.5.
+                  A block at or above this level becomes hidden text. Test shows two scores. Pick a
+                  level between the two scores. Default 0.5.
                 </template>
               </n-form-item>
             </n-form>
