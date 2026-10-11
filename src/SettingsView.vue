@@ -12,8 +12,6 @@ import {
   NButton,
   NCheckbox,
   NSpace,
-  NTabs,
-  NTabPane,
   darkTheme,
 } from "naive-ui";
 import RecoveryKey from "./RecoveryKey.vue";
@@ -101,17 +99,18 @@ function modelOptions() {
 
 // Proxy state needs the provider roster: a hosted provider with a
 // non-default saved endpoint means Proxy was on.
-Promise.all([
-  invoke<ProviderSpec[]>("list_providers"),
-  invoke<{
-    llm: LlmSettings;
-    hide_sensitive: Record<string, boolean>;
-    decision_server_url?: string;
-    decision_server_enabled?: boolean;
-    decision_threshold?: number;
-    decision_server_remote_ok?: boolean;
-  }>("get_settings"),
-]).then(([ps, s]) => {
+async function load() {
+  const [ps, s] = await Promise.all([
+    invoke<ProviderSpec[]>("list_providers"),
+    invoke<{
+      llm: LlmSettings;
+      hide_sensitive: Record<string, boolean>;
+      decision_server_url?: string;
+      decision_server_enabled?: boolean;
+      decision_threshold?: number;
+      decision_server_remote_ok?: boolean;
+    }>("get_settings"),
+  ]);
   providerSpecs.value = ps;
   providerOptions.value = [
     ...providerOptions.value,
@@ -131,7 +130,9 @@ Promise.all([
   void checkHost(s.decision_server_url ?? "");
   const spec = ps.find((p) => p.id === s.llm.provider);
   proxy.value = !!spec && !spec.isLocal && s.llm.base_url !== "" && s.llm.base_url !== spec.base;
-});
+}
+
+void load();
 
 async function refreshModels() {
   status.value = "Refreshing models…";
@@ -171,6 +172,13 @@ async function save() {
   } catch (e) {
     status.value = `Error: ${e}`;
   }
+}
+
+// The ✕ button hides the window, so an unsaved edit survives a reopen.
+// Cancel re-reads the saved file before it closes.
+async function cancel() {
+  await load();
+  closeWindow();
 }
 
 async function test() {
@@ -244,9 +252,19 @@ function closeWindow() {
       <main class="content">
         <recovery-key />
 
-        <n-tabs v-model:value="activeTab" type="line" placement="left" class="cats">
-          <n-tab-pane name="model" tab="Model">
-            <n-form label-placement="top" :show-require-mark="false">
+        <!-- naive-ui tabs set the pane wrapper's max-height from JavaScript, so a
+             naive-ui pane cannot scroll. -->
+        <div class="cats">
+          <nav class="rail">
+            <button :class="{ on: activeTab === 'model' }" @click="activeTab = 'model'">
+              Model
+            </button>
+            <button :class="{ on: activeTab === 'privacy' }" @click="activeTab = 'privacy'">
+              Privacy
+            </button>
+          </nav>
+          <section class="pane-scroll">
+            <n-form v-if="activeTab === 'model'" label-placement="top" :show-require-mark="false">
               <n-form-item label="Provider">
                 <n-select
                   v-model:value="provider"
@@ -307,10 +325,8 @@ function closeWindow() {
                 <template #feedback> Sends one short request to the model above.</template>
               </n-form-item>
             </n-form>
-          </n-tab-pane>
 
-          <n-tab-pane name="privacy" tab="Privacy">
-            <n-form label-placement="top" :show-require-mark="false">
+            <n-form v-else label-placement="top" :show-require-mark="false">
               <n-form-item :show-label="false">
                 <n-checkbox v-model:checked="hideSensitiveChecked">
                   Hide sensitive information
@@ -364,13 +380,14 @@ function closeWindow() {
                 </template>
               </n-form-item>
             </n-form>
-          </n-tab-pane>
-        </n-tabs>
+          </section>
+        </div>
 
         <n-space align="center" class="footer">
           <n-button type="primary" @click="save">Save</n-button>
+          <n-button @click="cancel">Cancel</n-button>
+          <span v-if="status" class="status">{{ status }}</span>
         </n-space>
-        <div v-if="status" class="status">{{ status }}</div>
       </main>
     </div>
   </n-config-provider>
