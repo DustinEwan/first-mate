@@ -326,13 +326,23 @@ the design.
       That action calls a server unusable when both answers land at or above 0.8.
 - [ ] An unreachable scorer shows in the console. Only a debug build records the
       one `GATE:` line that names the failing address.
+- [ ] The decision model judges each message once, when that message enters the
+      conversation, and the verdict travels with the message. The 60-character
+      floor and the 16-message cap go away with the resend re-judgement.
+- [ ] The audit card holds a flagged message: the message, its score, your
+      selection, then approve or deny. Deny holds the send, and you write the
+      next message. `docs/roadmap/REDACTION.md` holds the design.
+- [ ] A vision-capable decision model judges screenshots. A text-only model
+      leaves the console to say that the screenshot went out unchecked.
 - **Accept:** a checked box produces the same tokenized request on a local
   endpoint and on a public endpoint. That request carries a fake card, a JWT,
   and an email. A registry-seeded account number with no checksum also leaves
   tokenized. That turn renders correctly on return. An unchecked box leaves the
   text unchanged. With a decision server configured, a private sentence that no
   pattern matches still leaves the machine tokenized. With no server, that
-  sentence leaves the machine unchanged.
+  sentence leaves the machine unchanged. A flagged message stops before the send
+  and waits on the audit card. A message with a stored verdict never goes to the
+  decision model a second time.
 
 ### Phase B — Agent profiles (§1)
 

@@ -256,16 +256,21 @@ POST {base}/v1/systemone
   credential. When both probe answers land at or above 0.8, the app reports the
   server as unusable. H2O's shim ships a 0.801 yes/no floor, and a floored
   server flags every span.
-- The gate scores each unscored string of the outbound copy, and never re-scores
-  a whole window. The agent loop re-sends the whole window on each tool turn. A
-  full re-score therefore repeats one audit many times in one task.
-  `chat_via_openai` and `chat_via_lmkit` each clone the outbound body for the
-  redaction pass, so scoring needs no second copy.
-- One request scores at most 16 spans. The gate skips every span shorter than 60
-  characters. A first turn over a large file cannot spend the whole latency
-  budget of the turn on scoring.
-- One request scores the newest messages first. The sentence the user just typed
-  cannot lose the scoring budget to restored history.
+- The app judges a message once, when that message enters the conversation. The
+  verdict travels with the message, so a re-sent message is never re-judged. The
+  agent loop re-sends the whole window on each tool turn, and that resend costs
+  no new judgement.
+- No length floor and no per-request cap limits the judgement. The measured 4B
+  answers in 70 ms on a GPU, so a large tool output answers inside the time a
+  tool turn already spends.
+- A screenshot is a message part. A text-only decision model cannot judge it, so
+  the console shows that the screenshot went out unchecked. A vision-capable
+  decision model judges the image.
+- A flagged message stops before the send and opens the audit card in the
+  console. The card shows the flagged message and its score, because the decision
+  model cannot name the value it saw. You select the text, redact it, then
+  approve or deny. Approve sends with your redactions. Deny holds the send, and
+  you write the next message.
 - The gate scores no authored text. `prompts/AGENTS.md` and each loaded
   `SKILL.md` form the system message. You review the authored text before the
   authored text ships. A false positive in the system message replaces the whole
