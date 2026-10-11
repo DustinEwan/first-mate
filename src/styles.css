@@ -579,6 +579,16 @@ body {
   margin-bottom: 0;
 }
 
+/* naive-ui reserves 24 px for feedback a field never shows. */
+.settings .n-form-item-feedback-wrapper:empty {
+  min-height: 0;
+}
+
+/* A checkbox label starts after the 16 px box and its 8 px gap. */
+.settings .n-form-item:has(.n-checkbox) .n-form-item-feedback-wrapper {
+  padding-left: 24px;
+}
+
 .settings .footer {
   flex: none;
   margin: 16px -16px 0;
