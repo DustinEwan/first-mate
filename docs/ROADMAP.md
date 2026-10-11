@@ -290,8 +290,13 @@ the design.
       token. Layer 1 detects Luhn+BIN cards, IBAN mod-97, ABA mod-10, SWIFT, and
       SSN validity. Layer 1 also detects crypto checksums, API-key shapes, JWT,
       email, phone, and `%USERPROFILE%` paths.
-- [x] The token map lives in the session, and detokenize stays stream-safe across
-      placeholder boundaries in SSE chunks.
+- [x] One token map serves every conversation and every provider. `redact::init`
+      points that map at the sealed `token_map.json` beside `settings.json`, so a
+      reopened conversation resolves the markers that conversation stored.
+      Detokenize stays stream-safe across placeholder boundaries in SSE chunks.
+      `redact::tests::a_token_from_an_earlier_run_resolves_from_the_sealed_file`
+      and `redact::tests::the_stored_table_holds_no_plaintext_value` prove the
+      sealed table.
 - [x] Detokenize runs at display, and at tool and action execute. A tool receives
       real values, so its output needs no detokenize pass.
 - [x] A repair pass fixes mangled tokens by fuzzy match on `⟦…⟧` shapes.
@@ -308,7 +313,11 @@ the design.
 - [x] Tests cover round-trip fidelity and untouched code blocks.
       `every_class_round_trips` and `a_fenced_config_block_returns_byte_identical`
       hold those rules.
-- [ ] A test proves that nothing persists the token map.
+- [x] Three tests prove that the sealed token map survives a restart and stays
+      closed to `read_file`:
+      `crypto::tests::a_store_read_never_opens_the_token_map`,
+      `redact::tests::a_token_from_an_earlier_run_resolves_from_the_sealed_file`,
+      and `redact::tests::the_stored_table_holds_no_plaintext_value`.
 - [x] Settings holds the decision-server URL, the enable box, and the flag
       threshold. Unset or unchecked means the exact rules alone.
 - [x] The client posts one `noul` question per span to `POST {base}/v1/systemone`.

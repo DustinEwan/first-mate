@@ -69,8 +69,9 @@ identification design.
   `hide_sensitive` checked. The pass detects secrets, replaces each secret with
   a reversible placeholder such as `⟦EMAIL_1⟧`, and sends the request.
 - The pass runs on a copy of the conversation. The stored transcript keeps real
-  values, because a stored token outlives the restore map. The next run mints a
-  fresh restore map, so an old token then reaches a tool as a literal name.
+  values. Click-to-reveal needs the real value on disk, and the §4 `blur` and
+  `hello` levels offer click-to-reveal. The token map below outlives the process,
+  so a marker in a stored row still resolves after a restart.
 - Detokenize happens at three harness boundaries, never in the model.
   - **Display**: the console renders the real value, or obfuscates the real
     value under the §4 `Hide on screen` axis.
@@ -83,6 +84,44 @@ identification design.
     the next request carries the output to the provider. Redaction and
     detokenize
     cover both directions.
+
+### The token map
+
+One table maps every marker to the value behind that marker. `redact.rs` holds
+that table in one `Table` struct: `values`, `tokens`, `repairs`, and `counters`.
+One `Store` wraps the table in `Arc<Mutex<Table>>`. `static SHARED: OnceLock<Store>`
+makes that store process-wide. `Redactor::new()` takes that store, so every
+conversation and every provider shares one table.
+
+`lib.rs` calls `redact::init` in the `setup` closure, right after `crypto::init`,
+with `config_dir.join(crypto::TOKEN_MAP)`. `crypto::TOKEN_MAP` is
+`token_map.json`, so the table file is at
+`%APPDATA%\com.dusti.firstmate\token_map.json`, beside `settings.json` and
+`entity_registry.json`.
+
+- `Table::load` opens `token_map.json` at startup through `crate::crypto::open`.
+- `Store::commit` serializes the table to JSON and seals that JSON with
+  `crate::crypto::seal`. `Store::commit` writes that file whenever the table
+  gains a mapping, so a crash cannot lose a marker a provider saw.
+- `crypto::upgrade_stores` lists `TOKEN_MAP`, so the next start seals a plaintext
+  copy an older run left.
+- `crypto::open_store_bytes` refuses `token_map.json` by file name, so `read_file`
+  returns the sealed bytes. `read_file` never hands the marker table to the
+  model. A sealed spill file in the same directory still opens.
+- The table is global across conversations, so a marker seen in one conversation
+  resolves in another conversation. Per-class counters are global too, so one
+  value keeps one marker across runs.
+
+A per-run table restarts each per-class counter at 1, so one value carries a
+different marker in each run. A marker that no live table issued stays in the
+stored text as written. No later run can resolve that marker. One persisted
+table gives one marker per value across runs. A reopened conversation therefore
+resolves the markers that conversation stored.
+
+Three tests hold that design:
+`crypto::tests::a_store_read_never_opens_the_token_map`,
+`redact::tests::a_token_from_an_earlier_run_resolves_from_the_sealed_file`, and
+`redact::tests::the_stored_table_holds_no_plaintext_value`.
 
 ## Detection layers
 

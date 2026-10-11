@@ -72,10 +72,14 @@ loaded skill stays loaded for that chat.
 ### Every store on disk is encrypted
 
 First Mate encrypts every file it writes that holds your data: each `.chat`
-transcript, `settings.json`, `entity_registry.json`, each exec spill under
-`output/`, and each request dump. Encryption is not a setting, and no store
-stays plaintext. A debug build also writes `%TEMP%\firstmate.log`, and that file
-holds plaintext tool arguments. A release build writes no such file.
+transcript, `settings.json`, `entity_registry.json`, `token_map.json`, each exec
+spill under `output/`, and each request dump. Encryption is not a setting, and no
+store stays plaintext. A debug build also writes `%TEMP%\firstmate.log`, and that
+file holds plaintext tool arguments. A release build writes no such file.
+
+`token_map.json` beside `settings.json` holds the marker-to-value table, so the
+table needs the same envelope. `read_file` never decrypts `token_map.json`,
+because `token_map.json` is the key for every marker First Mate issued.
 
 Each file carries its own AES-256 key. The `FMENC1` header beside the ciphertext
 holds that key twice: once wrapped under the Platform Crypto Provider key that

@@ -23,8 +23,9 @@ This document holds the mechanism and the measurement behind it.
   Every `NCrypt` call passes `NCRYPT_SILENT_FLAG`.
 - No key material is ever on disk in the clear.
 - The sealed stores are the `.chat` transcripts under
-  `~/.firstmate/conversations`, plus `settings.json` and
-  `entity_registry.json` under `%APPDATA%\com.dusti.firstmate`.
+  `~/.firstmate/conversations`, plus `settings.json`,
+  `entity_registry.json`, and `token_map.json` under
+  `%APPDATA%\com.dusti.firstmate`.
 - The list also covers each `fm_out` exec spill under `~/.firstmate/output`,
   and each request dump.
 - A debug build writes `%TEMP%\firstmate.log` in plaintext, and that log records
@@ -32,6 +33,15 @@ This document holds the mechanism and the measurement behind it.
   above, and a release build writes nothing there.
 - `entity_registry.json` holds raw sensitive values by design, so it needs the
   same envelope as a transcript.
+- `token_map.json` holds the marker-to-value table for every conversation, so
+  that table needs the same envelope as a transcript. `Table::load` opens
+  `token_map.json` at startup through `crate::crypto::open`.
+- `Store::commit` seals the table with `crate::crypto::seal`, then writes the
+  file whenever the table gains a mapping.
+- `crypto::upgrade_stores` lists `TOKEN_MAP`, so the next start seals a plaintext
+  copy an older run left.
+- `crypto::open_store_bytes` refuses `token_map.json` by file name, so `read_file`
+  returns the sealed bytes. A sealed spill file in the same directory still opens.
 - Windows Hello does not gate this key. Hello gates display, and roadmap §4
   defines that policy.
 - The first run after an upgrade rewrites every plaintext file in that
@@ -75,3 +85,7 @@ PCP key with `NCryptDeleteKey`. That key's wrap then refuses to open, so no
 key material travels with a file.
 One test asserts the recovery states: a secret with no marker is pending, and
 the acknowledge ends the pending state without destroying the key.
+
+`a_store_read_never_opens_the_token_map` asserts that `read_file` gets the sealed
+bytes of `token_map.json`. The same test opens a sealed spill file in that
+directory.

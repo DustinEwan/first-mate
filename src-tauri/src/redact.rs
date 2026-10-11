@@ -1,8 +1,10 @@
 //! Sensitive-info redaction. `docs/roadmap/REDACTION.md` is the design.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::LazyLock;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard, OnceLock};
 
+use serde::{Deserialize, Serialize};
 use regex::Regex;
 use sha2::{Digest, Sha256};
 
@@ -46,7 +48,7 @@ fn has_token(value: &serde_json::Value) -> bool {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 pub(crate) enum Class {
     Card,
     Iban,
@@ -379,10 +381,11 @@ struct Hit {
     class: Class,
 }
 
-/// First Mate never writes these maps to disk: a map on disk is a key that opens
-/// every token in every earlier conversation.
-#[derive(Default)]
-pub(crate) struct Redactor {
+/// The token table for every conversation this machine has tokenized. The table
+/// is the key that opens each marker, so the envelope seals the file and
+/// `read_file` never decrypts it.
+#[derive(Default, Serialize, Deserialize)]
+struct Table {
     /// `⟦EMAIL_1⟧` → the real value.
     values: HashMap<String, String>,
     /// The real value → its token.
@@ -390,6 +393,150 @@ pub(crate) struct Redactor {
     /// A normalized token interior → its token, for the repair pass.
     repairs: HashMap<String, String>,
     counters: HashMap<Class, usize>,
+}
+
+impl Table {
+    fn load(path: &Path) -> Table {
+        let Ok(bytes) = std::fs::read(path) else {
+            return Table::default();
+        };
+        let plain = crate::crypto::open(&bytes).unwrap_or(bytes);
+        serde_json::from_slice(&plain).unwrap_or_default()
+    }
+
+    fn token(&mut self, class: Class, value: &str) -> String {
+        if let Some(existing) = self.tokens.get(value) {
+            return existing.clone();
+        }
+        let next = self.counters.entry(class).or_insert(0);
+        *next += 1;
+        let token = format!("{OPEN}{}_{}{CLOSE}", class.label(), *next);
+        self.repairs.insert(normalize(&token), token.clone());
+        self.values.insert(token.clone(), value.to_string());
+        self.tokens.insert(value.to_string(), token.clone());
+        token
+    }
+
+    fn resolve(&self, token: &str) -> Option<&str> {
+        match self.values.get(token) {
+            Some(value) => Some(value),
+            None => self
+                .repairs
+                .get(&normalize(token))
+                .and_then(|t| self.values.get(t))
+                .map(String::as_str),
+        }
+    }
+
+    /// A token this table never issued stays as written, because inventing a
+    /// value is worse than showing a token.
+    fn detokenize(&self, text: &str) -> String {
+        if !text.contains(OPEN) {
+            return text.to_string();
+        }
+        let mut out = String::with_capacity(text.len());
+        let mut rest = text;
+        while let Some(i) = rest.find(OPEN) {
+            out.push_str(&rest[..i]);
+            rest = &rest[i..];
+            match rest[OPEN.len_utf8()..].find(CLOSE) {
+                Some(rel) => {
+                    let end = OPEN.len_utf8() + rel + CLOSE.len_utf8();
+                    let token = &rest[..end];
+                    out.push_str(self.resolve(token).unwrap_or(token));
+                    rest = &rest[end..];
+                }
+                None => {
+                    out.push_str(rest);
+                    rest = "";
+                }
+            }
+        }
+        out.push_str(rest);
+        out
+    }
+
+    fn breakdown(&self) -> Vec<(&'static str, usize)> {
+        let mut rows: Vec<(&'static str, usize)> = Class::ALL
+            .iter()
+            .filter_map(|c| {
+                self.counters
+                    .get(c)
+                    .map(|n| (c.label(), *n))
+                    .filter(|(_, n)| *n > 0)
+            })
+            .collect();
+        rows.sort_by_key(|(label, _)| *label);
+        rows
+    }
+
+    fn count(&self) -> usize {
+        self.counters.values().sum()
+    }
+
+    /// Only additions happen here, so one length sum detects a new mapping.
+    fn len(&self) -> usize {
+        self.values.len() + self.repairs.len()
+    }
+}
+
+/// One table for the process, so a marker an earlier run wrote to a transcript
+/// still resolves after a restart.
+#[derive(Clone)]
+struct Store {
+    path: Option<PathBuf>,
+    table: Arc<Mutex<Table>>,
+}
+
+impl Store {
+    fn file(path: PathBuf) -> Store {
+        Store {
+            path: Some(path.clone()),
+            table: Arc::new(Mutex::new(Table::load(&path))),
+        }
+    }
+
+    fn memory() -> Store {
+        Store {
+            path: None,
+            table: Arc::new(Mutex::new(Table::default())),
+        }
+    }
+
+    fn lock(&self) -> MutexGuard<'_, Table> {
+        self.table
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// A crash must not lose the mapping for a value a provider already saw, so
+    /// a new mapping reaches the file before the request goes out.
+    fn commit(&self, table: &Table, before: usize) {
+        let Some(path) = self.path.as_ref() else {
+            return;
+        };
+        if table.len() == before {
+            return;
+        }
+        let Ok(json) = serde_json::to_vec(table) else {
+            return;
+        };
+        if let Ok(sealed) = crate::crypto::seal(&json) {
+            let _ = std::fs::write(path, sealed);
+        }
+    }
+}
+
+/// `lib.rs` points the table at the sealed store before the first request. An
+/// unset path leaves the table in memory, which is what a test wants.
+static SHARED: OnceLock<Store> = OnceLock::new();
+
+pub(crate) fn init(path: PathBuf) {
+    let _ = SHARED.set(Store::file(path));
+}
+
+pub(crate) struct Redactor {
+    store: Store,
     registry: Vec<String>,
     /// The agent loop re-sends the whole window on every tool turn. A rescore
     /// repeats one audit.
@@ -398,7 +545,20 @@ pub(crate) struct Redactor {
 
 impl Redactor {
     pub(crate) fn new() -> Self {
-        Self::default()
+        Self {
+            store: SHARED.get().cloned().unwrap_or_else(Store::memory),
+            registry: Vec::new(),
+            scored: HashSet::new(),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_store(store: Store) -> Self {
+        Self {
+            store,
+            registry: Vec::new(),
+            scored: HashSet::new(),
+        }
     }
 
     /// A declared value has no shape, so only an exact match finds the value.
@@ -436,15 +596,26 @@ impl Redactor {
 
     pub(crate) fn record_score(&mut self, span: &str, score: f64, threshold: f64) -> bool {
         self.scored.insert(span.to_string());
-        if score >= threshold {
-            self.token(Class::Span, span);
-            return true;
+        if score < threshold {
+            return false;
         }
-        false
+        let mut table = self.store.lock();
+        let before = table.len();
+        table.token(Class::Span, span);
+        self.store.commit(&table, before);
+        true
     }
 
     pub(crate) fn tokenize(&mut self, text: &str) -> String {
-        if let Some(token) = self.tokens.get(text) {
+        let mut table = self.store.lock();
+        let before = table.len();
+        let out = self.tokenize_in(&mut table, text);
+        self.store.commit(&table, before);
+        out
+    }
+
+    fn tokenize_in(&self, table: &mut Table, text: &str) -> String {
+        if let Some(token) = table.tokens.get(text) {
             return token.clone();
         }
         let mut out = String::with_capacity(text.len());
@@ -452,39 +623,15 @@ impl Redactor {
         for hit in self.hits(text) {
             out.push_str(&text[last..hit.start]);
             let value = &text[hit.start..hit.end];
-            out.push_str(&self.token(hit.class, value));
+            out.push_str(&table.token(hit.class, value));
             last = hit.end;
         }
         out.push_str(&text[last..]);
         out
     }
 
-    /// A token this map never issued stays as written, because inventing a
-    /// value is worse than showing a token.
     pub(crate) fn detokenize(&self, text: &str) -> String {
-        if !text.contains(OPEN) {
-            return text.to_string();
-        }
-        let mut out = String::with_capacity(text.len());
-        let mut rest = text;
-        while let Some(i) = rest.find(OPEN) {
-            out.push_str(&rest[..i]);
-            let after = &rest[i + OPEN.len_utf8()..];
-            match after.find(CLOSE) {
-                Some(rel) => {
-                    let end = i + OPEN.len_utf8() + rel + CLOSE.len_utf8();
-                    let token = &rest[i..end];
-                    out.push_str(self.resolve(token).unwrap_or(token));
-                    rest = &rest[end..];
-                }
-                None => {
-                    out.push_str(&rest[i..]);
-                    rest = "";
-                }
-            }
-        }
-        out.push_str(rest);
-        out
+        self.store.lock().detokenize(text)
     }
 
     pub(crate) fn detokenize_stream(&self, carry: &mut String, chunk: &str) -> String {
@@ -513,56 +660,26 @@ impl Redactor {
     }
 
     pub(crate) fn breakdown(&self) -> Vec<(&'static str, usize)> {
-        let mut rows: Vec<(&'static str, usize)> = Class::ALL
-            .iter()
-            .filter_map(|c| {
-                self.counters
-                    .get(c)
-                    .map(|n| (c.label(), *n))
-                    .filter(|(_, n)| *n > 0)
-            })
-            .collect();
-        rows.sort_by_key(|(label, _)| *label);
-        rows
+        self.store.lock().breakdown()
     }
 
     pub(crate) fn redacted_count(&self) -> usize {
-        self.counters.values().sum()
+        self.store.lock().count()
     }
 
     pub(crate) fn tokenize_msgs(&mut self, msgs: &mut [serde_json::Value]) {
+        let mut table = self.store.lock();
+        let before = table.len();
         for msg in msgs.iter_mut() {
-            walk_strings(msg, &mut |s: &mut String| *s = self.tokenize(s));
+            walk_strings(msg, &mut |s: &mut String| *s = self.tokenize_in(&mut table, s));
         }
+        self.store.commit(&table, before);
     }
 
     /// Detokenize at execute, so the tool sees the value the provider never saw.
     pub(crate) fn detokenize_json(&self, value: &mut serde_json::Value) {
-        walk_strings(value, &mut |s: &mut String| *s = self.detokenize(s));
-    }
-
-    fn token(&mut self, class: Class, value: &str) -> String {
-        if let Some(existing) = self.tokens.get(value) {
-            return existing.clone();
-        }
-        let next = self.counters.entry(class).or_insert(0);
-        *next += 1;
-        let token = format!("{OPEN}{}_{}{CLOSE}", class.label(), *next);
-        self.repairs.insert(normalize(&token), token.clone());
-        self.values.insert(token.clone(), value.to_string());
-        self.tokens.insert(value.to_string(), token.clone());
-        token
-    }
-
-    fn resolve(&self, token: &str) -> Option<&str> {
-        match self.values.get(token) {
-            Some(value) => Some(value),
-            None => self
-                .repairs
-                .get(&normalize(token))
-                .and_then(|t| self.values.get(t))
-                .map(String::as_str),
-        }
+        let table = self.store.lock();
+        walk_strings(value, &mut |s: &mut String| *s = table.detokenize(s));
     }
 
     fn hits(&self, text: &str) -> Vec<Hit> {
@@ -1003,6 +1120,46 @@ mod tests {
             vec![private.to_string()],
             "the instruction set must never reach the scorer"
         );
+    }
+
+    /// A transcript row from an earlier run holds the marker, so a later run
+    /// must resolve it.
+    #[test]
+    fn a_token_from_an_earlier_run_resolves_from_the_sealed_file() {
+        if !crate::crypto::tpm_ready() {
+            return;
+        }
+        let dir = std::env::temp_dir().join("fm-token-map");
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::crypto::init(dir.clone());
+        let path = dir.join(crate::crypto::TOKEN_MAP);
+        let _ = std::fs::remove_file(&path);
+        let token = {
+            let mut first = Redactor::with_store(Store::file(path.clone()));
+            first.tokenize(&format!("pay {CARD} now"))
+        };
+        assert!(token.contains("CARD_1"), "{token}");
+        let second = Redactor::with_store(Store::file(path.clone()));
+        assert_eq!(second.detokenize(&token), format!("pay {CARD} now"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn the_stored_table_holds_no_plaintext_value() {
+        if !crate::crypto::tpm_ready() {
+            return;
+        }
+        let dir = std::env::temp_dir().join("fm-token-map-plain");
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::crypto::init(dir.clone());
+        let path = dir.join(crate::crypto::TOKEN_MAP);
+        let _ = std::fs::remove_file(&path);
+        let mut red = Redactor::with_store(Store::file(path.clone()));
+        red.tokenize(&format!("pay {CARD} now"));
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(crate::crypto::looks_sealed(&bytes), "the table must be sealed");
+        assert!(!String::from_utf8_lossy(&bytes).contains("4111"));
+        let _ = std::fs::remove_file(&path);
     }
 
 }

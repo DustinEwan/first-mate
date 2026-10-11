@@ -303,6 +303,9 @@ fn store_dir() -> PathBuf {
     STORE_DIR.get().cloned().unwrap_or_else(crate::log::fm_dir)
 }
 
+/// The token map is the key for every marker First Mate issued.
+pub const TOKEN_MAP: &str = "token_map.json";
+
 /// A sealed file opens only inside First Mate's own directories, so
 /// `read_file` never hands back decrypted bytes for a file the user owns.
 /// `Path::canonicalize` returns a `\\?\` verbatim path, and no store prefix
@@ -315,9 +318,11 @@ pub fn is_store(path: &Path) -> bool {
 
 /// Bytes as stored. A sealed file inside First Mate's own directories opens, so
 /// `read_file` reaches a spill. Any other file keeps its bytes, so the agent
-/// never sees decrypted text from a file the user owns.
+/// never sees decrypted text from a file the user owns. The token map keeps its
+/// bytes too, because that map is the key for every marker First Mate issued.
 pub fn open_store_bytes(path: &Path, bytes: Vec<u8>) -> Result<Vec<u8>, String> {
-    if looks_sealed(&bytes) && is_store(path) {
+    let key_table = path.file_name().is_some_and(|name| name == TOKEN_MAP);
+    if looks_sealed(&bytes) && is_store(path) && !key_table {
         return open(&bytes);
     }
     Ok(bytes)
@@ -341,7 +346,10 @@ pub fn seal_file(path: &Path) -> Result<bool, String> {
 /// clear. The counts are the rewritten files and the deleted dumps.
 pub fn upgrade_stores(config_dir: &Path) -> (usize, usize) {
     let mut paths: Vec<PathBuf> =
-        ["settings.json", "entity_registry.json"].iter().map(|name| config_dir.join(name)).collect();
+        ["settings.json", "entity_registry.json", TOKEN_MAP]
+            .iter()
+            .map(|name| config_dir.join(name))
+            .collect();
     for dir in [crate::log::fm_out_dir(), crate::conversations::conv_dir()] {
         let Ok(entries) = std::fs::read_dir(dir) else {
             continue;
@@ -435,6 +443,22 @@ mod tests {
         assert!(looks_sealed(&sealed));
         assert!(!sealed.windows(4).any(|window| window == b"4111"), "the card number survived");
         assert_eq!(open(&sealed).unwrap(), plain);
+    }
+
+    /// The token map is the key for every marker First Mate issued, so a store
+    /// read must hand back its sealed bytes.
+    #[test]
+    fn a_store_read_never_opens_the_token_map() {
+        if !tpm_ready() {
+            return;
+        }
+        init(std::env::temp_dir().join("fm-envelope"));
+        let plain = br#"{"values":{"CARD_1":"4111 1111 1111 1111"}}"#;
+        let sealed = seal(plain).unwrap();
+        let map = store_dir().join(TOKEN_MAP);
+        assert_eq!(open_store_bytes(&map, sealed.clone()).unwrap(), sealed);
+        let spill = store_dir().join("spill.txt");
+        assert_eq!(open_store_bytes(&spill, sealed.clone()).unwrap(), plain.to_vec());
     }
 
     #[test]

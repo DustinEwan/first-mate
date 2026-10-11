@@ -91,6 +91,7 @@ pub fn run() {
             app.manage(ElevationState::default());
             let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
             crypto::init(config_dir.clone());
+            redact::init(config_dir.join(crypto::TOKEN_MAP));
             let (sealed, removed) = crypto::upgrade_stores(&config_dir);
             if sealed > 0 || removed > 0 {
                 log(&format!("ENVELOPE: sealed {sealed} store files, removed {removed} plaintext request dumps"));
