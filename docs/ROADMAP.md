@@ -345,6 +345,12 @@ the design.
 - [ ] `criteria` in `decide.rs` states what counts as a yes and what counts as a
       no. The wording of the question and the wording of the criteria are the only
       tuning. Re-measure the two `Test` scores after any change.
+- [ ] First Mate injects `<!>` into the message row at the position of the value
+      that already left. The console renders the marker highlighted.
+- [ ] The leak report holds one sealed row per leak. Each row links into the
+      console at the message that carried the value.
+- [ ] The console exports the leak report as a PDF. The user may protect that PDF
+      with a generated password or a password of their own.
 - **Accept:** a checked box produces the same tokenized request on a local
   endpoint and on a public endpoint. That request carries a fake card, a JWT,
   and an email. A registry-seeded account number with no checksum also leaves

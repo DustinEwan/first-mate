@@ -445,56 +445,65 @@ carries the topic of a text, not whether the topic is private.
 
 ## Mitigation (class 2)
 
-Mitigation starts after a value left the machine. The receiver controls
-retention. No provider offers a control for deleting one string from the
-provider log. The app therefore offers four small controls and promises nothing
-beyond the four controls.
+Mitigation starts after a value left the machine. First Mate cannot retrieve a
+value from a provider, and no provider offers a control that deletes one string
+from its log. First Mate therefore promises two things: the user sees exactly
+what left and where it went, and the record of that fact survives.
 
-- Stop the re-send. `ChatView.vue` sends the whole transcript on each turn, so one
-  leaked value leaves again on every turn. The shipped `LEAK:` notice names the
-  classes of such a value. A control that stops the re-send is not in the product.
-- Name the one action for the value class. Rotation works whatever the receiver
-  does, and no other mitigation does.
+- Mark the leak in place. First Mate injects `<!>` into the message row at the
+  position of the value that already left. The console renders the marker
+  highlighted, and the marker stays on the row after a resume.
+- State the leak, and state it exactly. The console names the value, the
+  conversation, the message, the provider, the model, and the time of the send.
+  The console gives no advice, because the user cannot undo the send.
+- Keep the record. The leak report below holds one row per leak, and each row
+  links into the console at the message that carried the value.
+- Record the re-send. `ChatView.vue` sends the whole transcript on each turn. A
+  leaked value therefore leaves again on every later turn under a provider whose
+  switch is off. The marker records each such send.
 
-  | Value | Rotatable | Action you can take |
-  | --- | --- | --- |
-  | Password, API key, session token | Yes | Rotate the value. |
-  | Card number | Yes | Cancel the card and take a new one. |
-  | Bank account number | No | Monitoring: alerts from the bank. |
-  | SSN | No | Monitoring: credit freeze and fraud alerts. |
-  | Health fact, employer, salary | No | No action exists. |
-
-- Count the receivers. The same transcript sent to three providers is three
-  exposures. Settings will show the provider list for each conversation.
-- Write a leak report.
+The shipped product holds one part of this design. The console adds one red line
+per run, and that line names the classes of the values that left earlier. The
+inline marker, the exact statement, and the leak report are not in the product.
 
 ### Leak report
 
-The leak report is the artifact policy and compliance read. No part of this section
-is in the product. First Mate's work ends at the leak report.
+The leak report is the artifact the user, a lawyer, an insurer, or an auditor
+reads. No part of this section is in the product. First Mate's work ends at the
+report.
 
-- Each row names the class and never the value. A report with the value would
-  become a second store for the secret. The chip in "On-disk truth and the
-  console indicator" follows the same rule.
-- Each row holds the time, the provider id, and the Base URL. Each row holds the
-  model, the class, and the count. Each row holds the conversation id and the row
-  id. Each row holds the tool behind the flagged value. Each row holds the
-  retention terms of the provider at the moment of the send.
-- The retention terms make the row compliance-grade. The row states the exposure
-  window: 30 days, flagged and up to 2 years, zero retention, or unknown.
-- Each row records your response: rotated, frozen, or ignored. Detection without
-  action leaves the case open.
-- The file is append-only JSONL, and First Mate encrypts it with the envelope
-  in `docs/ENCRYPTION.md`. The report names each file holding sensitive content,
-  even with no values inside.
-- The app must export the report. A report you cannot hand to a lawyer or a bank
-  is not evidence.
-- Scope: the report covers sends First Mate made. The report cannot cover a leak
-  by another route. The report cannot confirm deletion by a receiver.
+- Each row names the leaked value in full. The user, or the user's organization,
+  owns the security of the report once First Mate writes it. First Mate's duty is
+  an exact record, not a redacted one.
+- Each row holds the value and its class. Each row holds the conversation, the
+  message, and the tool or message part that carried the value. Each row holds the
+  provider id, the model, the Base URL, and the time of the send.
+- Each row links into the console. The user opens the conversation, and the console
+  scrolls the message into view. The user then reads the leak in context.
+- First Mate stores no retention claim. The client cannot learn how long one
+  provider keeps one message, so no row states an exposure window. The provider
+  terms below record what each provider publishes.
+- First Mate keeps the report for as long as the user wants it. The default is
+  forever, and no rotation or expiry exists.
+- The store file is append-only JSONL, and First Mate encrypts it with the envelope
+  in `docs/ENCRYPTION.md`. The file holds real values under the TPM key or the
+  recovery key. The file opens on this machine only.
+- The console exports the report as a PDF. The user may protect that PDF with a
+  password. First Mate generates the password, or the user types one. The export
+  dialog states that the PDF holds the real values. The user then knows what the
+  file carries once it leaves this machine.
+- The console chip keeps its count-only rule, because the chip sits in the chat log
+  beside the row. The report is the place that names the value.
+- Scope: the report covers sends First Mate made. The report cannot cover a leak by
+  another route. The report cannot confirm deletion by a receiver.
 - The report inherits the gate's recall. The report records what the gate saw, so
   the observe-only measurement and the calibration curve come first.
 
 ### Provider terms that bound mitigation
+
+First Mate stores no retention claim in a report row. These terms are background
+for the reader of this document, because they bound what any mitigation can
+promise.
 
 - OpenAI does not use API data to train models, unless you opt in.
   Abuse-monitoring logs last up to 30 days. See
@@ -518,10 +527,10 @@ cannot, because you know the value. The log is evidence, not a guess.
 - The gesture is the write path Layer 2 needs, so the registry grows from a leak
   you observed. You need no upfront configuration, because nobody writes such a
   list in advance.
-- The action cannot retract what already left. The console keeps a persistent
-  `LEAK:` line on the turn where the value first went out. The line says the value
-  reached the provider before the rule existed. The word `Redact` alone
-  would imply an undone exposure.
+- The action cannot retract what already left. The console keeps the persistent
+  `<!>` marker on the row where the value first went out. The marker says the value
+  reached the provider before the rule existed. The word `Redact` alone would
+  imply an undone exposure.
 - The pass edits the outbound copy only, and the pass re-derives the copy per
   request. The stored transcript keeps real values, per the Core round-trip rule.
   A rule in stored rows fails on resume against another provider, because the
