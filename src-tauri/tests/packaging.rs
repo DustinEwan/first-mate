@@ -83,3 +83,22 @@ fn installer_packages_the_prompt_content() {
         );
     }
 }
+
+/// One screen must never mean two things by "the model".
+#[test]
+fn the_console_names_the_two_models_once() {
+    for name in ["ChatView.vue", "SettingsView.vue", "SetupWizard.vue"] {
+        let text = std::fs::read_to_string(repo_root().join("src").join(name)).expect(name);
+        for stale in [
+            "second model",
+            "Second model",
+            "decision model",
+            "Advanced detection",
+        ] {
+            assert!(
+                !text.contains(stale),
+                "{name} must name the Privacy Model, not {stale:?}"
+            );
+        }
+    }
+}

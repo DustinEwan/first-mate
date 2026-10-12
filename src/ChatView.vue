@@ -222,7 +222,7 @@ const inputRef = ref<HTMLElement>();
 let liveMsgId = -1;
 let pendingRedact: RedactReport | undefined;
 const spinnerChar = ref("⠋");
-// The second model flags a message; you decide. The card takes the composer's
+// The Privacy Model flags a message; you decide. The card takes the composer's
 // place, because the send waits on your answer.
 interface AuditWindow {
   start: number;
@@ -243,11 +243,11 @@ const selection = ref("");
 // a hold is not a fault inside First Mate.
 const HELD_TEXT: Record<string, (detail: string) => string> = {
   denied: () =>
-    "You denied that message, so First Mate did not send it. Nothing reached the model.",
+    "You denied that message, so First Mate did not send it. Nothing reached the Agent Model.",
   stopped: () => "You stopped the run before you answered, so First Mate did not send the message.",
   outage: (host) =>
-    `First Mate sent nothing, because the second model at ${host} did not answer. ` +
-    "Start that server, or turn off Advanced detection in Settings.",
+    `First Mate sent nothing, because the Privacy Model at ${host} did not answer. ` +
+    "Start that server, or turn off the Privacy Model in Settings.",
 };
 
 // Ranges count code points, so Array.from splits the message the way the
@@ -850,7 +850,7 @@ window.addEventListener("keydown", (e) => {
           </div>
           <div v-if="audit" class="audit" @mouseup="readSelection" @keyup="readSelection">
             <div class="audit-head">
-              The second model scored this message {{ audit.score.toFixed(2) }}. Select the
+              The Privacy Model scored this message {{ audit.score.toFixed(2) }}. Select the
               sensitive text and redact it, or deny the send.
             </div>
             <div class="audit-body">

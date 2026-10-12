@@ -233,7 +233,7 @@ onBeforeUnmount(() => {
       <div class="wizard-card">
         <n-steps :current="step" size="small">
           <n-step title="Welcome" />
-          <n-step title="Model" />
+          <n-step title="Agent Model" />
           <n-step title="Privacy" />
           <n-step title="Harness" />
           <n-step title="Ready" />
@@ -251,7 +251,7 @@ onBeforeUnmount(() => {
             It does these things as your Windows account. It can change or delete anything you can.
           </p>
           <p class="dim">
-            Setup takes about two minutes: pick a model, then save your recovery key.
+            Setup takes about two minutes: pick the Agent Model, then save your recovery key.
           </p>
         </div>
 

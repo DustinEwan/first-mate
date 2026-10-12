@@ -257,9 +257,13 @@ flagged message therefore goes to you, not straight to a marker.
 - Settings stores the decision-server address with its `/v1` suffix. The client
   strips that suffix before it appends an endpoint, so the client never sends a
   doubled `/v1`.
+- The console names each model once. The Agent Model answers you. The Privacy Model
+  reads the words before they leave the PC. A packaging test bans the older names in
+  the UI files. `decide.rs` and the `decision_` setting keys keep the older
+  identifier, because a rename there would break each saved settings file.
 - A scorer outage holds the send. First Mate sends nothing, and the console names the
-  host, the cause, and the two ways forward: start the server, or turn off Advanced
-  detection in Settings. The app writes one `GATE:` log line with the failing address.
+  host, the cause, and the two ways forward: start the server, or turn off the Privacy
+  Model in Settings. The app writes one `GATE:` log line with the failing address.
   A send without a verdict would make containment depend on a network.
 - The gate denies by default, so the gate needs no knowledge of the identity of
   a sensitive value. The deny-by-default answer is the definition of containment
@@ -330,8 +334,8 @@ flagged message therefore goes to you, not straight to a marker.
 - The gate still runs the exact rules over the system message. Layer 1 costs
   nothing on the system message. A credential in a prompt is a defect you want
   found.
-- The gate needs a second signal. A decision model knows generic categories:
-  credentials, financial text, health, identity. The decision model does not
+- The gate needs a second signal. The Privacy Model knows generic categories:
+  credentials, financial text, health, identity. The Privacy Model does not
   know your employer's part number. The gate also matches the registry and the
   declared files, and the gate denies on either signal.
 - The shipped gate redacts a flagged value with no dialog. Detokenize restores the
@@ -372,9 +376,10 @@ flagged message therefore goes to you, not straight to a marker.
 - One server, many profiles. A profile could need separate question text or a
   separate threshold. The probe and the slider are global today.
 
-### Spike: local decision models, measured 2026-10-10
+### Spike: Privacy Model candidates, measured 2026-10-10
 
-Two decision models and one embedding model ran on the same 44 labeled texts.
+Two Privacy Model candidates and one embedding model ran on the same 44 labeled
+texts.
 The same models ran on the same 200 texts of real agent work. The host is an
 RTX 3060 with 12 GB and 12 CPU cores. The Jev Decision Index at
 `https://huggingface.co/spaces/multimodalart/jev-decision-index` ranks open
@@ -387,7 +392,7 @@ board establishes reliability on the redaction task, so each model also ran here
 | --- | --- | --- | --- | --- | --- | --- |
 | `h2oai/h2o-lightning-4b` v1.1, 4B | 75.0, open rank 5 | 0.960 | 0.50 | 12.5% | 70 ms GPU | 11.6 GB VRAM, 5.4 GB RSS |
 | `StrandsAgents/strands-decider-2B`, 2B | unranked | 0.891 | 0.10 | 98.5% | 109 ms GPU, 1767 ms CPU | 6 GB VRAM, 9 GB CPU RSS |
-| `all-MiniLM-L6-v2`, 23M, kNN | not a decision model | 0.735 | none | 0%, misses | 59 ms CPU | 1.0 GB RSS |
+| `all-MiniLM-L6-v2`, 23M, kNN | not a Privacy Model | 0.735 | none | 0%, misses | 59 ms CPU | 1.0 GB RSS |
 
 H2O-Lightning-4B is Apache-2.0, 9.1 GB, served by vLLM 0.30.0 with the shim flag
 `SHIM_NOUL_FLOOR=0`. The shipped config floors every yes/no answer at 0.801. A

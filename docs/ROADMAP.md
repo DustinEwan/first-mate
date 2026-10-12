@@ -326,9 +326,9 @@ the design.
       credential.
       That action calls a server unusable when both answers land at or above 0.8.
 - [x] An unreachable scorer holds the send. The console names the host and the two
-      ways forward: start the server, or turn off Advanced detection. A debug build
+      ways forward: start the server, or turn off the Privacy Model. A debug build
       records the one `GATE:` line that names the failing address.
-- [x] The decision model judges each message once, when that message enters the
+- [x] The Privacy Model judges each message once, when that message enters the
       conversation, and the verdict travels with the message. The 60-character
       floor and the 16-message cap go away with the resend re-judgement.
 - [x] The audit card holds a flagged message: the message, its score, your
@@ -353,7 +353,7 @@ the design.
   pattern matches still leaves the machine tokenized. With no server, that
   sentence leaves the machine unchanged. A flagged message stops before the send
   and waits on the audit card. A message with a stored verdict never goes to the
-  decision model a second time. A long message whose flagged text sits past the
+  Privacy Model a second time. A long message whose flagged text sits past the
   first window still stops before the send.
 
 ### Phase B — Agent profiles (§1)

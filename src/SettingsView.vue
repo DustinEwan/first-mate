@@ -195,10 +195,10 @@ async function test() {
   }
 }
 
-// A server that answers at its floor flags every span, so the probe refuses
+// A server that answers at its floor flags every message, so the probe refuses
 // that server.
 async function probeServer() {
-  status.value = "Asking the second model…";
+  status.value = "Asking the Privacy Model…";
   try {
     const p = await invoke<{ benign: number; credential: number; usable: boolean }>(
       "probe_decision_server",
@@ -208,9 +208,10 @@ async function probeServer() {
     const credential = p.credential.toFixed(2);
     status.value = p.usable
       ? `ordinary text ${benign}, text with a password ${credential}`
-      : `ordinary text ${benign}, text with a password ${credential}: this model cannot tell the two apart`;
+      : `ordinary text ${benign}, text with a password ${credential}: the Privacy Model cannot ` +
+        `tell the two apart`;
   } catch (e) {
-    status.value = `The second model did not answer: ${e}`;
+    status.value = `The Privacy Model did not answer: ${e}`;
   }
 }
 
@@ -257,7 +258,7 @@ function closeWindow() {
         <div class="cats">
           <nav class="rail">
             <button :class="{ on: activeTab === 'model' }" @click="activeTab = 'model'">
-              Model
+              Agent Model
             </button>
             <button :class="{ on: activeTab === 'privacy' }" @click="activeTab = 'privacy'">
               Privacy
@@ -288,7 +289,7 @@ function closeWindow() {
                   :placeholder="keyPlaceholder"
                 />
               </n-form-item>
-              <n-form-item label="Model">
+              <n-form-item label="Agent Model">
                 <n-space align="center" :wrap="false">
                   <n-select
                     v-model:value="model"
@@ -304,8 +305,8 @@ function closeWindow() {
               <n-form-item label="Context window (tokens)">
                 <n-input-number v-model:value="contextWindow" :min="0" :show-button="false" />
                 <template #feedback>
-                  Detected from the model endpoint (max_model_len); set it when the endpoint reports
-                  nothing. 0 = auto-detect.
+                  Detected from the Agent Model endpoint (max_model_len); set it when the endpoint
+                  reports nothing. 0 = auto-detect.
                 </template>
               </n-form-item>
               <n-form-item label="Compact at % of context">
@@ -322,7 +323,7 @@ function closeWindow() {
               </n-form-item>
               <n-form-item :show-label="false">
                 <n-button @click="test">Test</n-button>
-                <template #feedback> Sends one short request to the model above.</template>
+                <template #feedback> Sends one short request to the Agent Model.</template>
               </n-form-item>
             </n-form>
 
@@ -339,22 +340,22 @@ function closeWindow() {
                 </template>
               </n-form-item>
               <n-form-item :show-label="false">
-                <n-checkbox v-model:checked="decisionEnabled"> Advanced detection </n-checkbox>
+                <n-checkbox v-model:checked="decisionEnabled"> Use the Privacy Model </n-checkbox>
                 <template #feedback>
                   Some sensitive information has no obvious pattern: a password you type in a
-                  sentence, a project name, or a place. A second model does the reading. You install
-                  and run that model yourself. First Mate hides what the model flags. Your saved
-                  conversation keeps the real values. The model can flag ordinary text. Test shows
-                  how sharply the model tells the two apart.
+                  sentence, a project name, or a place. The Privacy Model reads those words, and
+                  First Mate hides what it flags. You install and run the Privacy Model yourself.
+                  Your saved conversation keeps the real values. The Privacy Model can flag ordinary
+                  text, and Test shows how sharply it tells the two apart.
                 </template>
               </n-form-item>
-              <n-form-item v-if="decisionEnabled" label="Second model address">
+              <n-form-item v-if="decisionEnabled" label="Privacy Model address">
                 <n-space align="center" :wrap="false">
                   <n-input v-model:value="decisionUrl" placeholder="e.g. http://127.0.0.1:8741" />
                   <n-button size="small" secondary @click="probeServer">Test</n-button>
                 </n-space>
                 <template #feedback>
-                  First Mate sends the second model only the words it needs checked, never your
+                  First Mate sends the Privacy Model only the words it needs checked, never your
                   whole conversation. Test sends one ordinary sentence and one sentence with a
                   password. The two scores should be far apart.
                 </template>
@@ -369,7 +370,7 @@ function closeWindow() {
                   paths.
                 </template>
               </n-form-item>
-              <n-form-item v-if="decisionEnabled" label="Second model must be this sure">
+              <n-form-item v-if="decisionEnabled" label="Privacy Model must be this sure">
                 <n-input-number
                   v-model:value="decisionThreshold"
                   :min="0"
@@ -378,8 +379,8 @@ function closeWindow() {
                   :show-button="false"
                 />
                 <template #feedback>
-                  The model must reach this level before First Mate hides anything. A higher level
-                  hides less. Test shows two scores. Pick a level between them. Default 0.5.
+                  The Privacy Model must reach this level before First Mate hides anything. A higher
+                  level hides less. Test shows two scores. Pick a level between them. Default 0.5.
                 </template>
               </n-form-item>
             </n-form>
