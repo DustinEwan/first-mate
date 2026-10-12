@@ -359,9 +359,11 @@ function isTranscriptRow(m: Msg): boolean {
 function persistConversation() {
   if (tempChat.value) return;
   // Tool reports persist so a resumed conversation sees work already done.
-  const turns = messages.value
-    .filter(isTranscriptRow)
-    .map((m) => ({ role: m.cls, text: m.text, report: m.done ? m.tool : undefined }));
+  const turns = messages.value.filter(isTranscriptRow).map((m) => ({
+    role: m.cls,
+    text: m.text,
+    report: m.done ? m.tool : undefined,
+  }));
   if (turns.length === 0) return;
   if (!convName.value) {
     const first = turns.find((t) => t.role === "user");
@@ -545,6 +547,13 @@ onMounted(() => {
   listen<RedactReport>("redact", (event) => {
     pendingRedact = event.payload;
   });
+  // The notice names an earlier send, so it sits outside this run's chip.
+  listen<{ classes: string[] }>("leak", (event) => {
+    addMsg(
+      `These values left the PC earlier in this conversation: ${event.payload.classes.join(", ")}. The Privacy Model replaces them in this send, and cannot undo the earlier one.`,
+      "error",
+    );
+  });
   listen<{ message: string; score: number; windows: AuditWindow[] }>("audit", (event) => {
     audit.value = {
       message: event.payload.message,
@@ -626,7 +635,10 @@ async function submit() {
   // the rows above it.
   const priorHistory = messages.value
     .filter((m) => m.id !== currentId && isTranscriptRow(m))
-    .map((m) => ({ role: m.cls === "tool" ? "assistant" : m.cls, content: m.text }));
+    .map((m) => ({
+      role: m.cls === "tool" ? "assistant" : m.cls,
+      content: m.text,
+    }));
 
   isThinking.value = true;
   liveMsgId = -1;
@@ -657,6 +669,16 @@ async function submit() {
     const msg = typeof e === "string" ? e : e && e.message ? e.message : String(e);
     const held = /^held:(\w+)(?: (.*))?$/.exec(msg);
     const sentence = held ? HELD_TEXT[held[1]]?.(held[2] ?? "") : undefined;
+    if (held) {
+      // The run sent nothing, so the newest user row never reached the Agent
+      // Model. Keep it out of the conversation, and put the text back where
+      // you can edit it.
+      const unsent = [...messages.value].reverse().find((m) => m.cls === "user");
+      if (unsent) {
+        messages.value = messages.value.filter((m) => m.id !== unsent.id);
+        if (!input.value.trim()) input.value = unsent.text;
+      }
+    }
     if (held?.[1] === "outage" && sentence) {
       addMsg(`Error: ${sentence}`, "error");
     } else if (sentence) {

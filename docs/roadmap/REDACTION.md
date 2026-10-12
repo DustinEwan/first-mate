@@ -280,12 +280,21 @@ flagged message therefore goes to you, not straight to a marker.
   credential. When both probe answers land at or above 0.8, the app reports the
   server as unusable. H2O's shim ships a 0.801 yes/no floor, and a floored
   server flags every message.
-- The app judges a message once, when that message enters the conversation. The
-  verdict travels with the message, so a re-sent message is never re-judged. The
-  agent loop re-sends the whole window on each tool turn, and that resend costs
-  no new judgement.
-- Only a cleared message stores a verdict. A denial stores nothing, because that
-  message never entered the conversation, so a resend of it is judged again.
+- The gate judges outgoing text: your new message, and each tool result. Text
+  the provider authored arrives from the provider, so the gate judges none of
+  it. Its echo on a later turn is continuity, not a new send.
+- The gate never judges text the Agent Model already holds. An audit of text
+  that already left changes nothing.
+- `Redactor::sent` holds one conversation's text for one run. Nothing about a
+  judgement reaches a file.
+- The agent loop re-sends the whole window on each tool turn. `record` marks the
+  text that cleared, so a resend costs no new judgement.
+- A run that holds sends nothing, so the console removes its newest user row
+  and puts the text back in the composer. A later send of that text is judged
+  again.
+- When the pass replaces a value that already left the PC, the console names
+  the class. The notice says the earlier send cannot be undone, and names no
+  value. The app writes one `LEAK:` log line.
 - No length floor and no per-request cap limits the judgement. The measured 4B
   answers in 70 ms on a GPU, so a large tool output answers inside the time a
   tool turn already spends.

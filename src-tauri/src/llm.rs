@@ -143,7 +143,11 @@ pub(crate) async fn chat_with_llm(
     }
 }
 
-fn redactor(app: &tauri::AppHandle, provider: &str) -> Option<redact::Redactor> {
+fn redactor(
+    app: &tauri::AppHandle,
+    provider: &str,
+    history: &[HistoryItem],
+) -> Option<redact::Redactor> {
     let (hide, values) = settings::redaction_for(app, provider);
     if !hide {
         return None;
@@ -152,6 +156,7 @@ fn redactor(app: &tauri::AppHandle, provider: &str) -> Option<redact::Redactor> 
     for value in values {
         red.seed(&value);
     }
+    red.note_sent(history.iter().map(|h| h.content.clone()));
     Some(red)
 }
 
@@ -176,11 +181,6 @@ async fn gate(
     messages: Vec<String>,
 ) -> Result<(), String> {
     for message in messages {
-        // A denial stores nothing, because a denied message never entered the
-        // conversation, so a resend of it is judged again.
-        if red.verdict(&message).is_some() {
-            continue;
-        }
         let verdict = match decide::score(&scorer.base, &message).await {
             Ok(v) => v,
             Err(e) => {
@@ -193,7 +193,7 @@ async fn gate(
             }
         };
         if verdict.best < scorer.threshold {
-            red.record(&message, verdict.best);
+            red.record(&message);
             continue;
         }
         log(&format!("GATE: flagged a message at {:.2}", verdict.best));
@@ -211,7 +211,7 @@ async fn gate(
             log(&format!("AUDIT: you denied a message at {:.2}", verdict.best));
             return Err(hold("denied", ""));
         }
-        red.record(&message, verdict.best);
+        red.record(&message);
     }
     Ok(())
 }
@@ -272,7 +272,8 @@ fn shown(red: &Option<redact::Redactor>, carry: &mut String, delta: &str) -> Str
     }
 }
 
-/// A run that replaced nothing emits nothing.
+/// A run that replaced nothing emits nothing. A value the Agent Model already
+/// holds gets one report per run, because a later audit cannot take it back.
 fn emit_redacted(app: &tauri::AppHandle, red: &Option<redact::Redactor>) {
     let Some(r) = red else { return };
     let count = r.redacted_count();
@@ -281,6 +282,11 @@ fn emit_redacted(app: &tauri::AppHandle, red: &Option<redact::Redactor>) {
             "redact",
             serde_json::json!({ "count": count, "classes": r.breakdown() }),
         );
+    }
+    let leaks = r.leaks();
+    if !leaks.is_empty() {
+        log(&format!("LEAK: {} already left the PC", leaks.join(", ")));
+        let _ = app.emit("leak", serde_json::json!({ "classes": leaks }));
     }
 }
 
@@ -547,7 +553,7 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
         ProviderConfig::with_base_url(provider_enum, api_key, format!("{base}/v1"), model)
     };
     let llm = create_chat_provider(&config).map_err(|e| e.to_string())?;
-    let mut red = redactor(&app, &provider);
+    let mut red = redactor(&app, &provider, &prior_history);
     let scorer = scorer(&app);
     let mut carry = String::new();
 
@@ -663,14 +669,12 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
             if let Some(s) = scorer.as_ref() {
                 let mut found: Vec<&str> = Vec::new();
                 for m in wire.iter().rev() {
-                    if matches!(m.role, lmkit::Role::System) {
+                    // Only your message and a tool result carry new text out.
+                    if !matches!(m.role, lmkit::Role::User | lmkit::Role::Tool) {
                         continue;
                     }
                     if let Some(c) = m.content.as_deref() {
                         found.push(c);
-                    }
-                    for call in m.tool_calls.iter().flatten() {
-                        found.push(&call.function.arguments);
                     }
                 }
                 let messages = r.pending_from(found.into_iter());
@@ -905,7 +909,7 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
     let client = reqwest::Client::new();
     let (window, window_src) =
         resolve_window(&provider, base, &api_key, &model, context_window).await;
-    let mut red = redactor(&app, &provider);
+    let mut red = redactor(&app, &provider, &prior_history);
     let scorer = scorer(&app);
     let mut carry = String::new();
 
@@ -1304,7 +1308,10 @@ mod tests {
     use super::*;
 
     fn row(role: &str, text: &str) -> HistoryItem {
-        HistoryItem { role: role.to_string(), content: text.to_string() }
+        HistoryItem {
+            role: role.to_string(),
+            content: text.to_string(),
+        }
     }
 
     #[test]

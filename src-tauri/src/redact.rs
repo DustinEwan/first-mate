@@ -1,6 +1,6 @@
 //! Sensitive-info redaction. `docs/roadmap/REDACTION.md` is the design.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard, OnceLock};
 
@@ -369,27 +369,9 @@ struct Hit {
     class: Class,
 }
 
-/// The verdict key. A hash keeps transcript text out of the sealed table.
-fn digest(text: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(text.as_bytes());
-    hasher
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
-}
-
 /// The token table for every conversation this machine has tokenized. The table
 /// is the key that opens each marker, so the envelope seals the file and
 /// `read_file` never decrypts it.
-/// One message's verdict. The key is the SHA-256 of the message, so the sealed
-/// file gains verdicts without gaining transcripts.
-#[derive(Clone, Copy, Serialize, Deserialize)]
-struct Verdict {
-    score: f64,
-}
-
 #[derive(Default, Serialize, Deserialize)]
 struct Table {
     /// `⟦EMAIL_1⟧` → the real value.
@@ -399,9 +381,6 @@ struct Table {
     /// A normalized token interior → its token, for the repair pass.
     repairs: HashMap<String, String>,
     counters: HashMap<Class, usize>,
-    /// SHA-256 of a scored message → its verdict.
-    #[serde(default)]
-    verdicts: HashMap<String, Verdict>,
 }
 
 impl Table {
@@ -485,15 +464,7 @@ impl Table {
 
     /// Only additions happen here, so one length sum detects a new mapping.
     fn len(&self) -> usize {
-        self.values.len() + self.repairs.len() + self.verdicts.len()
-    }
-
-    fn verdict(&self, key: &str) -> Option<f64> {
-        self.verdicts.get(key).map(|v| v.score)
-    }
-
-    fn record(&mut self, key: &str, score: f64) {
-        self.verdicts.insert(key.to_string(), Verdict { score });
+        self.values.len() + self.repairs.len()
     }
 }
 
@@ -555,6 +526,14 @@ pub(crate) fn init(path: PathBuf) {
 pub(crate) struct Redactor {
     store: Store,
     registry: Vec<String>,
+    /// Text the Agent Model already holds in this conversation, one entry per
+    /// row. The Privacy Model judges none of it, because those words already
+    /// left the PC.
+    sent: HashSet<String>,
+    /// The same rows as one string, so a value can be found inside them.
+    sent_blob: String,
+    /// Classes of values this run replaces that already left the PC.
+    leaks: Mutex<Vec<&'static str>>,
 }
 
 impl Redactor {
@@ -562,6 +541,9 @@ impl Redactor {
         Self {
             store: SHARED.get().cloned().unwrap_or_else(Store::memory),
             registry: Vec::new(),
+            sent: HashSet::new(),
+            sent_blob: String::new(),
+            leaks: Mutex::new(Vec::new()),
         }
     }
 
@@ -570,6 +552,9 @@ impl Redactor {
         Self {
             store,
             registry: Vec::new(),
+            sent: HashSet::new(),
+            sent_blob: String::new(),
+            leaks: Mutex::new(Vec::new()),
         }
     }
 
@@ -580,12 +565,14 @@ impl Redactor {
         }
     }
 
-    /// A false positive on a system message replaces the instruction set with
-    /// one token, which breaks the run.
+    /// The gate judges the text First Mate puts on the wire: your message, and
+    /// each tool result. A false positive on the instruction set replaces it
+    /// with one token, which breaks the run. The provider's own text needs no
+    /// check, because the provider wrote it.
     pub(crate) fn pending(&self, msgs: &mut [serde_json::Value]) -> Vec<String> {
         let mut found: Vec<String> = Vec::new();
         for msg in msgs.iter().rev() {
-            if msg.get("role").and_then(|r| r.as_str()) == Some("system") {
+            if !leaves(msg.get("role").and_then(|r| r.as_str())) {
                 continue;
             }
             scoreable(msg, &mut found);
@@ -597,29 +584,39 @@ impl Redactor {
         self.unjudged(texts.map(str::to_string).collect())
     }
 
-    /// A message you approved never returns to the scorer, and the agent loop
-    /// re-sends the whole window on every tool turn. A message you denied stays
-    /// in the list, because the gate must hold it again.
+    /// The gate judges new text only. A row the Agent Model already holds needs
+    /// no new judgement, because its words already left the PC. The agent loop
+    /// re-sends the whole window on every tool turn, and `record` keeps those
+    /// resends cheap.
     fn unjudged(&self, found: Vec<String>) -> Vec<String> {
-        let table = self.store.lock();
-        found
-            .into_iter()
-            .filter(|m| table.verdict(&digest(m)).is_none())
-            .collect()
+        found.into_iter().filter(|m| !self.sent.contains(m)).collect()
     }
 
-    /// The verdict an earlier turn or an earlier run reached for this message.
-    pub(crate) fn verdict(&self, message: &str) -> Option<f64> {
-        self.store.lock().verdict(&digest(message))
+    /// `llm.rs` calls this once per run with the rows an earlier turn sent.
+    pub(crate) fn note_sent(&mut self, rows: impl Iterator<Item = String>) {
+        for row in rows {
+            self.sent_blob.push_str(&row);
+            self.sent_blob.push('\n');
+            self.sent.insert(row);
+        }
     }
 
-    /// A verdict reaches the file before the request goes out, so a crash does
-    /// not make the next run ask about the same message again.
-    pub(crate) fn record(&mut self, message: &str, score: f64) {
-        let mut table = self.store.lock();
-        let before = table.len();
-        table.record(&digest(message), score);
-        self.store.commit(&table, before);
+    /// The gate cleared this text, and the request carries it now.
+    pub(crate) fn record(&mut self, message: &str) {
+        self.sent.insert(message.to_string());
+    }
+
+    /// The classes whose values already left the PC, one entry each.
+    pub(crate) fn leaks(&self) -> Vec<&'static str> {
+        self.leaks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    /// A value the Agent Model already holds. A later audit cannot take it back.
+    fn leaked(&self, value: &str) -> bool {
+        !self.sent_blob.is_empty() && self.sent_blob.contains(value)
     }
 
     pub(crate) fn tokenize(&mut self, text: &str) -> String {
@@ -639,6 +636,16 @@ impl Redactor {
         for hit in self.hits(text) {
             out.push_str(&text[last..hit.start]);
             let value = &text[hit.start..hit.end];
+            let label = hit.class.label();
+            if self.leaked(value) {
+                let mut leaks = self
+                    .leaks
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if !leaks.contains(&label) {
+                    leaks.push(label);
+                }
+            }
             out.push_str(&table.token(hit.class, value));
             last = hit.end;
         }
@@ -830,6 +837,13 @@ fn registry_hits(text: &str, registry: &[String], out: &mut Vec<Hit>) {
     }
 }
 
+/// Only your message and a tool result carry new text out of the PC. The
+/// instruction set is First Mate's own text, and an assistant row holds text
+/// the provider wrote.
+fn leaves(role: Option<&str>) -> bool {
+    matches!(role, Some("user") | Some("tool"))
+}
+
 /// A flagged string leaves the machine as one handle, so a structural string
 /// must never be offered: a flagged `"user"` would replace the role value and
 /// break the request. Only what the model reads is scoreable.
@@ -847,17 +861,6 @@ fn scoreable(msg: &serde_json::Value, out: &mut Vec<String>) {
             }
         }
         _ => {}
-    }
-    if let Some(calls) = msg.get("tool_calls").and_then(|t| t.as_array()) {
-        for call in calls {
-            if let Some(args) = call
-                .get("function")
-                .and_then(|f| f.get("arguments"))
-                .and_then(|a| a.as_str())
-            {
-                out.push(args.to_string());
-            }
-        }
     }
 }
 
@@ -1086,7 +1089,7 @@ mod tests {
             r.pending(msgs.as_array_mut().unwrap().as_mut_slice()).len(),
             1
         );
-        r.record(message, 0.91);
+        r.record(message);
         assert!(r
             .pending(msgs.as_array_mut().unwrap().as_mut_slice())
             .is_empty());
@@ -1098,39 +1101,53 @@ mod tests {
     }
 
     #[test]
-    fn a_verdict_survives_a_restart() {
-        if !crate::crypto::tpm_ready() {
-            return;
-        }
-        let message = "The lease names my landlord's account number and my date of birth.";
-        let path = std::env::temp_dir().join("fm-verdict-restart.json");
-        let _ = std::fs::remove_file(&path);
-        {
-            let mut first = Redactor::with_store(Store::file(path.clone()));
-            first.record(message, 0.77);
-        }
-        let second = Redactor::with_store(Store::file(path.clone()));
-        assert_eq!(second.verdict(message), Some(0.77));
-        let bytes = std::fs::read(&path).unwrap();
-        assert!(
-            !String::from_utf8_lossy(&bytes).contains("landlord"),
-            "the verdict table must not hold transcript text"
-        );
-        let _ = std::fs::remove_file(&path);
+    fn a_row_an_earlier_run_sent_never_reaches_the_scorer() {
+        let sent = "The lease names my landlord's account number and my date of birth.";
+        let mut r = Redactor::new();
+        r.note_sent(std::iter::once(sent.to_string()));
+        let mut msgs = serde_json::json!([{"role": "user", "content": sent}]);
+        assert!(r
+            .pending(msgs.as_array_mut().unwrap().as_mut_slice())
+            .is_empty());
     }
 
     #[test]
-    fn the_gate_scores_no_authored_text() {
+    fn a_value_the_agent_model_already_holds_is_reported() {
+        let mut r = Redactor::new();
+        r.note_sent(std::iter::once(
+            "I paid the card 4111 1111 1111 1111 last week.".to_string(),
+        ));
+        let sealed = r.tokenize("Charge the card 4111 1111 1111 1111 again.");
+        assert!(sealed.contains("⟦CARD_1⟧"), "the repeat value is replaced");
+        assert_eq!(r.leaks(), vec!["CARD"]);
+    }
+
+    #[test]
+    fn a_value_that_never_left_the_pc_is_not_reported() {
+        let mut r = Redactor::new();
+        r.note_sent(std::iter::once("nothing sensitive here".to_string()));
+        r.tokenize("My card is 4111 1111 1111 1111.");
+        assert!(r.leaks().is_empty());
+    }
+
+    #[test]
+    fn the_gate_scores_only_text_that_leaves_the_pc() {
         let private = "I told my doctor I stopped taking the pills the pharmacy gave me last August.";
         let mut msgs = serde_json::json!([
             {"role": "system", "content": private},
-            {"role": "user", "content": private}
+            {"role": "assistant", "content": private,
+             "tool_calls": [{"function": {"arguments": private}}]},
+            {"role": "tool", "content": "the pill bottle says twice daily"},
+            {"role": "user", "content": "I stopped taking the pills"}
         ]);
         let r = Redactor::new();
         assert_eq!(
             r.pending(msgs.as_array_mut().unwrap().as_mut_slice()),
-            vec![private.to_string()],
-            "the instruction set must never reach the scorer"
+            vec![
+                "I stopped taking the pills".to_string(),
+                "the pill bottle says twice daily".to_string()
+            ],
+            "the instruction set and the provider's own text never reach the scorer"
         );
     }
 
@@ -1154,8 +1171,8 @@ mod tests {
         let r = Redactor::new();
         assert_eq!(
             r.pending(msgs.as_array_mut().unwrap().as_mut_slice()),
-            vec![args.to_string(), content.to_string()],
-            "a structural string reached the scorer"
+            vec![content.to_string()],
+            "a structural string or the provider's own text reached the scorer"
         );
     }
 

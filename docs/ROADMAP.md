@@ -328,9 +328,11 @@ the design.
 - [x] An unreachable scorer holds the send. The console names the host and the two
       ways forward: start the server, or turn off the Privacy Model. A debug build
       records the one `GATE:` line that names the failing address.
-- [x] The Privacy Model judges each message once, when that message enters the
-      conversation, and the verdict travels with the message. The 60-character
-      floor and the 16-message cap go away with the resend re-judgement.
+- [x] The Privacy Model judges the text First Mate puts on the wire: your new
+      message, and each tool result. It never judges the instruction set, text
+      the provider authored, or text that already left the PC. The
+      60-character floor and the 16-message cap go away with the resend
+      re-judgement.
 - [x] The audit card holds a flagged message: the message, its score, your
       selection, then approve or deny. Deny holds the send, and you write the
       next message. `docs/roadmap/REDACTION.md` holds the design.
@@ -352,9 +354,10 @@ the design.
   text unchanged. With a decision server configured, a private sentence that no
   pattern matches still leaves the machine tokenized. With no server, that
   sentence leaves the machine unchanged. A flagged message stops before the send
-  and waits on the audit card. A message with a stored verdict never goes to the
-  Privacy Model a second time. A long message whose flagged text sits past the
-  first window still stops before the send.
+  and waits on the audit card. A row that an earlier run sent never goes to the
+  Privacy Model a second time. A value that already left the PC is named by its
+  class, and the notice names no value. A long message whose flagged text sits
+  past the first window still stops before the send.
 
 ### Phase B — Agent profiles (§1)
 

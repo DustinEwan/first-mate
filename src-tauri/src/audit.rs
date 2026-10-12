@@ -72,8 +72,12 @@ pub(crate) fn cancel() {
 mod tests {
     use super::*;
 
+    /// Both tests write `PENDING`, so one test runs at a time.
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn an_answer_reaches_the_waiter_once() {
+        let _only = TEST_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let (tx, rx) = oneshot::channel();
         *lock() = Some(tx);
         assert!(resolve(true, vec!["0212 555 0134".to_string()]));
@@ -85,6 +89,7 @@ mod tests {
 
     #[test]
     fn a_cancel_ends_the_wait_with_no_answer() {
+        let _only = TEST_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let (tx, rx) = oneshot::channel();
         *lock() = Some(tx);
         cancel();
