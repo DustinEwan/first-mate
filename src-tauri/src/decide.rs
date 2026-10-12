@@ -22,7 +22,7 @@ const CHARS_PER_TOKEN: usize = 4;
 /// and the server answer becomes the reason.
 const MIN_WINDOW_CHARS: usize = 200;
 
-/// A server that answers at or above this on a benign span reports a floor, not
+/// A server that answers at or above this on a benign message reports a floor, not
 /// a probability. The H2O shim ships a 0.801 yes/no floor.
 pub(crate) const FLOOR: f64 = 0.8;
 
@@ -54,7 +54,7 @@ fn key(base: &str) -> String {
 static OVER_LIMIT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"about (\d+) tokens, over[^0-9]*(\d+)").unwrap());
 
-/// Neither span holds a real value.
+/// Neither probe text holds a real value.
 const BENIGN: &str = "The build finished in 41 seconds and 3 tests failed on Windows.";
 const CREDENTIAL: &str = "Paste this into the console: sk-live-1234567890abcdef1234567890abcd";
 
@@ -64,30 +64,45 @@ pub(crate) struct Probe {
 }
 
 impl Probe {
-    /// A server that clears both spans flags every span, so the gate would
-    /// audit all traffic.
+    /// A server that clears both probe texts flags every message, so the gate
+    /// would audit all traffic.
     pub(crate) fn usable(&self) -> bool {
         self.benign < FLOOR || self.credential < FLOOR
     }
 }
 
-/// The probability that `span` holds sensitive information. A message over the
+/// One message's verdict. `windows` holds each window's range and score, so the
+/// audit card marks the window the model saw something in. Ranges count chars
+/// of the message, not bytes.
+pub(crate) struct Score {
+    pub best: f64,
+    pub windows: Vec<(usize, usize, f64)>,
+}
+
+/// The probability that `message` holds sensitive information. A message over the
 /// server budget gets overlapping windows, and the highest window score decides.
-pub(crate) async fn score(base: &str, span: &str) -> Result<f64, String> {
-    let chars: Vec<char> = span.chars().collect();
+pub(crate) async fn score(base: &str, message: &str) -> Result<Score, String> {
+    let chars: Vec<char> = message.chars().collect();
     // An empty state earns a refusal from some servers, and a refusal reports the
     // whole message unjudged.
     if chars.is_empty() {
-        return Ok(0.0);
+        return Ok(Score {
+            best: 0.0,
+            windows: vec![],
+        });
     }
-    let mut best = 0.0_f64;
     loop {
         let size = window_chars(base).await;
         let mut shrunk = false;
+        let mut best = 0.0_f64;
+        let mut scored: Vec<(usize, usize, f64)> = Vec::new();
         for (start, end) in windows(chars.len(), size) {
             let window: String = chars[start..end].iter().collect();
             match ask(base, &window, QUESTION, GATE_TIMEOUT).await {
-                Answer::Score(p) => best = best.max(p),
+                Answer::Score(p) => {
+                    best = best.max(p);
+                    scored.push((start, end, p));
+                }
                 Answer::TooLarge(answer) if end - start > MIN_WINDOW_CHARS => {
                     shrink(base, end - start, &answer);
                     shrunk = true;
@@ -98,7 +113,10 @@ pub(crate) async fn score(base: &str, span: &str) -> Result<f64, String> {
             }
         }
         if !shrunk {
-            return Ok(best);
+            return Ok(Score {
+                best,
+                windows: scored,
+            });
         }
     }
 }
@@ -134,9 +152,16 @@ async fn window_chars(base: &str) -> usize {
     size
 }
 
+/// Settings stores the address with its `/v1` suffix, the form `llm.rs` accepts
+/// too. Appending an endpoint to that address doubles the segment.
+fn root(base: &str) -> String {
+    let trimmed = base.trim_end_matches('/');
+    trimmed.strip_suffix("/v1").unwrap_or(trimmed).to_string()
+}
+
 /// `GET {base}/v1/models` reports the token budget the served engine declares.
 async fn read_budget(base: &str) -> usize {
-    let url = format!("{base}/v1/models");
+    let url = format!("{}/v1/models", root(base));
     let Ok(sent) = CLIENT.get(&url).timeout(LIMIT_TIMEOUT).send().await else {
         return usize::MAX;
     };
@@ -188,7 +213,7 @@ enum Answer {
 }
 
 async fn ask(base: &str, state: &str, question: &str, budget: Duration) -> Answer {
-    let url = format!("{}/v1/systemone", base.trim_end_matches('/'));
+    let url = format!("{}/v1/systemone", root(base));
     let body = json!({
         "state": state,
         "questions": {
@@ -228,8 +253,8 @@ pub(crate) async fn probe(base: &str) -> Result<Probe, String> {
     })
 }
 
-async fn ask_one(base: &str, span: &str) -> Result<f64, String> {
-    match ask(base, span, QUESTION, PROBE_TIMEOUT).await {
+async fn ask_one(base: &str, text: &str) -> Result<f64, String> {
+    match ask(base, text, QUESTION, PROBE_TIMEOUT).await {
         Answer::Score(p) => Ok(p),
         Answer::TooLarge(answer) | Answer::Failed(answer) => Err(answer),
     }
@@ -371,7 +396,38 @@ mod tests {
         });
         let mut text = "x".repeat(40_000);
         text.push_str("SECRET-IN-THE-TAIL");
-        assert_eq!(score(&base, &text).await.unwrap(), 0.9);
+        let verdict = score(&base, &text).await.unwrap();
+        assert_eq!(verdict.best, 0.9);
+        assert!(
+            verdict
+                .windows
+                .iter()
+                .any(|(_, end, p)| *p >= 0.9 && *end == text.chars().count()),
+            "the audit card must mark the window that holds the flag"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_base_url_that_ends_in_v1_sends_one_v1() {
+        let base = serve(|request| {
+            if request.contains("/v1/v1/") {
+                return ("404 Not Found".to_string(), r#"{"detail":"Not Found"}"#.to_string());
+            }
+            if request.starts_with("GET") {
+                return (
+                    "200 OK".to_string(),
+                    r#"{"models":[{"decis":{"max_state_tokens":0,"max_sequence_tokens":1000,"max_question_tokens":100}}]}"#.to_string(),
+                );
+            }
+            ("200 OK".to_string(), noul(request.contains("SECRET-IN-THE-TAIL")))
+        });
+        let verdict = score(&format!("{base}/v1"), "SECRET-IN-THE-TAIL")
+            .await
+            .unwrap();
+        assert_eq!(
+            verdict.best, 0.9,
+            "the doubled /v1 left the scorer unreachable"
+        );
     }
 
     #[tokio::test]
@@ -394,6 +450,11 @@ mod tests {
         });
         let mut text = "x".repeat(30_000);
         text.push_str("SECRET-IN-THE-TAIL");
-        assert_eq!(score(&base, &text).await.unwrap(), 0.9);
+        let verdict = score(&base, &text).await.unwrap();
+        assert_eq!(verdict.best, 0.9);
+        assert!(
+            verdict.windows.iter().all(|(start, end, _)| end - start <= 5_000),
+            "a refused window must come back smaller, not stay whole"
+        );
     }
 }

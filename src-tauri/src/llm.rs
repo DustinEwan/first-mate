@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use tauri::Emitter;
+use crate::audit;
 use crate::context;
 use crate::decide;
 use crate::execute::execute_tool;
@@ -23,6 +24,7 @@ fn chat_stop_requested() -> bool {
 pub(crate) fn stop_chat() {
     if !chat_stop_requested() {
         CHAT_STOP.store(true, std::sync::atomic::Ordering::SeqCst);
+        audit::cancel();
         log("STOP REQUESTED");
     }
 }
@@ -168,29 +170,65 @@ fn scorer(app: &tauri::AppHandle) -> Option<Scorer> {
 /// rule. `gate` scores no further message after a failure, because each question
 /// waits out its own two-second timeout.
 async fn gate(
+    app: &tauri::AppHandle,
     red: &mut redact::Redactor,
     scorer: &Scorer,
-    spans: Vec<String>,
+    messages: Vec<String>,
 ) -> Result<(), String> {
-    for span in spans {
-        match decide::score(&scorer.base, &span).await {
-            Ok(p) => {
-                if red.record_score(&span, p, scorer.threshold) {
-                    log(&format!("GATE: flagged a span at {p:.2}"));
-                }
-            }
+    for message in messages {
+        // A denial stores nothing, because a denied message never entered the
+        // conversation, so a resend of it is judged again.
+        if red.verdict(&message).is_some() {
+            continue;
+        }
+        let verdict = match decide::score(&scorer.base, &message).await {
+            Ok(v) => v,
             Err(e) => {
                 log(&format!("GATE: {e}; holding the send"));
-                return Err(outage_message(&scorer.base));
+                let host = settings::decision_host(scorer.base.clone())["host"]
+                    .as_str()
+                    .unwrap_or(scorer.base.as_str())
+                    .to_string();
+                return Err(hold("outage", &host));
             }
+        };
+        if verdict.best < scorer.threshold {
+            red.record(&message, verdict.best);
+            continue;
         }
+        log(&format!("GATE: flagged a message at {:.2}", verdict.best));
+        let answer = match audit::ask(app, &message, verdict.best, &verdict.windows).await {
+            Some(answer) => answer,
+            None => {
+                log("AUDIT: the card closed with no answer");
+                return Err(hold("stopped", ""));
+            }
+        };
+        for value in &answer.redactions {
+            red.seed(value);
+        }
+        if !answer.approved {
+            log(&format!("AUDIT: you denied a message at {:.2}", verdict.best));
+            return Err(hold("denied", ""));
+        }
+        red.record(&message, verdict.best);
     }
     Ok(())
 }
 
+/// A hold is your decision or an outage, never a fault inside First Mate, so the
+/// console writes the sentence. The tag names the cause, and `detail` carries the
+/// one fact that sentence needs, such as the host.
+fn hold(cause: &str, detail: &str) -> String {
+    if detail.is_empty() {
+        return format!("held:{cause}");
+    }
+    format!("held:{cause} {detail}")
+}
+
 /// The summarizer writes new text, and First Mate puts that text in the system
 /// message, which the gate never scores. A flagged brief stops the fold, so the
-/// dropped rows reach the span gate as separate spans. An outage allows the fold,
+/// dropped rows reach the gate as separate messages. An outage allows the fold,
 /// because an outage must not break compaction.
 async fn brief_clears_gate(
     red: &Option<redact::Redactor>,
@@ -201,8 +239,8 @@ async fn brief_clears_gate(
         return true;
     };
     match decide::score(&s.base, brief).await {
-        Ok(p) if p >= s.threshold => {
-            log(&format!("COMPACT: the scorer flagged the brief at {p:.2}"));
+        Ok(v) if v.best >= s.threshold => {
+            log(&format!("COMPACT: the scorer flagged the brief at {:.2}", v.best));
             false
         }
         Ok(_) => true,
@@ -244,19 +282,6 @@ fn emit_redacted(app: &tauri::AppHandle, red: &Option<redact::Redactor>) {
             serde_json::json!({ "count": count, "classes": r.breakdown() }),
         );
     }
-}
-
-/// `outage_message` names the host and the two ways forward, because
-/// `docs/roadmap/REDACTION.md` requires both.
-fn outage_message(base: &str) -> String {
-    let host = settings::decision_host(base.to_string())["host"]
-        .as_str()
-        .unwrap_or(base)
-        .to_string();
-    format!(
-        "First Mate did not send your message. The second model at {host} did not answer. \
-         Start that server, or turn off Advanced detection in Settings."
-    )
 }
 
 /// The tool ledger records which skills loaded, not what their `SKILL.md`
@@ -648,8 +673,8 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
                         found.push(&call.function.arguments);
                     }
                 }
-                let spans = r.pending_from(found.into_iter());
-                gate(r, s, spans).await?;
+                let messages = r.pending_from(found.into_iter());
+                gate(&app, r, s, messages).await?;
             }
             tokenize_chat(r, &mut wire);
         }
@@ -1046,8 +1071,8 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
         let mut wire = msgs.clone();
         if let Some(r) = red.as_mut() {
             if let Some(s) = scorer.as_ref() {
-                let spans = r.pending(&mut wire);
-                gate(r, s, spans).await?;
+                let messages = r.pending(&mut wire);
+                gate(&app, r, s, messages).await?;
             }
             r.tokenize_msgs(&mut wire);
         }

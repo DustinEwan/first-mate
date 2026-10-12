@@ -254,6 +254,9 @@ flagged message therefore goes to you, not straight to a marker.
   containment now and detection later.
 - `decide.rs` is the client. `redact.rs` holds the `SPAN` token class and the set of
   text already judged. `gate` in `llm.rs` runs the pass before the exact rules.
+- Settings stores the decision-server address with its `/v1` suffix. The client
+  strips that suffix before it appends an endpoint, so the client never sends a
+  doubled `/v1`.
 - A scorer outage holds the send. First Mate sends nothing, and the console names the
   host, the cause, and the two ways forward: start the server, or turn off Advanced
   detection in Settings. The app writes one `GATE:` log line with the failing address.
@@ -277,6 +280,8 @@ flagged message therefore goes to you, not straight to a marker.
   verdict travels with the message, so a re-sent message is never re-judged. The
   agent loop re-sends the whole window on each tool turn, and that resend costs
   no new judgement.
+- Only a cleared message stores a verdict. A denial stores nothing, because that
+  message never entered the conversation, so a resend of it is judged again.
 - No length floor and no per-request cap limits the judgement. The measured 4B
   answers in 70 ms on a GPU, so a large tool output answers inside the time a
   tool turn already spends.
@@ -299,6 +304,10 @@ flagged message therefore goes to you, not straight to a marker.
   model cannot name the value it saw. You select the text, redact it, then
   approve or deny. Approve sends with your redactions. Deny holds the send, and
   you write the next message.
+- The card takes the composer's place. The console hides the stop row while the card
+  waits, because the run waits on you. The wait has no timeout.
+- A hold is your decision or an outage, not a fault inside First Mate. The console
+  writes the sentence for each cause, and Rust names only the cause.
 - The gate scores no authored text. `prompts/AGENTS.md` and each loaded
   `SKILL.md` form the system message. You review the authored text before the
   authored text ships. A false positive in the system message replaces the whole

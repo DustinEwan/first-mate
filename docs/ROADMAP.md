@@ -325,20 +325,20 @@ the design.
 - [x] The Settings `Test` action probes one benign text and one text holding a
       credential.
       That action calls a server unusable when both answers land at or above 0.8.
-- [ ] An unreachable scorer holds the send. The console names the host and the two
+- [x] An unreachable scorer holds the send. The console names the host and the two
       ways forward: start the server, or turn off Advanced detection. A debug build
       records the one `GATE:` line that names the failing address.
-- [ ] The decision model judges each message once, when that message enters the
+- [x] The decision model judges each message once, when that message enters the
       conversation, and the verdict travels with the message. The 60-character
       floor and the 16-message cap go away with the resend re-judgement.
-- [ ] The audit card holds a flagged message: the message, its score, your
+- [x] The audit card holds a flagged message: the message, its score, your
       selection, then approve or deny. Deny holds the send, and you write the
       next message. `docs/roadmap/REDACTION.md` holds the design.
-- [ ] The scorer sends one message per request. A message over the server budget
+- [x] The scorer sends one message per request. A message over the server budget
       gets overlapping windows, and one flagged window flags the message. The client
       reads the budget from `GET {base}/v1/models`, and a 422 answer shrinks the
       window.
-- [ ] `MAX_SPAN_CHARS`, `clip`, and `MAX_SPANS_PER_REQUEST` are gone, so no scored
+- [x] `MAX_SPAN_CHARS`, `clip`, and `MAX_SPANS_PER_REQUEST` are gone, so no scored
       text is cut in silence.
 - [ ] The configured server must accept image input. When the server accepts no
       image, the console says that the image went out unjudged.

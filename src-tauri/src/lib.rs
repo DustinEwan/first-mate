@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
+mod audit;
 mod conversations;
 mod context;
 mod crypto;
@@ -76,6 +77,11 @@ fn delevate(app: tauri::AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn answer_audit(approved: bool, redactions: Vec<String>) -> bool {
+    audit::resolve(approved, redactions)
+}
+
+#[tauri::command]
 fn diagnostics_enabled() -> bool {
     diagnostics_enabled_inner()
 }
@@ -86,7 +92,7 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, probe_decision_server, decision_host, list_models, list_providers, test_llm, chat_with_llm, stop_chat, list_skills, list_conversations, load_conversation, delete_conversation, save_conversation, get_system_prompt, open_path, bootstrap_status, install_winapp, open_settings, elevate, delevate, elevation_status, recovery_key_status, get_recovery_key, ack_recovery_key, diagnostics_enabled])
+        .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, probe_decision_server, decision_host, answer_audit, list_models, list_providers, test_llm, chat_with_llm, stop_chat, list_skills, list_conversations, load_conversation, delete_conversation, save_conversation, get_system_prompt, open_path, bootstrap_status, install_winapp, open_settings, elevate, delevate, elevation_status, recovery_key_status, get_recovery_key, ack_recovery_key, diagnostics_enabled])
         .setup(|app| {
             app.manage(ElevationState::default());
             let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;

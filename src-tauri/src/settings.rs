@@ -50,10 +50,10 @@ pub(crate) struct Settings {
     /// starts nor downloads it, so an empty address is the off position.
     decision_server_url: String,
     decision_server_enabled: bool,
-    /// The probability that replaces a span with one token. The setup probe
-    /// reports the measured points, and the user picks one.
+    /// The probability at or above which the audit card opens. The setup probe
+    /// reports the measured points, and you pick one.
     decision_threshold: f64,
-    /// A host off this machine holds every span the gate sends it. The gate
+    /// A host off this machine holds every message the gate sends it. The gate
     /// sends nothing there until you tick the box in Settings.
     decision_server_remote_ok: bool,
 }
@@ -85,8 +85,8 @@ impl Settings {
     }
 
     /// The decision server for this run, or `None` when the gate must send
-    /// spans nowhere. A host off this machine needs the acknowledgement,
-    /// because that host then holds every span the gate inspected.
+    /// messages nowhere. A host off this machine needs the acknowledgement,
+    /// because that host then holds every message the gate inspected.
     pub(crate) fn decision_server(&self) -> Option<(String, f64)> {
         if !self.decision_server_enabled {
             return None;
@@ -173,7 +173,7 @@ pub(crate) fn decision_server(app: &tauri::AppHandle) -> Option<(String, f64)> {
 }
 
 /// The host behind an address, so Settings can name it before you consent to
-/// send spans there.
+/// send messages there.
 #[tauri::command]
 pub(crate) fn decision_host(url: String) -> serde_json::Value {
     serde_json::json!({ "host": host_of(&url), "loopback": is_loopback(&url) })
@@ -200,9 +200,9 @@ fn host_of(url: &str) -> String {
         .to_string()
 }
 
-/// The setup probe: two spans, no real value, and the two probabilities that
-/// show the operating points. The probe refuses a server that floors its
-/// answer, because a floor flags every span.
+/// The setup probe: two probe texts, no real value, and the two probabilities
+/// that show the operating points. The probe refuses a server that floors its
+/// answer, because a floor flags every message.
 #[tauri::command]
 pub(crate) async fn probe_decision_server(url: String) -> Result<serde_json::Value, String> {
     let probe = crate::decide::probe(url.trim()).await?;

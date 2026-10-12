@@ -1,6 +1,6 @@
 //! Sensitive-info redaction. `docs/roadmap/REDACTION.md` is the design.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard, OnceLock};
 
@@ -58,9 +58,6 @@ pub(crate) enum Class {
     /// A US account number is 8 to 17 digits and is indistinguishable from an
     /// order id.
     Entity,
-    /// The token replaces the whole span, because a probability carries no
-    /// offset.
-    Span,
 }
 
 impl Class {
@@ -78,11 +75,10 @@ impl Class {
             Class::Phone => "PHONE",
             Class::UserPath => "USER_PATH",
             Class::Entity => "ENTITY",
-            Class::Span => "SPAN",
         }
     }
 
-    /// A span that two detectors claim goes to the earlier class: an IBAN holds
+    /// Text that two detectors claim goes to the earlier class: an IBAN holds
     /// an 18-digit run that passes Luhn as an Amex. A JWT holds a payload that
     /// can hold an email.
     fn rank(self) -> u8 {
@@ -99,7 +95,6 @@ impl Class {
             Class::Ssn => 9,
             Class::Email => 10,
             Class::Phone => 11,
-            Class::Span => 12,
         }
     }
 
@@ -116,7 +111,6 @@ impl Class {
         Class::Email,
         Class::Phone,
         Class::Entity,
-        Class::Span,
     ];
 }
 
@@ -375,9 +369,27 @@ struct Hit {
     class: Class,
 }
 
+/// The verdict key. A hash keeps transcript text out of the sealed table.
+fn digest(text: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(text.as_bytes());
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 /// The token table for every conversation this machine has tokenized. The table
 /// is the key that opens each marker, so the envelope seals the file and
 /// `read_file` never decrypts it.
+/// One message's verdict. The key is the SHA-256 of the message, so the sealed
+/// file gains verdicts without gaining transcripts.
+#[derive(Clone, Copy, Serialize, Deserialize)]
+struct Verdict {
+    score: f64,
+}
+
 #[derive(Default, Serialize, Deserialize)]
 struct Table {
     /// `⟦EMAIL_1⟧` → the real value.
@@ -387,6 +399,9 @@ struct Table {
     /// A normalized token interior → its token, for the repair pass.
     repairs: HashMap<String, String>,
     counters: HashMap<Class, usize>,
+    /// SHA-256 of a scored message → its verdict.
+    #[serde(default)]
+    verdicts: HashMap<String, Verdict>,
 }
 
 impl Table {
@@ -470,7 +485,15 @@ impl Table {
 
     /// Only additions happen here, so one length sum detects a new mapping.
     fn len(&self) -> usize {
-        self.values.len() + self.repairs.len()
+        self.values.len() + self.repairs.len() + self.verdicts.len()
+    }
+
+    fn verdict(&self, key: &str) -> Option<f64> {
+        self.verdicts.get(key).map(|v| v.score)
+    }
+
+    fn record(&mut self, key: &str, score: f64) {
+        self.verdicts.insert(key.to_string(), Verdict { score });
     }
 }
 
@@ -532,9 +555,6 @@ pub(crate) fn init(path: PathBuf) {
 pub(crate) struct Redactor {
     store: Store,
     registry: Vec<String>,
-    /// The agent loop re-sends the whole window on every tool turn. A rescore
-    /// repeats one audit.
-    scored: HashSet<String>,
 }
 
 impl Redactor {
@@ -542,7 +562,6 @@ impl Redactor {
         Self {
             store: SHARED.get().cloned().unwrap_or_else(Store::memory),
             registry: Vec::new(),
-            scored: HashSet::new(),
         }
     }
 
@@ -551,7 +570,6 @@ impl Redactor {
         Self {
             store,
             registry: Vec::new(),
-            scored: HashSet::new(),
         }
     }
 
@@ -572,30 +590,36 @@ impl Redactor {
             }
             scoreable(msg, &mut found);
         }
-        self.unscored(found)
+        self.unjudged(found)
     }
 
-    pub(crate) fn pending_from<'a>(&self, spans: impl Iterator<Item = &'a str>) -> Vec<String> {
-        self.unscored(spans.map(str::to_string).collect())
+    pub(crate) fn pending_from<'a>(&self, texts: impl Iterator<Item = &'a str>) -> Vec<String> {
+        self.unjudged(texts.map(str::to_string).collect())
     }
 
-    fn unscored(&self, found: Vec<String>) -> Vec<String> {
+    /// A message you approved never returns to the scorer, and the agent loop
+    /// re-sends the whole window on every tool turn. A message you denied stays
+    /// in the list, because the gate must hold it again.
+    fn unjudged(&self, found: Vec<String>) -> Vec<String> {
+        let table = self.store.lock();
         found
             .into_iter()
-            .filter(|s| !self.scored.contains(s))
+            .filter(|m| table.verdict(&digest(m)).is_none())
             .collect()
     }
 
-    pub(crate) fn record_score(&mut self, span: &str, score: f64, threshold: f64) -> bool {
-        self.scored.insert(span.to_string());
-        if score < threshold {
-            return false;
-        }
+    /// The verdict an earlier turn or an earlier run reached for this message.
+    pub(crate) fn verdict(&self, message: &str) -> Option<f64> {
+        self.store.lock().verdict(&digest(message))
+    }
+
+    /// A verdict reaches the file before the request goes out, so a crash does
+    /// not make the next run ask about the same message again.
+    pub(crate) fn record(&mut self, message: &str, score: f64) {
         let mut table = self.store.lock();
         let before = table.len();
-        table.token(Class::Span, span);
+        table.record(&digest(message), score);
         self.store.commit(&table, before);
-        true
     }
 
     pub(crate) fn tokenize(&mut self, text: &str) -> String {
@@ -1054,33 +1078,45 @@ mod tests {
     }
 
     #[test]
-    fn a_flagged_span_leaves_as_one_token_and_returns_on_display() {
-        let span = "My therapist cancelled our session twice this month and I am out of money.";
-        let mut msgs = serde_json::json!([{"role": "user", "content": span}]);
+    fn an_approved_message_never_returns_to_the_scorer() {
+        let message = "My therapist cancelled our session twice this month and I am out of money.";
+        let mut msgs = serde_json::json!([{"role": "user", "content": message}]);
         let mut r = Redactor::new();
         assert_eq!(
             r.pending(msgs.as_array_mut().unwrap().as_mut_slice()).len(),
             1
         );
-        r.record_score(span, 0.91, 0.5);
+        r.record(message, 0.91);
         assert!(r
             .pending(msgs.as_array_mut().unwrap().as_mut_slice())
             .is_empty());
         r.tokenize_msgs(msgs.as_array_mut().unwrap());
-        assert_eq!(msgs[0]["content"], "⟦SPAN_1⟧");
         assert_eq!(
-            r.detokenize(msgs[0]["content"].as_str().unwrap()),
-            span,
-            "the console must show the real sentence"
+            msgs[0]["content"], message,
+            "an approved message leaves as written"
         );
     }
 
     #[test]
-    fn a_span_below_the_threshold_leaves_unchanged() {
-        let span = "The quarterly report lists 3 rows for the GL account and one note.";
-        let mut r = Redactor::new();
-        r.record_score(span, 0.4, 0.5);
-        assert_eq!(r.tokenize(span), span);
+    fn a_verdict_survives_a_restart() {
+        if !crate::crypto::tpm_ready() {
+            return;
+        }
+        let message = "The lease names my landlord's account number and my date of birth.";
+        let path = std::env::temp_dir().join("fm-verdict-restart.json");
+        let _ = std::fs::remove_file(&path);
+        {
+            let mut first = Redactor::with_store(Store::file(path.clone()));
+            first.record(message, 0.77);
+        }
+        let second = Redactor::with_store(Store::file(path.clone()));
+        assert_eq!(second.verdict(message), Some(0.77));
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(
+            !String::from_utf8_lossy(&bytes).contains("landlord"),
+            "the verdict table must not hold transcript text"
+        );
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

@@ -224,6 +224,73 @@ const inputRef = ref<HTMLElement>();
 let liveMsgId = -1;
 let pendingRedact: RedactReport | undefined;
 const spinnerChar = ref("⠋");
+// The second model flags a message; you decide. The card takes the composer's
+// place, because the send waits on your answer.
+interface AuditWindow {
+  start: number;
+  end: number;
+  score: number;
+}
+interface AuditCard {
+  message: string;
+  score: number;
+  windows: AuditWindow[];
+}
+const audit = ref<AuditCard | null>(null);
+const redactions = ref<string[]>([]);
+const selection = ref("");
+
+// Rust names the cause, and the console writes the sentence, because these words
+// are the product's. A hold is your decision, or an outage you fix in Settings, so
+// a hold is not a fault inside First Mate.
+const HELD_TEXT: Record<string, (detail: string) => string> = {
+  denied: () =>
+    "You denied that message, so First Mate did not send it. Nothing reached the model.",
+  stopped: () => "You stopped the run before you answered, so First Mate did not send the message.",
+  outage: (host) =>
+    `First Mate sent nothing, because the second model at ${host} did not answer. ` +
+    "Start that server, or turn off Advanced detection in Settings.",
+};
+
+// Ranges count code points, so Array.from splits the message the way the
+// backend counted it. A window over the whole message marks nothing, because it
+// says nothing about where to read.
+function auditParts(card: AuditCard) {
+  const chars = Array.from(card.message);
+  const parts: { text: string; mark: boolean }[] = [];
+  let at = 0;
+  for (const w of [...card.windows].sort((a, b) => a.start - b.start)) {
+    const start = Math.max(w.start, at);
+    const end = Math.min(w.end, chars.length);
+    if (start >= end || (w.start === 0 && w.end >= chars.length)) continue;
+    if (start > at) parts.push({ text: chars.slice(at, start).join(""), mark: false });
+    parts.push({ text: chars.slice(start, end).join(""), mark: true });
+    at = end;
+  }
+  if (at < chars.length) parts.push({ text: chars.slice(at).join(""), mark: false });
+  return parts;
+}
+
+function readSelection() {
+  selection.value = window.getSelection()?.toString() ?? "";
+}
+
+// A selection shorter than four characters would replace ordinary words in the
+// outbound copy, so the backend rejects it too.
+function redactSelection() {
+  const value = selection.value.trim();
+  if (value.length < 4) return;
+  redactions.value = [...redactions.value, value];
+  selection.value = "";
+}
+
+async function answerAudit(approved: boolean) {
+  if (!audit.value) return;
+  audit.value = null;
+  const kept = approved ? redactions.value : [];
+  redactions.value = [];
+  await invoke("answer_audit", { approved, redactions: kept });
+}
 
 interface ConvInfo {
   name: string;
@@ -481,6 +548,15 @@ onMounted(() => {
   listen<RedactReport>("redact", (event) => {
     pendingRedact = event.payload;
   });
+  listen<{ message: string; score: number; windows: AuditWindow[] }>("audit", (event) => {
+    audit.value = {
+      message: event.payload.message,
+      score: event.payload.score,
+      windows: event.payload.windows ?? [],
+    };
+    redactions.value = [];
+    selection.value = "";
+  });
 });
 
 const systemPromptBase = ref("");
@@ -586,11 +662,20 @@ async function submit() {
     const hint = diagnostics.value
       ? " For details, open firstmate.log in your temp folder (Windows: Win+R → %temp%)."
       : "";
-    addMsg(`Error: ${msg}\n\nThe agent stopped.${hint}`, "error");
+    const held = /^held:(\w+)(?: (.*))?$/.exec(msg);
+    const sentence = held ? HELD_TEXT[held[1]]?.(held[2] ?? "") : undefined;
+    if (held?.[1] === "outage" && sentence) {
+      addMsg(`Error: ${sentence}${hint}`, "error");
+    } else if (sentence) {
+      addMsg(sentence, "dim");
+    } else {
+      addMsg(`Error: ${msg}\n\nThe agent stopped.${hint}`, "error");
+    }
   } finally {
     isThinking.value = false;
     liveMsgId = -1;
     pendingRedact = undefined;
+    audit.value = null;
     persistConversation();
   }
 }
@@ -763,14 +848,41 @@ window.addEventListener("keydown", (e) => {
             </template>
           </DynamicScroller>
           <div
-            v-if="isThinking"
+            v-if="isThinking && !audit"
             class="msg dim thinking stoppable"
             title="Click to stop the agent"
             @click="stopRun"
           >
             First Mate {{ spinnerChar }} — click to stop
           </div>
-          <div ref="inputRef" class="input-row">
+          <div v-if="audit" class="audit" @mouseup="readSelection" @keyup="readSelection">
+            <div class="audit-head">
+              The second model scored this message {{ audit.score.toFixed(2) }}. Select the
+              sensitive text and redact it, or deny the send.
+            </div>
+            <div class="audit-body">
+              <template v-for="(part, i) in auditParts(audit)" :key="i">
+                <mark v-if="part.mark">{{ part.text }}</mark>
+                <template v-else>{{ part.text }}</template>
+              </template>
+            </div>
+            <ul v-if="redactions.length" class="audit-marks">
+              <li v-for="(value, i) in redactions" :key="i">{{ value }}</li>
+            </ul>
+            <div class="audit-foot">
+              <button
+                class="audit-btn"
+                :disabled="selection.trim().length < 4"
+                title="Select at least four characters to redact."
+                @click="redactSelection"
+              >
+                Redact selection
+              </button>
+              <button class="audit-btn" @click="answerAudit(false)">Deny</button>
+              <button class="audit-btn approve" @click="answerAudit(true)">Approve</button>
+            </div>
+          </div>
+          <div v-if="!audit" ref="inputRef" class="input-row">
             <n-input
               v-model:value="input"
               type="textarea"
@@ -847,5 +959,62 @@ window.addEventListener("keydown", (e) => {
   font-family: monospace;
   font-size: 12px;
   line-height: 1.5;
+}
+
+/* The send waits on this card, so the card takes the composer's place. */
+.audit {
+  margin: 8px 12px;
+  padding: 10px 12px;
+  border: 1px solid #3a3a41;
+  border-left: 3px solid #f0a23a;
+  border-radius: 6px;
+  background: #1f1f23;
+}
+.audit-head {
+  margin-bottom: 8px;
+  color: #f0a23a;
+  font-size: 12px;
+}
+.audit-body {
+  max-height: 30vh;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  font-size: 13px;
+  user-select: text;
+}
+.audit-body mark {
+  background: #4a3a12;
+  color: #f5d78a;
+}
+.audit-marks {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: #8a8f98;
+  font-family: monospace;
+  font-size: 12px;
+}
+.audit-foot {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+.audit-btn {
+  padding: 3px 12px;
+  border: 1px solid #3a3a41;
+  border-radius: 4px;
+  background: none;
+  color: #c9ced6;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.audit-btn:disabled {
+  color: #5a5f66;
+  cursor: default;
+}
+.audit-btn.approve {
+  border-color: #2f6b3f;
+  color: #7ac38a;
 }
 </style>
