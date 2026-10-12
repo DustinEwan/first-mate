@@ -228,6 +228,24 @@ POST {base}/v1/systemone
 {"answers": {"sensitive": {"noul": 0.87}}}
 ```
 
+A decision model is a System One model. TypeSafe Jev is the reference model, and
+JevBench ranks the class. The class is not generative. One call carries a `state`
+and typed questions, and the answer is a probability with no text. The model keeps
+nothing between calls, so one message needs one call. A second call on the same
+text buys nothing.
+
+- The probability is calibrated across many answers, so one answer can be wrong.
+  A flagged message therefore goes to you, not straight to a marker.
+- `state` plus the longest question must fit 32k tokens, and accuracy shifts as
+  `state` grows. Score one message. Do not pack a window into one call. See
+  `https://docs.typesafe.ai/models`.
+- The model takes text only, so a screenshot needs a text description from the
+  tool that captured it.
+- Jev is not fine-tuned per customer. `instructions` and `criteria` are the only
+  levers, so the question text in `decide.rs` decides what the model looks for.
+- English scores best, and other languages score worse. Set the level from the
+  two `Test` scores measured on your own text.
+
 - The URL and the enable box start off. With either control off, the app runs the
   exact rules alone. The Settings UI shows the state of the two controls.
 - The scoring request carries the span text, so a remote URL sends the very text
@@ -263,9 +281,10 @@ POST {base}/v1/systemone
 - No length floor and no per-request cap limits the judgement. The measured 4B
   answers in 70 ms on a GPU, so a large tool output answers inside the time a
   tool turn already spends.
-- A screenshot is a message part. A text-only decision model cannot judge it, so
-  the console shows that the screenshot went out unchecked. A vision-capable
-  decision model judges the image.
+- A screenshot is a message part. The reference decision model takes text only,
+  so First Mate scores the text that the screenshot tool returns with the image.
+  The image itself leaves unchecked, and the console says so. See
+  `https://docs.typesafe.ai/models`.
 - A flagged message stops before the send and opens the audit card in the
   console. The card shows the flagged message and its score, because the decision
   model cannot name the value it saw. You select the text, redact it, then

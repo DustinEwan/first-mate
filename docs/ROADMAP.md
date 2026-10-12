@@ -332,8 +332,12 @@ the design.
 - [ ] The audit card holds a flagged message: the message, its score, your
       selection, then approve or deny. Deny holds the send, and you write the
       next message. `docs/roadmap/REDACTION.md` holds the design.
-- [ ] A vision-capable decision model judges screenshots. A text-only model
-      leaves the console to say that the screenshot went out unchecked.
+- [ ] The scorer sends one message per call, and never a packed window. A message
+      whose text plus the question exceeds 32k tokens leaves unchecked, and the
+      console says so.
+- [ ] A screenshot needs the text description that the capture tool returns,
+      because the decision model takes text only. The console says that the image
+      itself went out unchecked.
 - **Accept:** a checked box produces the same tokenized request on a local
   endpoint and on a public endpoint. That request carries a fake card, a JWT,
   and an email. A registry-seeded account number with no checksum also leaves
