@@ -445,6 +445,28 @@ fn pinned_opening(
     Some(conversations::row_text(row)).filter(|s| !s.trim().is_empty())
 }
 
+/// The copy one fold sends: its dropped rows and its opening line, both after
+/// the pass.
+///
+/// The summarizer call is an outbound request like any other. The pass therefore
+/// runs here, before the report scan and before `brief_transcript`, so neither
+/// can see a row the wire did not carry. A scan over the untokenized ledger
+/// records values that never left, and the leak count stops matching the wire.
+fn fold_wire(
+    red: &mut Option<redact::Redactor>,
+    mut dropped: Vec<serde_json::Value>,
+    opening: Option<String>,
+) -> (Vec<serde_json::Value>, Option<String>) {
+    if let Some(red) = red.as_mut() {
+        red.tokenize_msgs(&mut dropped);
+    }
+    let opening = opening.map(|text| match red.as_mut() {
+        Some(red) => red.tokenize(&text),
+        None => text,
+    });
+    (dropped, opening)
+}
+
 fn brief_transcript(
     opening: Option<&str>,
     previous: Option<&str>,
@@ -644,16 +666,8 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
         let rules = rules.as_deref().expect("checked just above");
         let ledger = history_msgs(&prior_history);
         let opening = pinned_opening(&ledger, start, start + cut);
-        let mut dropped = ledger[start..start + cut].to_vec();
-        // The summarizer call is an outbound request like any other, so the pass
-        // runs on every row it carries.
-        if let Some(red) = red.as_mut() {
-            red.tokenize_msgs(&mut dropped);
-        }
-        let opening = opening.map(|text| match red.as_mut() {
-            Some(red) => red.tokenize(&text),
-            None => text,
-        });
+        let (dropped, opening) =
+            fold_wire(&mut red, ledger[start..start + cut].to_vec(), opening);
         // Whatever the pass leaves in the clear reaches the summarizer, and the
         // report names it.
         if let Some(text) = opening.as_deref() {
@@ -1025,16 +1039,8 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
         let rules = rules.as_deref().expect("checked just above");
         let ledger = history_msgs(&prior_history);
         let opening = pinned_opening(&ledger, start, start + cut);
-        let mut dropped = ledger[start..start + cut].to_vec();
-        // The summarizer call is an outbound request like any other, so the pass
-        // runs on every row it carries.
-        if let Some(red) = red.as_mut() {
-            red.tokenize_msgs(&mut dropped);
-        }
-        let opening = opening.map(|text| match red.as_mut() {
-            Some(red) => red.tokenize(&text),
-            None => text,
-        });
+        let (dropped, opening) =
+            fold_wire(&mut red, ledger[start..start + cut].to_vec(), opening);
         let transcript = brief_transcript(opening.as_deref(), summary.as_deref(), &dropped);
         // Whatever the pass leaves in the clear reaches the summarizer, and the
         // report names it.
@@ -1143,7 +1149,7 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
                         "COMPACT: ~{est} tokens over the window; the newest turn alone exceeds the budget, sending as is"
                     ));
                 } else {
-                    let mut dropped = msgs[1 + head..1 + tail].to_vec();
+                    let dropped = msgs[1 + head..1 + tail].to_vec();
                     let freed = context::estimate_tokens(&dropped);
                     if freed < context::MIN_FOLD_SAVINGS_TOKENS {
                         // The budget would drop mostly short rows from the
@@ -1154,15 +1160,7 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
                         ));
                     } else if let Some(rules) = brief_rules() {
                         let opening = pinned_opening(&msgs[1..], head, tail);
-                        // The summarizer call is an outbound request like any
-                        // other, so the pass runs on every row it carries.
-                        if let Some(red) = red.as_mut() {
-                            red.tokenize_msgs(&mut dropped);
-                        }
-                        let opening = opening.map(|text| match red.as_mut() {
-                            Some(red) => red.tokenize(&text),
-                            None => text,
-                        });
+                        let (dropped, opening) = fold_wire(&mut red, dropped, opening);
                         let transcript = brief_transcript(
                             opening.as_deref(),
                             context::get_summary(&msgs[0]).as_deref(),
@@ -1655,5 +1653,38 @@ mod tests {
             extract_screenshot_path("[identical to your earlier call: 152 bytes, unchanged]").as_deref(),
             None
         );
+    }
+
+    #[test]
+    fn a_fold_sends_the_summarizer_the_copy_the_report_sees() {
+        const CARD: &str = "4111 1111 1111 1111";
+        let ledger = vec![
+            serde_json::json!({"role": "user", "content": format!("pay {CARD} now")}),
+            serde_json::json!({"role": "tool", "tool_call_id": "c1",
+                "content": r"wrote C:\Users\dusti\Finance\accounts.txt"}),
+        ];
+        let mut none: Option<redact::Redactor> = None;
+        let (clear, _) = fold_wire(&mut none, ledger.clone(), Some(format!("pay {CARD} now")));
+        assert!(
+            conversations::row_text(&clear[0]).contains(CARD),
+            "a provider whose switch is off sends the value the user typed"
+        );
+
+        let mut red = Some(redact::Redactor::new());
+        red.as_mut().expect("built just above").seed(CARD);
+        let (wire, opening) = fold_wire(&mut red, ledger, Some(format!("pay {CARD} now")));
+        let text: Vec<String> = wire.iter().map(conversations::row_text).collect();
+        let text = text.join("\n");
+        assert!(!text.contains(CARD), "the fold sent the card in the clear: {text}");
+        assert!(
+            !text.contains(r"C:\Users\dusti"),
+            "the fold sent a path in the clear: {text}"
+        );
+        assert!(
+            text.contains("⟦ENTITY_1⟧") && text.contains("⟦USER_PATH_1⟧"),
+            "the fold sent no handle: {text}"
+        );
+        let opening = opening.expect("the opening line survives the pass");
+        assert!(!opening.contains(CARD), "the opening line kept the card: {opening}");
     }
 }
