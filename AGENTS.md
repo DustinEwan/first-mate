@@ -9,6 +9,12 @@ behavior. Most work in this repo is content, not code.
 
 ## Philosophy
 
+- **Documentation is the source of truth.** When code and a document under `docs/`
+  disagree, the document is right, and the code is wrong. Change the code. Change
+  design text only when the user decides that text is wrong. Do not change design
+  text in the commit that changes behavior. The behavior commit may move a
+  checklist box. When no document governs a behavior, ask the user before you build
+  the behavior.
 - **Content is not code.** First Mate's identity is `prompts/AGENTS.md`. First
   Mate's capabilities are `prompts/skills/*/SKILL.md`. The binary contains no
   prompt text. A test enforces that requirement. Before you implement a
