@@ -320,31 +320,31 @@ the design.
       and `redact::tests::the_stored_table_holds_no_plaintext_value`.
 - [x] Settings holds the decision-server URL, the enable box, and the flag
       threshold. Unset or unchecked means the exact rules alone.
-- [x] The client posts one `noul` question per span to `POST {base}/v1/systemone`.
-      A non-loopback URL needs your confirmation before the first span leaves.
-- [x] The Settings `Test` action probes one benign span and one credential span.
+- [x] The client posts one `noul` question per message to `POST {base}/v1/systemone`.
+      A non-loopback URL needs your confirmation before the first message leaves.
+- [x] The Settings `Test` action probes one benign text and one text holding a
+      credential.
       That action calls a server unusable when both answers land at or above 0.8.
-- [ ] An unreachable scorer shows in the console. Only a debug build records the
-      one `GATE:` line that names the failing address.
+- [ ] An unreachable scorer holds the send. The console names the host and the two
+      ways forward: start the server, or turn off Advanced detection. A debug build
+      records the one `GATE:` line that names the failing address.
 - [ ] The decision model judges each message once, when that message enters the
       conversation, and the verdict travels with the message. The 60-character
       floor and the 16-message cap go away with the resend re-judgement.
 - [ ] The audit card holds a flagged message: the message, its score, your
       selection, then approve or deny. Deny holds the send, and you write the
       next message. `docs/roadmap/REDACTION.md` holds the design.
-- [ ] The scorer sends one message per call, and never a packed window. A message
-      whose text plus the question exceeds 32k tokens leaves unchecked, and the
-      console says so.
-- [ ] A screenshot needs the text description that the capture tool returns,
-      because the decision model takes text only. The console says that the image
-      itself went out unchecked.
+- [ ] The scorer sends one message per request. A message over the server budget
+      gets overlapping windows, and one flagged window flags the message. The client
+      reads the budget from `GET {base}/v1/models`, and a 422 answer shrinks the
+      window.
+- [ ] `MAX_SPAN_CHARS`, `clip`, and `MAX_SPANS_PER_REQUEST` are gone, so no scored
+      text is cut in silence.
+- [ ] The configured server must accept image input. When the server accepts no
+      image, the console says that the image went out unjudged.
 - [ ] `criteria` in `decide.rs` states what counts as a yes and what counts as a
-      no. The vendor offers no per-customer fine-tune, so the question and the
-      criteria are the only tuning levers. Re-measure the two `Test` scores after
-      any change.
-- [ ] `clip` scores the first 6000 characters only, so the tail of a long tool
-      output is never judged. Score each chunk, or say in the console that the
-      rest went unchecked.
+      no. The wording of the question and the wording of the criteria are the only
+      tuning. Re-measure the two `Test` scores after any change.
 - **Accept:** a checked box produces the same tokenized request on a local
   endpoint and on a public endpoint. That request carries a fake card, a JWT,
   and an email. A registry-seeded account number with no checksum also leaves
@@ -353,7 +353,8 @@ the design.
   pattern matches still leaves the machine tokenized. With no server, that
   sentence leaves the machine unchanged. A flagged message stops before the send
   and waits on the audit card. A message with a stored verdict never goes to the
-  decision model a second time.
+  decision model a second time. A long message whose flagged text sits past the
+  first window still stops before the send.
 
 ### Phase B — Agent profiles (§1)
 

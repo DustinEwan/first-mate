@@ -207,20 +207,19 @@ values.
 
 ## Containment (class 2)
 
-A decision server scores each span before the span leaves the machine. The gate
+A decision server scores a message before that message leaves the machine. The gate
 runs on the outbound copy of the conversation, because a leak needs a path the
-gate crosses. The gate scores each span once per run. Any tool output reaching
-no request gets no score, so no leak follows. The server answers typed
+gate crosses. The gate scores each message once per run. A tool output that
+reaches no request gets no score, so no leak follows. The server answers typed
 questions with probabilities, and the server returns no text.
 
 First Mate ships no weights and starts no server. You run the server yourself,
 with any model you choose. Settings holds the server URL. The app is a client of
-the Jev-compatible typed-decision API, so any server answering the API can
-drive the gate:
+the typed-decision API can drive the gate:
 
 ```text
 POST {base}/v1/systemone
-{"state": "<the span>",
+{"state": "<one message>",
  "questions": {"sensitive": {"type": "noul",
                              "instructions": "<the question>",
                              "criteria": {"true": "yes", "false": "no"}}}}
@@ -228,37 +227,37 @@ POST {base}/v1/systemone
 {"answers": {"sensitive": {"noul": 0.87}}}
 ```
 
-A decision model is a System One model. TypeSafe Jev is the reference model, and
-JevBench ranks the class. The class is not generative. One call carries a `state`
-and typed questions, and the answer is a probability with no text. The model keeps
-nothing between calls, so one message needs one call. A second call on the same
-text buys nothing.
+The API is external. `https://docs.typesafe.ai/api` holds the request shape, the
+three question types, and the error codes. First Mate sends one `state` and one
+`noul` question. The answer is one probability.
 
-- The probability is calibrated across many answers, so one answer can be wrong.
-  A flagged message therefore goes to you, not straight to a marker.
-- `state` plus the longest question must fit 32k tokens, and accuracy shifts as
-  `state` grows. Score one message. Do not pack a window into one call. See
-  `https://docs.typesafe.ai/models`.
-- The model takes text only, so a screenshot needs a text description from the
-  tool that captured it.
-- Jev is not fine-tuned per customer. `instructions` and `criteria` are the only
-  levers, so the question text in `decide.rs` decides what the model looks for.
-- English scores best, and other languages score worse. Set the level from the
-  two `Test` scores measured on your own text.
+A server reads the `noul` criteria keys `"true"` and `"false"`. A server ignores
+every other key in silence. `decide.rs` sends those two keys, so the wording of the
+question and the wording of the criteria are the only tuning.
+
+The model keeps nothing between requests, so a second request on the same text
+returns the same answer. One probability covers one `state`, so one probability
+cannot name the message that holds a value. First Mate scores one message per
+request, because First Mate streams messages as they arrive.
+
+The probability is calibrated across many answers, so one answer can be wrong. A
+flagged message therefore goes to you, not straight to a marker.
 
 - The URL and the enable box start off. With either control off, the app runs the
   exact rules alone. The Settings UI shows the state of the two controls.
-- The scoring request carries the span text, so a remote URL sends the very text
-  the gate protects. The app accepts a loopback URL without a prompt. The app
-  asks for confirmation before sending a span to a non-loopback host.
+- The scoring request holds the text the gate protects, so the server must belong to
+  you or to your organisation. A hosted third-party endpoint is out of scope. The
+  app cannot tell a network server from a hosted endpoint by address, so the app
+  asks for confirmation before the first message leaves, and names the host on every
+  audit line.
 - The same endpoint answers every later decision question, so one server serves
   containment now and detection later.
-- `decide.rs` is the client. `redact.rs` holds the `SPAN` class and the
-  scored-span set. `gate` in `llm.rs` runs the pass before the exact rules.
-- A scorer outage clears nothing. When the endpoint is unreachable, the app
-  sends the request on the exact rules alone. The app writes one `GATE:` log
-  line with the failing address. The app leaves each unscored span unscored, so
-  the next turn asks the server again.
+- `decide.rs` is the client. `redact.rs` holds the `SPAN` token class and the set of
+  text already judged. `gate` in `llm.rs` runs the pass before the exact rules.
+- A scorer outage holds the send. First Mate sends nothing, and the console names the
+  host, the cause, and the two ways forward: start the server, or turn off Advanced
+  detection in Settings. The app writes one `GATE:` log line with the failing address.
+  A send without a verdict would make containment depend on a network.
 - The gate denies by default, so the gate needs no knowledge of the identity of
   a sensitive value. The deny-by-default answer is the definition of containment
   in this document.
@@ -270,10 +269,10 @@ text buys nothing.
   each model needs its own measurement. On the measured 4B, 0.50 gives recall
   0.95 at a 12.5 percent audit rate. The 0.70 setting gives recall 0.80 at
   2.5 percent.
-- `Test` in Settings sends the probe: one benign span, and one span holding a
+- `Test` in Settings sends the probe: one benign text, and one text holding a
   credential. When both probe answers land at or above 0.8, the app reports the
   server as unusable. H2O's shim ships a 0.801 yes/no floor, and a floored
-  server flags every span.
+  server flags every message.
 - The app judges a message once, when that message enters the conversation. The
   verdict travels with the message, so a re-sent message is never re-judged. The
   agent loop re-sends the whole window on each tool turn, and that resend costs
@@ -281,10 +280,20 @@ text buys nothing.
 - No length floor and no per-request cap limits the judgement. The measured 4B
   answers in 70 ms on a GPU, so a large tool output answers inside the time a
   tool turn already spends.
-- A screenshot is a message part. The reference decision model takes text only,
-  so First Mate scores the text that the screenshot tool returns with the image.
-  The image itself leaves unchecked, and the console says so. See
-  `https://docs.typesafe.ai/models`.
+- A message over the server budget gets overlapping windows, and one flagged window
+  flags the message. The client reads `max_sequence_tokens` and
+  `max_question_tokens` from `GET {base}/v1/models`, and sizes each window from
+  those two numbers, at four characters per token. A refused answer states the
+  measured count and the limit for some servers, so the client shrinks the window by
+  that ratio. A refused answer that states nothing halves the window.
+- Windows overlap by 10 percent, so a value at a boundary still appears whole
+  inside one window. The exact rules run over the whole message regardless, so a
+  shape never depends on a window. The audit card highlights each flagged window,
+  so you start reading where the model saw something.
+- The gate must judge a screenshot, so the configured server must accept image
+  input. The app sends the image part to that server, and the text walk skips the
+  base64 blob. When the server accepts no image, the console says that the image
+  went out unjudged.
 - A flagged message stops before the send and opens the audit card in the
   console. The card shows the flagged message and its score, because the decision
   model cannot name the value it saw. You select the text, redact it, then
@@ -297,15 +306,18 @@ text buys nothing.
   protects nothing.
 - The gate scores assistant text, tool output, and tool-call arguments. A model
   writes new strings no input score ever saw.
-- A model restates a missed value in new words. A new sentence carries no shape
+- The gate offers only message content and tool-call arguments to the scorer. A
+  flagged string leaves the machine as one handle. A handle in place of a role value
+  would break the request.
+- A model restates a missed value in new words. A new sentence holds no shape
   for Layer 1. The assistant message then re-leaves on every later turn. One
   miss therefore becomes a permanent leak unless a later score catches the miss.
-- First Mate puts the brief inside the system message, so the span gate scores no
+- First Mate puts the brief inside the system message, so the gate scores no
   brief. First Mate scores the brief before the fold. A flagged brief stops the
-  fold. The rows the fold would drop then reach the span gate as separate spans.
+  fold. The rows the fold would drop then reach the gate as separate messages.
 - A model also copies a value into a tool-call argument. A token replaces the
   original text of the tool output, so the original value stays hidden. The copy
-  in the argument is a different string, so the argument needs a separate span.
+  in the argument is a different string, so the gate asks about the argument too.
 - The gate still runs the exact rules over the system message. Layer 1 costs
   nothing on the system message. A credential in a prompt is a defect you want
   found.
@@ -313,11 +325,11 @@ text buys nothing.
   credentials, financial text, health, identity. The decision model does not
   know your employer's part number. The gate also matches the registry and the
   declared files, and the gate denies on either signal.
-- The shipped gate redacts a flagged span with no dialog. Detokenize restores the
-  flagged span for display and for execute. The chip names the count, so the
+- The shipped gate redacts a flagged value with no dialog. Detokenize restores the
+  flagged value for display and for execute. The chip names the count, so the
   turn records what the gate held back.
-- The audit dialog is the path into the Layer 2 registry from a span hit. A span
-  hit therefore does not grow the registry today. A dialog with only
+- The audit dialog is the path into the Layer 2 registry from a flagged value. A
+  flagged value therefore does not grow the registry today. A dialog with only
   `Approve` and `Deny` teaches you to press `Approve`. The `Redact and continue`
   button must therefore take one selection and one key.
 - The model may deny; only you may approve. A file can hold text written to
@@ -329,42 +341,40 @@ text buys nothing.
 
 ### Open items
 
-- Screenshots. `llm.rs:1128-1143` adds each captured screenshot as a base64 PNG
-  part. No text pass reads pixels, so a bank statement leaves the machine whole
-  today. The API carries an image as a data URI inside `state`.
-  H2O-Lightning-4B reads the data URI. The app therefore needs to pass the image
-  through, not score text alone.
+- Screenshots. `chat_via_openai` appends each captured screenshot as an `image_url`
+  part with a `data:image/png;base64,` URL. No text pass reads pixels, so a bank
+  statement leaves the machine whole today. The image field is a server extension,
+  not a contract field: `strands-decider serve --vision` takes `images` as base64,
+  and the `openjev` helper takes one image as `state.screenshot` or `state.image`.
+  Choose the shape per server at setup. The console names the shape the server
+  accepts.
 - Derived text. A token hides a value, not a relation. "The balance is three times
-  the salary" carries no token and appeared in no tool output. No input score
+  the salary" holds no token and appeared in no tool output. No input score
   covered the derived sentence. The score on new assistant text covers the
   derived case.
 - Calibration. The slider is honest only after a measurement on First Mate
   transcripts. Calibration depends on the data, so vendor numbers do not transfer.
   The Spike section below measures the compression and the audit rate on the host
   machine.
-- Observe-only mode did not ship. The gate redacts, and the `SPAN` count on the
-  chip gives the audit rate for the turns you inspect. The log names each flagged
-  span with the score of the span. The log therefore carries the calibration
+- Observe-only mode is not in the product. The gate redacts, and the `SPAN` count on
+  the chip gives the audit rate for the turns you inspect. The log names each flagged
+  value with the score of that value. The log therefore records the calibration
   curve for the flagged side only.
-- `tokenize_msgs` (`redact.rs:497`) walks every string in the outbound copy,
-  including the base64 blob. No test shows whether a Layer 1 pattern can corrupt
-  an image.
-- Server host. A user could point the URL at a hosted endpoint. The hosted
-  endpoint would then hold every span the gate inspected. The confirmation prompt
-  is the only control, so the console must name the host on every audit line.
 - One server, many profiles. A profile could need separate question text or a
   separate threshold. The probe and the slider are global today.
 
 ### Spike: local decision models, measured 2026-10-10
 
-Two decision models and one embedding model ran on the same 44 labeled spans.
-The same models ran on the same 200 spans of real agent work. The host is an
-RTX 3060 with 12 GB and 12 CPU cores. JevBench v1.6.1 ranks open-weights
-decision models by Intelligence, Calibration, Speed, and Cost. A board score
-does not establish reliability on the redaction task, so each model also ran on
-the host.
+Two decision models and one embedding model ran on the same 44 labeled texts.
+The same models ran on the same 200 texts of real agent work. The host is an
+RTX 3060 with 12 GB and 12 CPU cores. The Jev Decision Index at
+`https://huggingface.co/spaces/multimodalart/jev-decision-index` ranks open
+reproductions by the Full score: 20 percent public benchmarks, 50 percent private
+tests, and 30 percent new-domain tasks. A separate Vision board ranks the
+image-capable entrants. JevBench v1.6.1 measures coherence, not capability. Neither
+board establishes reliability on the redaction task, so each model also ran here.
 
-| Model | JevBench capability | AUC | Threshold for recall 0.95 | Audit rate there | Latency | Memory |
+| Model | JevBench coherence | AUC | Threshold for recall 0.95 | Audit rate there | Latency | Memory |
 | --- | --- | --- | --- | --- | --- | --- |
 | `h2oai/h2o-lightning-4b` v1.1, 4B | 75.0, open rank 5 | 0.960 | 0.50 | 12.5% | 70 ms GPU | 11.6 GB VRAM, 5.4 GB RSS |
 | `StrandsAgents/strands-decider-2B`, 2B | unranked | 0.891 | 0.10 | 98.5% | 109 ms GPU, 1767 ms CPU | 6 GB VRAM, 9 GB CPU RSS |
@@ -372,43 +382,45 @@ the host.
 
 H2O-Lightning-4B is Apache-2.0, 9.1 GB, served by vLLM 0.30.0 with the shim flag
 `SHIM_NOUL_FLOOR=0`. The shipped config floors every yes/no answer at 0.801. A
-0.801 floor flags every span, so the floor must stay off before a threshold
+0.801 floor flags every message, so the floor must stay off before a threshold
 means anything.
 
 - Positives median 0.862, negatives median 0.248. Threshold 0.50 gives recall 0.95
   with 5 false positives of 24.
 - On real work the mean is 0.306 and the max is 0.774. Threshold 0.50 flags 25 of
-  200 spans. Threshold 0.70 flags 5 of 200, at recall 0.80.
+  200 texts. Threshold 0.70 flags 5 of 200, at recall 0.80.
 - The same two error classes remain, narrower. The weakest positives are private
   prose: 0.473, 0.531, 0.555. The strongest negatives are examples of secrets:
   0.760 and 0.721.
-- The GPU budget is the blocker. The server holds 11.6 GB of the 12 GB card and
-  5.4 GB of host RSS. A machine without a large GPU cannot host the server, and a
-  CPU host is out of reach.
+- On this machine the 4B server holds 11.6 GB of the 12 GB card and 5.4 GB of host
+  RSS. The same machine ran the 2B on CPU at 1767 ms per question. Those two numbers
+  describe this machine, and no other.
 
 Strands Decider 2B is Apache-2.0, 4.55 GB, and is not on the board.
 
 - The scores of Strands Decider 2B compress: positives median 0.238, negatives
-  median 0.092, floor 0.070. On real work no span reached 0.5, so no threshold
+  median 0.092, floor 0.070. On real work no text reached 0.5, so no threshold
   separates the classes. At threshold 0.15 the audit rate is 44.7 percent. At
   threshold 0.10 the audit rate is 98.5 percent.
-- On CPU the 2B model holds AUC 0.887 at 1767 ms per span and about 9 GB RSS.
+- On CPU the 2B model holds AUC 0.887 at 1767 ms per question and about 9 GB RSS.
   Warm-cache load takes 17.7 s.
 
-The embedding model scores a span by similarity to labeled exemplars. The four
+The embedding model scores a text by similarity to labeled exemplars. The four
 lowest embedding scores are the four private prose facts. An embedding therefore
-carries the topic of a span, not whether the topic is private.
+carries the topic of a text, not whether the topic is private.
 
 - Model choice, not the model class, caused the first failure. The ranked 4B gives a
   usable operating point at a 12.5 percent audit rate.
 - The registry and the declared paths still decide the exact cases. The 4B ranks
   an example SSN above three real private facts. The 2B model scored the internal
   SKU scheme low in the 2B run.
-- First Mate ships the client, not the server, so the hardware budget is yours.
-  The numbers above state what a 4B costs and what a 4B catches. The probe
-  records the same two numbers for the server you run.
-- Nothing under 4B on the board reaches capability 55. The 270M Gemma clone stayed
-  untested, because Hugging Face gates Gemma 3 270M behind a login.
+- First Mate includes the client, not the server, so the hardware budget is yours.
+  The numbers above state the memory the 4B needs and the values the 4B catches on
+  this machine. The probe records the same two numbers for the server you run.
+- Nothing under 4B on the JevBench board reaches coherence 55. The 270M Gemma clone
+  stayed untested, because Hugging Face gates Gemma 3 270M behind a login.
+- Model selection is a later decision. These rows record two models on one machine
+  on one date.
 
 ## Mitigation (class 2)
 
@@ -445,8 +457,8 @@ ends at the leak report.
   console indicator" follows the same rule.
 - Each row holds the time, the provider id, and the Base URL. Each row holds the
   model, the class, and the count. Each row holds the conversation id and the row
-  id. Each row holds the tool behind the span. Each row holds the retention terms
-  of the provider at the moment of the send.
+  id. Each row holds the tool behind the flagged value. Each row holds the
+  retention terms of the provider at the moment of the send.
 - The retention terms make the row compliance-grade. The row states the exposure
   window: 30 days, flagged and up to 2 years, zero retention, or unknown.
 - Each row records your response: rotated, frozen, or ignored. Detection without
