@@ -57,12 +57,15 @@ skill. The refusal names the missing skill, so the model loads it and retries.
 
 ### Conversations persist
 
-First Mate saves each conversation at `~/.firstmate/conversations/<name>.chat`.
-The first line is the conversation name. The remaining lines hold one JSON
-object per turn, including tool turns. Each tool turn stores a structured
-report: the tool, its subject, and the outcome. The console re-renders the
-ledger line from that report when you reopen the conversation. The same rows
-ride back into the model's history. A resumed conversation therefore knows what
+First Mate writes each conversation at `~/.firstmate/conversations/<name>.chat`.
+The first line is the conversation name. Each later line is one message, in the
+form one request carried it. The file is therefore the record of what a receiver
+got, and a replaced value stays a marker there. The console shows the real
+values, and `load_conversation` detokenizes each line on the way in. Each tool
+turn also stores a structured report: the tool, its subject, and the outcome.
+The console re-renders the ledger line from that report when you reopen the
+conversation. A fold stores the rows it dropped, and the report panel opens them
+read-only. A resumed conversation re-sends the rows you see, so it knows what
 First Mate already inspected and verified.
 
 Each conversation earns capability on its own. The `load_skill` entries in the
@@ -93,7 +96,9 @@ file holds plaintext tool arguments. A release build writes no such file.
 
 `token_map.json` beside `settings.json` holds the marker-to-value table, so the
 table needs the same envelope. `read_file` never decrypts `token_map.json`,
-because `token_map.json` is the key for every marker First Mate issued.
+because `token_map.json` is the key for every marker First Mate issued. `read_file`
+never decrypts a `.chat` transcript either, because a fold line holds rows that
+left in plaintext.
 
 Each file carries its own AES-256 key. The `FMENC1` header beside the ciphertext
 holds that key twice: once wrapped under the Platform Crypto Provider key that

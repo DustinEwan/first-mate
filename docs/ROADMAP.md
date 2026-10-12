@@ -121,8 +121,9 @@ under a `Privacy` section, away from the provider and model fields.
   `hello` adds the Windows Hello check that the reveal session below defines.
   `show` is today's behavior.
 - One dependency crosses the two axes, and it is disk, not threat.
-  Click-to-reveal needs the real value on disk. §3 keeps real values in the
-  stored transcript, so encryption at rest is a precondition for `blur` and `hello`.
+  Click-to-reveal needs the real value on disk. §3 stores the wire text, and the
+  sealed token map holds the real values beside it. Encryption at rest is
+  therefore a precondition for `blur` and `hello`.
 - A profile may raise either axis. A profile may not lower either axis.
 - Before `wide` ships, the entity registry must ask before it grows. A false
   positive that enters the registry matches that value everywhere, forever.
@@ -315,6 +316,20 @@ the design.
 - [x] Tests cover round-trip fidelity and untouched code blocks.
       `every_class_round_trips` and `a_fenced_config_block_returns_byte_identical`
       hold those rules.
+- [x] `conversations.rs` owns the conversation record. Each line is the message
+      object one request carried. The console sends the transcript and writes
+      nothing, and `load_conversation` detokenizes each row for display.
+- [x] The leak scan reads the stored rows, so a value in a stored row reached a
+      receiver. One row is scanned once, when it goes in, so a re-send adds no
+      row. `leak::rescan` re-reads every stored row when the registry gains a
+      value, and never repeats a row the report holds.
+- [x] A fold stores the rows it dropped. The pass runs on that transcript,
+      because the summarizer call is a send of its own. The report lists each
+      fold, and one click opens those rows read-only as the wire copy.
+- [x] `read_file` cannot open a transcript, because a fold line holds rows that
+      left in plaintext. `conversations::tests::the_agent_cannot_read_a_transcript`
+      and `leak::tests::a_value_declared_after_a_send_is_found_in_the_stored_row`
+      hold those two rules.
 - [x] Three tests prove that the sealed token map survives a restart and stays
       closed to `read_file`:
       `crypto::tests::a_store_read_never_opens_the_token_map`,
@@ -380,8 +395,8 @@ the design.
 
 ### Phase C — Privacy section (§4)
 
-Encryption at rest ships, and the screen axis depends on it, because the
-transcript holds real values.
+Encryption at rest ships, and the screen axis depends on it. The sealed token
+map holds the real values behind the stored wire text.
 
 - [ ] The Settings UI gains a `Privacy` section, and the `Hide sensitive
       information` checkbox leaves the provider form.
@@ -392,7 +407,8 @@ transcript holds real values.
       three on-machine rows keep `off`.
 - [ ] The registry asks once before it grows, and that gate opens `wide`.
 - [ ] The screen axis adds `blur`: tokens in the console, one click reveals one
-      item, and the log stores the real text, which First Mate encrypts.
+      item, and the record stores the wire text while the sealed token map holds
+      the real values.
 - [ ] The `hello` level adds the reveal session: one Windows Hello check opens
       it, a hide or a 10-minute lifetime closes it, and Extend costs a check.
 - [ ] The app logs one line per session event, with the reason it closed.

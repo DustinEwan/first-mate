@@ -7,12 +7,14 @@
 //! way it refuses the token map, because a report the agent can open is a report
 //! the agent can send to a provider.
 
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use crate::conversations::Record;
 use crate::redact;
 
 /// The report file, beside `settings.json`.
@@ -176,20 +178,33 @@ pub(crate) fn marks(conversation: &str) -> Vec<LeakMark> {
         .collect()
 }
 
-/// Record every value one row of one send carries out of the machine.
+/// Record every value one text of one send carried in the clear.
 ///
-/// `hide` is that provider's `Hide sensitive information` switch. With the
-/// switch on, the send replaces the value, so only a value the Agent Model
-/// already holds has actually left, and `redact::Redactor::scan` reports exactly
-/// those. With the switch off, every value the detector finds leaves in
-/// plaintext, and the report records every one of them.
-pub(crate) fn record_send(to: &Send, det: &redact::Redactor, text: &str, tool: Option<&str>, hide: bool) {
-    for found in det.scan(text) {
-        if hide && !found.left {
-            continue;
-        }
-        record(&LeakRow {
-            at: now(),
+/// `text` is the text that goes on the wire, so a token the redaction pass
+/// issued names no value here, and only a value the pass left in place is
+/// recorded. A provider whose `Hide sensitive information` switch is off sends
+/// the real text, so the detector finds every value in it.
+pub(crate) fn record_send(to: &Send, det: &redact::Redactor, text: &str, tool: Option<&str>) {
+    for row in rows(to, det, text, tool) {
+        det.mark_left(&row.value);
+        record(&row);
+    }
+}
+
+/// The values one wire row carries in the clear: its own text, plus the
+/// arguments of each tool call it makes. The console links a range back to the
+/// text that held it, so each text is scanned as itself.
+fn rows(
+    to: &Send,
+    det: &redact::Redactor,
+    text: &str,
+    tool: Option<&str>,
+) -> Vec<LeakRow> {
+    let at = now();
+    det.scan(text)
+        .into_iter()
+        .map(|found| LeakRow {
+            at,
             conversation: to.conversation.clone(),
             value: found.value,
             class: found.class.to_string(),
@@ -199,7 +214,205 @@ pub(crate) fn record_send(to: &Send, det: &redact::Redactor, text: &str, tool: O
             model: to.model.clone(),
             base_url: to.base_url.clone(),
             tool: tool.map(str::to_string),
-        });
+        })
+        .collect()
+}
+
+/// Every value one wire row carried in the clear. `carrier` names the tool that
+/// produced a `tool` row, because the row itself holds only the call id.
+fn msg_rows(
+    to: &Send,
+    det: &redact::Redactor,
+    msg: &serde_json::Value,
+    carrier: Option<&str>,
+) -> Vec<LeakRow> {
+    let mut out: Vec<LeakRow> = Vec::new();
+    let text = crate::conversations::row_text(msg);
+    if !text.is_empty() {
+        out.extend(rows(to, det, &text, carrier));
+    }
+    let calls = msg.get("tool_calls").and_then(|c| c.as_array());
+    for call in calls.into_iter().flatten() {
+        let name = call.pointer("/function/name").and_then(|n| n.as_str());
+        if let Some(args) = call.pointer("/function/arguments").and_then(|a| a.as_str()) {
+            out.extend(rows(to, det, args, name));
+        }
+    }
+    out
+}
+
+/// Record every value one wire row carried in the clear.
+pub(crate) fn record_msg(
+    to: &Send,
+    det: &redact::Redactor,
+    msg: &serde_json::Value,
+    carrier: Option<&str>,
+) {
+    for row in msg_rows(to, det, msg, carrier) {
+        det.mark_left(&row.value);
+        record(&row);
+    }
+}
+
+/// Record every value the rows of one send carried in the clear. The fold sends
+/// the rows it drops to the summarizer, so the scan runs over them before that
+/// call. `carriers` names the tool behind a tool-result row.
+pub(crate) fn record_rows(
+    to: &Send,
+    det: &redact::Redactor,
+    rows: &[serde_json::Value],
+    carriers: &HashMap<String, String>,
+) {
+    for row in rows {
+        let carrier = row
+            .get("tool_call_id")
+            .and_then(|id| id.as_str())
+            .and_then(|id: &str| carriers.get(id))
+            .map(String::as_str);
+        record_msg(to, det, row, carrier);
+    }
+}
+
+/// The row's identity in the report, so a rescan adds no second copy of a fact
+/// the report already holds.
+fn key(row: &LeakRow) -> (String, String, String, usize, usize, Option<String>) {
+    (
+        row.conversation.clone(),
+        row.value.clone(),
+        row.class.clone(),
+        row.start,
+        row.end,
+        row.tool.clone(),
+    )
+}
+
+/// The values the report already names. `redact::Redactor::seed_left` loads
+/// them, so a later run's chip can name what an earlier send cannot undo.
+pub(crate) fn left_values() -> Vec<String> {
+    let mut values: Vec<String> = all().into_iter().map(|row| row.value).collect();
+    values.sort();
+    values.dedup();
+    values
+}
+
+/// The declared set the last rescan covered, so one change costs one rescan.
+pub(crate) const SCAN: &str = "scan.json";
+
+fn fingerprint(values: &[String]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for value in values {
+        value.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+fn read_fingerprint(path: &std::path::Path) -> Option<u64> {
+    let bytes = std::fs::read(path).ok()?;
+    let plain = if crate::crypto::looks_sealed(&bytes) {
+        crate::crypto::open(&bytes).ok()?
+    } else {
+        bytes
+    };
+    serde_json::from_str::<u64>(&String::from_utf8_lossy(&plain)).ok()
+}
+
+/// Scan every stored row of every conversation with the declared values, and
+/// return the rows this scan added.
+///
+/// A new declared value is the only event that makes an already-read row worth
+/// reading again, so an ordinary turn scans its new rows alone in
+/// `conversations::record_send` and never re-reads the file.
+pub(crate) fn rescan(values: &[String], scan_file: &std::path::Path) -> usize {
+    if values.is_empty() {
+        return 0;
+    }
+    let want = fingerprint(values);
+    if read_fingerprint(scan_file) == Some(want) {
+        return 0;
+    }
+    let mut det = redact::Redactor::new();
+    for value in values {
+        det.seed(value);
+    }
+    let mut seen: HashSet<_> = all().iter().map(key).collect();
+    let mut added = 0usize;
+    for path in crate::conversations::files() {
+        let conversation = crate::conversations::name_of(&path);
+        let stored = crate::conversations::records(&path);
+        // A fold line holds a tool row, and that row names only its call id.
+        // The sent line of the same call id names the tool that ran.
+        let mut carriers: HashMap<String, String> = HashMap::new();
+        for line in &stored {
+            if let Record::Sent { tool: Some(name), msg, .. } = line {
+                if let Some(id) = msg.get("tool_call_id").and_then(|i| i.as_str()) {
+                    carriers.insert(id.to_string(), name.clone());
+                }
+            }
+        }
+        for line in &stored {
+            let own = match line {
+                Record::Sent { tool, .. } => tool.as_deref(),
+                _ => None,
+            };
+            let (to, msgs): (Send, &[serde_json::Value]) = match line {
+                Record::Sent { provider, model, base_url, msg, .. } => (
+                    Send {
+                        conversation: conversation.clone(),
+                        provider: provider.clone(),
+                        model: model.clone(),
+                        base_url: base_url.clone(),
+                    },
+                    std::slice::from_ref(msg),
+                ),
+                Record::Fold { provider, model, base_url, dropped, .. } => (
+                    Send {
+                        conversation: conversation.clone(),
+                        provider: provider.clone(),
+                        model: model.clone(),
+                        base_url: base_url.clone(),
+                    },
+                    dropped.as_slice(),
+                ),
+                _ => continue,
+            };
+            for msg in msgs {
+                let carrier = msg
+                    .get("tool_call_id")
+                    .and_then(|id| id.as_str())
+                    .and_then(|id| carriers.get(id))
+                    .map(String::as_str)
+                    .or(own);
+                for row in msg_rows(&to, &det, msg, carrier) {
+                    if seen.insert(key(&row)) {
+                        record(&row);
+                        added += 1;
+                    }
+                }
+            }
+        }
+    }
+    if let Ok(sealed) = crate::crypto::seal(format!("{want}").as_bytes()) {
+        if let Some(dir) = scan_file.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(scan_file, sealed);
+    }
+    added
+}
+
+/// Rescan the stored rows when the declared values changed. `lib.rs` runs this
+/// on startup and before a send, because the user edits `entity_registry.json`
+/// outside First Mate.
+pub(crate) fn rescan_now(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    let Ok(dir) = app.path().app_config_dir() else { return };
+    let values = crate::settings::registry(app);
+    let added = rescan(&values, &dir.join(SCAN));
+    if added > 0 {
+        crate::log::log(&format!(
+            "LEAK RESCAN: {added} stored rows carried a value the registry declares"
+        ));
     }
 }
 
@@ -322,13 +535,7 @@ mod tests {
         let det = redact::Redactor::new();
         // `Zahlungskarte ✓ ` is 16 characters and 18 bytes, so a byte count
         // would show a different start.
-        record_send(
-            &send("payroll"),
-            &det,
-            &format!("Zahlungskarte ✓ {CARD}"),
-            None,
-            false,
-        );
+        record_send(&send("payroll"), &det, &format!("Zahlungskarte ✓ {CARD}"), None);
         let rows = all();
         assert_eq!(rows.len(), 1, "a value that left is one row");
         assert_eq!(rows[0].value, CARD);
@@ -351,28 +558,32 @@ mod tests {
         use_store("re-send");
         let det = redact::Redactor::new();
         let to = send("payroll");
-        record_send(&to, &det, &format!("pay {CARD} now"), None, false);
-        record_send(&to, &det, &format!("pay {CARD} now"), None, false);
+        record_send(&to, &det, &format!("pay {CARD} now"), None);
+        record_send(&to, &det, &format!("pay {CARD} now"), None);
         assert_eq!(all().len(), 2, "every send that carries the value is a row");
     }
 
     #[test]
-    fn a_redacted_value_gains_a_row_only_after_it_left() {
+    fn a_tokenized_send_gains_no_row_and_a_clear_send_gains_one() {
         if !crate::crypto::tpm_ready() {
             return;
         }
-        use_store("switch-on");
+        use_store("tokenized");
         let mut det = redact::Redactor::new();
         let to = send("payroll");
-        // The switch is on, and this send replaces the value, so nothing leaves.
-        record_send(&to, &det, &format!("pay {CARD} now"), None, true);
-        assert!(all().is_empty(), "a redacted value never left");
-        // An earlier send carried the value in plaintext, so this send repeats a
-        // leak that already happened.
-        det.note_sent(std::iter::once(format!("I paid {CARD} last week")));
-        record_send(&to, &det, &format!("pay {CARD} now"), None, true);
-        record_send(&to, &det, &format!("pay {CARD} now"), None, true);
-        assert_eq!(all().len(), 2, "each later send gains its own row");
+        // The switch is on, so the wire carries the token and the value stays
+        // on this machine.
+        let wire = det.tokenize(&format!("pay {CARD} now"));
+        record_send(&to, &det, &wire, None);
+        assert!(all().is_empty(), "a replaced value never left");
+        // A provider whose switch is off gets the real text, so that send is
+        // the leak, and the later chip must name it.
+        record_send(&to, &det, &format!("pay {CARD} now"), None);
+        let rows = all();
+        assert_eq!(rows.len(), 1, "the clear send is the leak");
+        assert_eq!(rows[0].value, CARD);
+        det.tokenize(&format!("pay {CARD} now"));
+        assert_eq!(det.leaks(), vec!["CARD"], "the chip lost the earlier leak");
     }
 
     #[test]
@@ -392,5 +603,33 @@ mod tests {
         )
         .unwrap();
         assert_eq!(neighbour, format!("the value is {CARD}").as_bytes());
+    }
+
+    /// The point of the stored transcript: a value the user declares later is
+    /// still in the row that went out weeks earlier.
+    #[test]
+    fn a_value_declared_after_a_send_is_found_in_the_stored_row() {
+        if !crate::crypto::tpm_ready() {
+            return;
+        }
+        crate::crypto::init(std::env::temp_dir().join("fm-envelope"));
+        use_store("declared");
+        crate::conversations::use_dir("declared");
+        let declared = "AC-9931-X";
+        let det = redact::Redactor::new();
+        crate::conversations::record_send(
+            &send("acct"),
+            &det,
+            &[serde_json::json!({ "role": "user", "content": format!("the invoice is {declared}") })],
+            &std::collections::HashMap::new(),
+        );
+        assert!(all().is_empty(), "a value nobody declared was recorded");
+        let scan = std::env::temp_dir().join("fm-envelope").join(SCAN);
+        let _ = std::fs::remove_file(&scan);
+        assert_eq!(rescan(&[declared.to_string()], &scan), 1, "the rescan missed the stored row");
+        assert_eq!(all()[0].value, declared);
+        assert_eq!(all()[0].conversation, "acct");
+        assert_eq!(rescan(&[declared.to_string()], &scan), 0, "one declared set rescanned twice");
+        assert_eq!(all().len(), 1, "the second rescan duplicated a row");
     }
 }

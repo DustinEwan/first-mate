@@ -336,7 +336,7 @@ function closeWindow() {
                   Applies to {{ currentSpec ? currentSpec.label : provider }} only. First Mate hides
                   these before it sends your text: card and bank account numbers, SSNs, crypto
                   addresses, API keys, email addresses, phone numbers, and your user folder paths.
-                  Nothing else needs installing. Your saved conversation keeps the real values.
+                  Nothing else needs installing. A saved conversation still shows the real values.
                 </template>
               </n-form-item>
               <n-form-item :show-label="false">
@@ -344,9 +344,9 @@ function closeWindow() {
                 <template #feedback>
                   Some sensitive information has no obvious pattern: a password you type in a
                   sentence, a project name, or a place. The Privacy Model reads those words, and
-                  First Mate hides what it flags. You install and run the Privacy Model yourself.
-                  Your saved conversation keeps the real values. The Privacy Model can flag ordinary
-                  text, and Test shows how sharply it tells the two apart.
+                  First Mate hides what it flags. You install and run the Privacy Model yourself. A
+                  saved conversation still shows the real values. The Privacy Model can flag
+                  ordinary text, and Test shows how sharply it tells the two apart.
                 </template>
               </n-form-item>
               <n-form-item v-if="decisionEnabled" label="Privacy Model address">

@@ -2,7 +2,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { ref, onMounted, watch, nextTick } from "vue";
+import { ref, computed, onMounted, watch, nextTick } from "vue";
 import { NConfigProvider, NInput, NPopover, darkTheme } from "naive-ui";
 import { DynamicScroller, DynamicScrollerItem } from "vue-virtual-scroller";
 import { Marked } from "marked";
@@ -100,7 +100,6 @@ interface Msg {
   toolName?: string;
   done?: boolean;
   tool?: ToolReport;
-  // View-only: a reopened conversation shows the divider without a count.
   folded?: number;
   // View-only: a reopened conversation has no chip.
   redact?: RedactReport;
@@ -295,10 +294,19 @@ interface ConvInfo {
   path: string;
   modified: number;
 }
-interface ConvMsg {
+interface DisplayRow {
   role: string;
   text: string;
   report?: ToolReport;
+  folded?: number;
+}
+interface FoldInfo {
+  conversation: string;
+  at: number;
+  dropped: number;
+  provider: string;
+  model: string;
+  baseUrl: string;
 }
 const panelOpen = ref(false);
 const wizardOpen = ref(false);
@@ -306,6 +314,16 @@ const conversations = ref<ConvInfo[]>([]);
 const convName = ref<string | null>(null);
 // Temporary conversations: never written to disk, vanish on New/restart.
 const tempChat = ref(false);
+const folds = ref<FoldInfo[]>([]);
+// The console keeps fold rows apart from the transcript, because the rows are
+// evidence of one send.
+const foldView = ref<{ info: FoldInfo; rows: Msg[] } | null>(null);
+const shownRows = computed(() => (foldView.value ? foldView.value.rows : messages.value));
+const foldReceiver = computed(() => {
+  const f = foldView.value?.info;
+  return f ? `${f.provider} · ${f.model} · ${f.baseUrl}` : "";
+});
+
 // Rust owns the Elevated Control state. The agent moves the state with
 // elevate and delevate too, reported via elevation_changed events.
 const elevActive = ref(false);
@@ -349,9 +367,9 @@ function foldTitle(m: Msg): string {
     : `Show the summary First Mate works from instead of those messages.${folded}`;
 }
 
-// `dim` notes and errors are UI-only: they never persist and never reach
-// the model. A `summary` divider persists so a reopened conversation
-// still shows the folded text.
+// `dim` notes and errors are UI-only: the console shows them, and Rust writes
+// nothing. Rust writes the `summary` divider, so a reopened conversation shows
+// the brief.
 function isTranscriptRow(m: Msg): boolean {
   return ["user", "assistant", "tool", "summary"].includes(m.cls) && !!m.text.trim();
 }
@@ -364,21 +382,6 @@ function nameConversation() {
   convName.value = (first ? first.text : "Chat").replace(/\s+/g, " ").trim().slice(0, 48);
 }
 
-function persistConversation() {
-  if (tempChat.value) return;
-  // Tool reports persist so a resumed conversation sees work already done.
-  const turns = messages.value.filter(isTranscriptRow).map((m) => ({
-    role: m.cls,
-    text: m.text,
-    report: m.done ? m.tool : undefined,
-  }));
-  if (turns.length === 0) return;
-  nameConversation();
-  invoke<string>("save_conversation", { name: convName.value, messages: turns })
-    .then(() => refreshConversations())
-    .catch((e) => console.error("save failed", e));
-}
-
 function refreshConversations() {
   return invoke<ConvInfo[]>("list_conversations")
     .then((list) => {
@@ -387,17 +390,23 @@ function refreshConversations() {
     .catch((e) => console.error("list failed", e));
 }
 
+function displayMsg(row: DisplayRow): Msg {
+  return {
+    id: nextId++,
+    text: row.text,
+    cls: row.role,
+    ...(row.role === "tool" && row.report ? { tool: row.report, done: true } : {}),
+    ...(row.folded != null ? { folded: row.folded } : {}),
+  };
+}
+
 function openConversation(c: ConvInfo): Promise<void> {
-  return invoke<ConvMsg[]>("load_conversation", { path: c.path })
-    .then((msgs) => {
-      // Saved roles equal `cls` values 1:1. A persisted `summary` row
-      // therefore comes back as a divider, not a chat bubble.
-      messages.value = msgs.map((m) => ({
-        id: nextId++,
-        text: m.text,
-        cls: m.role,
-        ...(m.role === "tool" && m.report ? { tool: m.report, done: true } : {}),
-      }));
+  return invoke<DisplayRow[]>("load_conversation", { path: c.path })
+    .then((rows) => {
+      foldView.value = null;
+      // Stored roles equal `cls` values 1:1, so a `summary` row renders as a
+      // divider, not a chat bubble.
+      messages.value = rows.map(displayMsg);
       convName.value = c.name;
       tempChat.value = false;
       panelOpen.value = false;
@@ -412,6 +421,7 @@ function newChat() {
   convName.value = null;
   tempChat.value = false;
   panelOpen.value = false;
+  foldView.value = null;
   refreshBehavior();
   refreshLeakMarks();
 }
@@ -440,6 +450,7 @@ function newTempChat() {
   convName.value = null;
   tempChat.value = true;
   panelOpen.value = false;
+  foldView.value = null;
   refreshBehavior();
   refreshLeakMarks();
   addMsg("Temporary conversation — nothing here is saved to disk.", "dim");
@@ -497,12 +508,12 @@ function leakKey(m: LeakMark | LeakRow): string {
   return `${m.value}\u0000${m.at}\u0000${m.provider}\u0000${m.model}`;
 }
 
-function leakTime(seconds: number): string {
+function timeAt(seconds: number): string {
   return new Date(seconds * 1000).toLocaleString();
 }
 
 function leakTitles(marks: LeakMark[]): string {
-  return marks.map((m) => `${m.class} — ${m.provider} — ${m.model} — ${leakTime(m.at)}`).join("\n");
+  return marks.map((m) => `${m.class} — ${m.provider} — ${m.model} — ${timeAt(m.at)}`).join("\n");
 }
 
 function leakIndexes(marks: LeakMark[]): string {
@@ -510,9 +521,9 @@ function leakIndexes(marks: LeakMark[]): string {
 }
 
 function refreshLeakMarks(): Promise<void> {
-  // A temporary conversation has no name, and the backend records its leaks
-  // under UNSAVED.
-  const conversation = convName.value ?? UNSAVED;
+  // A fold view shows another conversation's rows. A temporary conversation has
+  // no name, and the backend records its leaks under UNSAVED.
+  const conversation = foldView.value?.info.conversation ?? convName.value ?? UNSAVED;
   return invoke<LeakMark[]>("leak_marks", { conversation })
     .then((rows) => {
       leakMarks.value = rows;
@@ -629,6 +640,37 @@ function refreshLeakReport(): Promise<void> {
     });
 }
 
+function refreshFolds(): Promise<void> {
+  return invoke<FoldInfo[]>("list_folds")
+    .then((list) => {
+      folds.value = list;
+    })
+    .catch((e) => {
+      leakError.value = String(e);
+    });
+}
+
+function showFold(fold: FoldInfo) {
+  leakError.value = "";
+  invoke<DisplayRow[]>("open_fold", { conversation: fold.conversation, at: fold.at })
+    .then((rows) => {
+      foldView.value = { info: fold, rows: rows.map(displayMsg) };
+      leakOpen.value = false;
+      void refreshLeakMarks();
+      return nextTick();
+    })
+    .then(() => scrollerRef.value?.scrollToItem?.(0))
+    .catch((e) => {
+      leakError.value = String(e);
+    });
+}
+
+function closeFold() {
+  foldView.value = null;
+  void refreshLeakMarks();
+  scrollToBottom();
+}
+
 function openLeakPanel(indexes: string) {
   activeLeaks.value = new Set(
     indexes
@@ -642,6 +684,7 @@ function openLeakPanel(indexes: string) {
   leakPath.value = "";
   leakOpen.value = true;
   void refreshLeakReport();
+  void refreshFolds();
 }
 
 function onLeakBadgeClick(e: MouseEvent) {
@@ -689,6 +732,8 @@ function leakElement(value: string): HTMLElement | null {
 function jumpToLeak(row: LeakRow) {
   if (row.conversation === UNSAVED) return;
   leakOpen.value = false;
+  // A leak row names a message in the conversation, not a row in the fold view.
+  foldView.value = null;
   const conv = conversations.value.find((c) => c.name === row.conversation);
   if (!conv) {
     addMsg(`Conversation ${row.conversation} is no longer on disk.`, "dim");
@@ -965,7 +1010,9 @@ async function submit() {
     liveMsgId = -1;
     pendingRedact = undefined;
     audit.value = null;
-    persistConversation();
+    // Rust wrote the transcript inside chat_with_llm. A temporary chat wrote
+    // nothing.
+    if (!tempChat.value) void refreshConversations();
     refreshLeakMarks();
     void refreshLeakReport();
   }
@@ -1005,6 +1052,8 @@ async function toggleElevation() {
 // of arrival.
 let userScrollAbort = false;
 function scrollToBottom() {
+  // A live row must not move the fold view's scroll position.
+  if (foldView.value) return;
   nextTick(() => {
     const el = scrollerRef.value?.$el as HTMLElement | undefined;
     if (!el) return;
@@ -1038,6 +1087,7 @@ window.addEventListener("keydown", (e) => {
     if (wizardOpen.value) return; // dismissed only via Skip/Finish
     if (leakOpen.value) leakOpen.value = false;
     else if (panelOpen.value) panelOpen.value = false;
+    else if (foldView.value) closeFold();
     else hide();
   } else if (e.ctrlKey && !e.altKey && e.key.toLowerCase() === "n") {
     e.preventDefault();
@@ -1091,7 +1141,23 @@ window.addEventListener("keydown", (e) => {
       </header>
       <div class="body">
         <div class="main">
-          <DynamicScroller ref="scrollerRef" :items="messages" key-field="id" class="scroller">
+          <div v-if="foldView" class="fold-banner">
+            <div class="fold-banner-head">
+              <span>Read-only fold view</span>
+              <button class="leak-btn" title="Show the conversation again." @click="closeFold">
+                Close
+              </button>
+            </div>
+            <p class="fold-banner-note">
+              These rows are the copy First Mate sent before compaction.
+            </p>
+            <p class="fold-banner-meta">{{ foldReceiver }}</p>
+            <p class="fold-banner-meta">
+              {{ foldView.info.conversation }} · {{ timeAt(foldView.info.at) }} ·
+              {{ foldView.info.dropped }} rows dropped
+            </p>
+          </div>
+          <DynamicScroller ref="scrollerRef" :items="shownRows" key-field="id" class="scroller">
             <template #default="{ item, active }">
               <DynamicScrollerItem
                 :item="item"
@@ -1202,6 +1268,7 @@ window.addEventListener("keydown", (e) => {
               v-model:value="input"
               type="textarea"
               autosize
+              :disabled="foldView !== null"
               :placeholder="
                 isThinking
                   ? 'First Mate is working… type to queue'
@@ -1295,7 +1362,7 @@ window.addEventListener("keydown", (e) => {
             >
               <div class="leak-value">{{ r.value }}</div>
               <div class="leak-meta">
-                {{ r.class }} · {{ r.provider }} · {{ r.model }} · {{ leakTime(r.at) }}
+                {{ r.class }} · {{ r.provider }} · {{ r.model }} · {{ timeAt(r.at) }}
               </div>
               <div class="leak-meta">
                 {{ r.conversation }} · {{ r.baseUrl
@@ -1304,6 +1371,25 @@ window.addEventListener("keydown", (e) => {
             </li>
           </ul>
           <p v-else class="leak-note">No leak has been recorded.</p>
+          <div v-if="folds.length" class="fold-box">
+            <div class="fold-head">Folds — {{ folds.length }}</div>
+            <ul class="fold-list">
+              <li v-for="f in folds" :key="`${f.conversation}:${f.at}`">
+                <div class="fold-body">
+                  <div class="fold-name">{{ f.conversation }}</div>
+                  <div class="leak-meta">{{ timeAt(f.at) }} · {{ f.dropped }} rows dropped</div>
+                  <div class="leak-meta">{{ f.provider }} · {{ f.model }}</div>
+                </div>
+                <button
+                  class="leak-btn"
+                  title="Show the rows this fold dropped."
+                  @click="showFold(f)"
+                >
+                  Show rows
+                </button>
+              </li>
+            </ul>
+          </div>
         </div>
       </div>
       <SetupWizard v-if="wizardOpen" @done="finishSetup" />

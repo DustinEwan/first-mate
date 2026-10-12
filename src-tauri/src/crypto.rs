@@ -318,15 +318,17 @@ pub fn is_store(path: &Path) -> bool {
 
 /// Bytes as stored. A sealed file inside First Mate's own directories opens, so
 /// `read_file` reaches a spill. Any other file keeps its bytes, so the agent
-/// never sees decrypted text from a file the user owns. Two files keep their
+/// never sees decrypted text from a file the user owns. Three files keep their
 /// bytes even inside the store: the token map, because that map is the key for
-/// every marker First Mate issued, and the leak report, because it names the
-/// values and who received them, so a report the agent can read is a report the
+/// every marker First Mate issued; the leak report, because it names the values
+/// and who received them; and a transcript, because a fold line holds the rows
+/// a fold dropped in plaintext. A record the agent can read is a record the
 /// agent can send out again.
 pub fn open_store_bytes(path: &Path, bytes: Vec<u8>) -> Result<Vec<u8>, String> {
-    let never_plain = path
-        .file_name()
-        .is_some_and(|name| name == TOKEN_MAP || name == crate::leak::LEAKS);
+    let never_plain = path.extension().and_then(|e| e.to_str()) == Some("chat")
+        || path
+            .file_name()
+            .is_some_and(|name| name == TOKEN_MAP || name == crate::leak::LEAKS);
     if looks_sealed(&bytes) && is_store(path) && !never_plain {
         return open(&bytes);
     }
@@ -351,7 +353,7 @@ pub fn seal_file(path: &Path) -> Result<bool, String> {
 /// clear. The counts are the rewritten files and the deleted dumps.
 pub fn upgrade_stores(config_dir: &Path) -> (usize, usize) {
     let mut paths: Vec<PathBuf> =
-        ["settings.json", "entity_registry.json", TOKEN_MAP]
+        ["settings.json", "entity_registry.json", TOKEN_MAP, crate::leak::SCAN]
             .iter()
             .map(|name| config_dir.join(name))
             .collect();

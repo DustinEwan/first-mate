@@ -369,16 +369,15 @@ struct Hit {
     class: Class,
 }
 
-/// One value the detector found in text that is about to leave the machine.
-/// `start` and `end` count `chars()`, because the console marks a row in
-/// characters, not bytes. `left` says the Agent Model already holds the value,
-/// which is what turns a redaction into a leak. `leak.rs` records it.
+/// One value the detector found in text. `start` and `end` count `chars()`,
+/// because the console marks a row in characters, not bytes. `leak.rs` records
+/// the hits it finds in the text that goes on the wire, because a value the
+/// redaction pass left in place is a value the receiver keeps.
 pub(crate) struct Found {
     pub value: String,
     pub class: &'static str,
     pub start: usize,
     pub end: usize,
-    pub left: bool,
 }
 
 /// The token table for every conversation this machine has tokenized. The table
@@ -538,11 +537,12 @@ pub(crate) fn init(path: PathBuf) {
 pub(crate) struct Redactor {
     store: Store,
     registry: Vec<String>,
-    /// Text the Agent Model already holds in this conversation. The gate judges
-    /// none of that text, because those words already left the PC.
+    /// Text the Agent Model already holds in this conversation, so the gate
+    /// judges each text once instead of once per turn.
     sent: HashSet<String>,
-    /// The pass searches a value inside this text for the leak report.
-    sent_blob: String,
+    /// Values an earlier send carried in the clear. `leaks.jsonl` is the record,
+    /// so the chip can name what this run's redaction cannot undo.
+    left: Mutex<HashSet<String>>,
     leaks: Mutex<Vec<Class>>,
 }
 
@@ -552,7 +552,7 @@ impl Redactor {
             store: SHARED.get().cloned().unwrap_or_else(Store::memory),
             registry: Vec::new(),
             sent: HashSet::new(),
-            sent_blob: String::new(),
+            left: Mutex::new(HashSet::new()),
             leaks: Mutex::new(Vec::new()),
         }
     }
@@ -563,7 +563,7 @@ impl Redactor {
             store,
             registry: Vec::new(),
             sent: HashSet::new(),
-            sent_blob: String::new(),
+            left: Mutex::new(HashSet::new()),
             leaks: Mutex::new(Vec::new()),
         }
     }
@@ -592,19 +592,15 @@ impl Redactor {
         self.unjudged(texts.map(str::to_string).collect())
     }
 
-    /// A row the Agent Model already holds needs no new judgement, because
-    /// those words already left the PC. The agent loop re-sends the whole
-    /// window on every tool turn. `record` keeps those resends cheap.
+    /// A row the Agent Model already holds needs no new judgement, because an
+    /// earlier turn judged it. The agent loop re-sends the whole window on every
+    /// tool turn, so one judgement per text keeps those resends cheap.
     fn unjudged(&self, found: Vec<String>) -> Vec<String> {
         found.into_iter().filter(|m| !self.sent.contains(m)).collect()
     }
 
     pub(crate) fn note_sent(&mut self, rows: impl Iterator<Item = String>) {
-        for row in rows {
-            self.sent_blob.push_str(&row);
-            self.sent_blob.push('\n');
-            self.sent.insert(row);
-        }
+        self.sent.extend(rows);
     }
 
     /// A cleared message counts as sent, so no later turn asks about it again.
@@ -621,9 +617,30 @@ impl Redactor {
             .collect()
     }
 
-    /// A later audit cannot take back a value the Agent Model already holds.
+    /// A value that left in the clear stays out of reach, so the chip names its
+    /// class on every later turn.
     fn leaked(&self, value: &str) -> bool {
-        !self.sent_blob.is_empty() && self.sent_blob.contains(value)
+        self.left
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .contains(value)
+    }
+
+    /// Load the values the report already names, so a fresh run knows what an
+    /// earlier run sent in the clear.
+    pub(crate) fn seed_left(&mut self) {
+        self.left
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .extend(crate::leak::left_values());
+    }
+
+    /// One send carried this value in the clear.
+    pub(crate) fn mark_left(&self, value: &str) {
+        self.left
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(value.to_string());
     }
 
     /// Detection with no store write, so a leak scan cannot inflate the chip
@@ -642,7 +659,6 @@ impl Redactor {
             byte = hit.start;
             let value = &text[hit.start..hit.end];
             found.push(Found {
-                left: self.leaked(value),
                 value: value.to_string(),
                 class: hit.class.label(),
                 start: chars,
@@ -1143,22 +1159,19 @@ mod tests {
     }
 
     #[test]
-    fn a_value_the_agent_model_already_holds_is_reported() {
+    fn a_value_that_already_left_names_its_class() {
         let mut r = Redactor::new();
-        r.note_sent(std::iter::once(
-            "I paid the card 4111 1111 1111 1111 last week.".to_string(),
-        ));
+        r.mark_left(CARD);
         let sealed = r.tokenize("Charge the card 4111 1111 1111 1111 again.");
         assert!(sealed.contains("⟦CARD_1⟧"), "the repeat value is replaced");
-        assert_eq!(r.leaks(), vec!["CARD"]);
+        assert_eq!(r.leaks(), vec!["CARD"], "the chip must name the class");
     }
 
     #[test]
     fn a_value_that_never_left_the_pc_is_not_reported() {
         let mut r = Redactor::new();
-        r.note_sent(std::iter::once("nothing sensitive here".to_string()));
         r.tokenize("My card is 4111 1111 1111 1111.");
-        assert!(r.leaks().is_empty());
+        assert!(r.leaks().is_empty(), "a replaced value never left");
     }
 
     #[test]
@@ -1249,18 +1262,13 @@ mod tests {
 
     #[test]
     fn a_scan_sees_every_occurrence_and_writes_no_token() {
-        let mut r = Redactor::new();
+        let r = Redactor::new();
         let found = r.scan(&format!("pay {CARD} now, then pay {CARD} again"));
         assert_eq!(found.len(), 2, "a scan judges each occurrence");
         assert_eq!(found[0].class, "CARD");
         assert_eq!(found[0].value, CARD);
-        assert!(!found[0].left, "the value never left this machine");
         assert_eq!(r.redacted_count(), 0, "a scan issued a token");
         assert!(r.breakdown().is_empty(), "a scan moved the chip count");
-        r.note_sent(std::iter::once(format!("I paid {CARD} last week")));
-        let again = r.scan(&format!("pay {CARD} now"));
-        assert!(again[0].left, "a value the Agent Model holds has left");
-        assert_eq!(r.redacted_count(), 0, "a scan issued a token");
     }
 
     #[test]

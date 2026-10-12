@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use tauri::Emitter;
 use crate::audit;
 use crate::context;
+use crate::conversations;
 use crate::decide;
 use crate::execute::execute_tool;
 use crate::leak;
@@ -30,40 +31,51 @@ pub(crate) fn stop_chat() {
     }
 }
 
+/// The messages of one request in the shape the transcript stores: the same
+/// objects lmkit puts on the wire.
+fn chat_rows(msgs: &[lmkit::ChatMessage]) -> Vec<serde_json::Value> {
+    msgs.iter()
+        .map(|m| {
+            let role = match m.role {
+                lmkit::Role::System => "system",
+                lmkit::Role::User => "user",
+                lmkit::Role::Assistant => "assistant",
+                lmkit::Role::Tool => "tool",
+            };
+            let mut obj = serde_json::json!({ "role": role });
+            if let Some(c) = &m.content {
+                obj["content"] = serde_json::Value::String(c.clone());
+            }
+            if let Some(tcs) = &m.tool_calls {
+                let arr: Vec<serde_json::Value> = tcs
+                    .iter()
+                    .map(|tc| {
+                        serde_json::json!({
+                            "id": tc.id,
+                            "type": "function",
+                            "function": { "name": tc.function.name, "arguments": tc.function.arguments }
+                        })
+                    })
+                    .collect();
+                obj["tool_calls"] = serde_json::Value::Array(arr);
+            }
+            if let Some(id) = &m.tool_call_id {
+                obj["tool_call_id"] = serde_json::Value::String(id.clone());
+            }
+            if let Some(n) = &m.name {
+                obj["name"] = serde_json::Value::String(n.clone());
+            }
+            obj
+        })
+        .collect()
+}
+
 /// `lmkit::ChatRequest` does not implement `Serialize`.
 fn request_to_json(
     history: &[lmkit::ChatMessage],
     tools: &[lmkit::ToolDefinition],
 ) -> serde_json::Value {
-    let msgs: Vec<serde_json::Value> = history.iter().map(|m| {
-        let role = match m.role {
-            lmkit::Role::System => "system",
-            lmkit::Role::User => "user",
-            lmkit::Role::Assistant => "assistant",
-            lmkit::Role::Tool => "tool",
-        };
-        let mut obj = serde_json::json!({ "role": role });
-        if let Some(c) = &m.content {
-            obj["content"] = serde_json::Value::String(c.clone());
-        }
-        if let Some(tcs) = &m.tool_calls {
-            let arr: Vec<serde_json::Value> = tcs.iter().map(|tc| {
-                serde_json::json!({
-                    "id": tc.id,
-                    "type": "function",
-                    "function": { "name": tc.function.name, "arguments": tc.function.arguments }
-                })
-            }).collect();
-            obj["tool_calls"] = serde_json::Value::Array(arr);
-        }
-        if let Some(id) = &m.tool_call_id {
-            obj["tool_call_id"] = serde_json::Value::String(id.clone());
-        }
-        if let Some(n) = &m.name {
-            obj["name"] = serde_json::Value::String(n.clone());
-        }
-        obj
-    }).collect();
+    let msgs = chat_rows(history);
     let tools_arr: Vec<serde_json::Value> = tools.iter().map(|t| {
         serde_json::json!({
             "type": "function",
@@ -128,6 +140,9 @@ pub(crate) async fn chat_with_llm(
     conversation: Option<String>,
 ) -> Result<String, String> {
     CHAT_STOP.store(false, std::sync::atomic::Ordering::SeqCst);
+    // A declared value added while First Mate ran makes the stored rows worth
+    // reading again, once, before this run adds more rows.
+    leak::rescan_now(&app);
     let params = ChatParams {
         provider,
         base_url,
@@ -168,6 +183,7 @@ fn redactor(
     for value in values {
         red.seed(&value);
     }
+    red.seed_left();
     red.note_sent(history.iter().map(|h| h.content.clone()));
     Some(red)
 }
@@ -176,8 +192,7 @@ fn redactor(
 /// switch decides what the provider sees; it decides nothing about what the
 /// report records, so a provider with no redaction still has every value it
 /// received written down. The registry seeds it, because a declared value has no
-/// shape the patterns would match. It keeps no memory of earlier sends, because
-/// with the switch off every value the detector finds leaves on this send.
+/// shape the patterns would match.
 fn watcher(app: &tauri::AppHandle, provider: &str) -> redact::Redactor {
     let (_, values) = settings::redaction_for(app, provider);
     let mut watch = redact::Redactor::new();
@@ -197,89 +212,6 @@ fn detector<'a>(
     red.as_ref()
         .or(watch.as_ref())
         .expect("a detector exists whatever the switch says")
-}
-
-/// Record every value one send carries out of the machine. `rows` are the rows
-/// about to leave, still holding real values. `carriers` names the tool behind a
-/// tool-result row, because the report names the carrier, and a tool call's own
-/// arguments are scanned too, because they leave in the same request.
-fn record_rows(
-    to: &leak::Send,
-    det: &redact::Redactor,
-    rows: &[serde_json::Value],
-    carriers: &HashMap<String, String>,
-    hide: bool,
-) {
-    for row in rows {
-        let text = row_text(row);
-        let carrier = row
-            .get("tool_call_id")
-            .and_then(|id| id.as_str())
-            .and_then(|id| carriers.get(id))
-            .map(String::as_str);
-        if !text.is_empty() {
-            leak::record_send(to, det, &text, carrier, hide);
-        }
-        let calls = row.get("tool_calls").and_then(|c| c.as_array());
-        for call in calls.into_iter().flatten() {
-            let name = call.pointer("/function/name").and_then(|n| n.as_str());
-            if let Some(args) = call
-                .pointer("/function/arguments")
-                .and_then(|a| a.as_str())
-            {
-                leak::record_send(to, det, args, name, hide);
-            }
-        }
-    }
-}
-
-/// The same walk over the lmkit history shape.
-fn record_chat(
-    to: &leak::Send,
-    det: &redact::Redactor,
-    rows: &[lmkit::ChatMessage],
-    carriers: &HashMap<String, String>,
-    hide: bool,
-) {
-    for row in rows {
-        if let Some(text) = row.content.as_deref() {
-            let carrier = row
-                .tool_call_id
-                .as_deref()
-                .and_then(|id| carriers.get(id))
-                .map(String::as_str);
-            if !text.is_empty() {
-                leak::record_send(to, det, text, carrier, hide);
-            }
-        }
-        for call in row.tool_calls.iter().flatten() {
-            leak::record_send(
-                to,
-                det,
-                &call.function.arguments,
-                Some(&call.function.name),
-                hide,
-            );
-        }
-    }
-}
-
-/// The fold sends the rows it drops, so the summarizer call is a send the report
-/// counts. Each dropped row is scanned as itself, because the console links a
-/// range back to the row that carried the value, and the transcript the
-/// summarizer reads is those rows with labels around them.
-fn record_brief(
-    to: &leak::Send,
-    det: &redact::Redactor,
-    opening: Option<&str>,
-    dropped: &[serde_json::Value],
-    carriers: &HashMap<String, String>,
-    hide: bool,
-) {
-    if let Some(text) = opening {
-        leak::record_send(to, det, text, None, hide);
-    }
-    record_rows(to, det, dropped, carriers, hide);
 }
 
 struct Scorer {
@@ -510,19 +442,7 @@ fn pinned_opening(
     if (drop_start..drop_end).contains(&i) {
         return None;
     }
-    Some(row_text(row)).filter(|s| !s.trim().is_empty())
-}
-
-fn row_text(m: &serde_json::Value) -> String {
-    match m.get("content") {
-        Some(serde_json::Value::String(s)) => s.clone(),
-        Some(serde_json::Value::Array(parts)) => parts
-            .iter()
-            .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
-            .collect::<Vec<_>>()
-            .join(" "),
-        _ => String::new(),
-    }
+    Some(conversations::row_text(row)).filter(|s| !s.trim().is_empty())
 }
 
 fn brief_transcript(
@@ -543,7 +463,7 @@ fn brief_transcript(
     }
     for m in dropped {
         let role = m.get("role").and_then(|r| r.as_str()).unwrap_or("?");
-        let text = row_text(m);
+        let text = conversations::row_text(m);
         let calls = m
             .get("tool_calls")
             .and_then(|c| c.as_array())
@@ -724,17 +644,22 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
         let rules = rules.as_deref().expect("checked just above");
         let ledger = history_msgs(&prior_history);
         let opening = pinned_opening(&ledger, start, start + cut);
-        let dropped = ledger[start..start + cut].to_vec();
-        // The fold is a send of its own: it carries the rows it drops to the
-        // summarizer in plaintext, whatever the redaction switch says.
-        record_brief(
-            &to,
-            detector(&red, &watch),
-            opening.as_deref(),
-            &dropped,
-            &carriers,
-            red.is_some(),
-        );
+        let mut dropped = ledger[start..start + cut].to_vec();
+        // The summarizer call is an outbound request like any other, so the pass
+        // runs on every row it carries.
+        if let Some(red) = red.as_mut() {
+            red.tokenize_msgs(&mut dropped);
+        }
+        let opening = opening.map(|text| match red.as_mut() {
+            Some(red) => red.tokenize(&text),
+            None => text,
+        });
+        // Whatever the pass leaves in the clear reaches the summarizer, and the
+        // report names it.
+        if let Some(text) = opening.as_deref() {
+            leak::record_send(&to, detector(&red, &watch), text, None);
+        }
+        leak::record_rows(&to, detector(&red, &watch), &dropped, &carriers);
         let brief_request = ChatRequest {
             messages: vec![
                 ChatMessage::system(rules),
@@ -771,6 +696,7 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
                         "compact",
                         serde_json::json!({ "summary": &b, "tokensBefore": threshold, "dropped": cut }),
                     );
+                    conversations::record_fold(&to, &b, &dropped);
                     summary = Some(b);
                     kept_from = start + cut;
                 }
@@ -831,10 +757,9 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
             }
             tokenize_chat(r, &mut wire);
         }
-        // The leak report records what leaves whatever the switch says, so the
-        // scan reads `history`, which still holds the real values. `wire`
-        // carries tokens by now, and a token names no value to the detector.
-        record_chat(&to, detector(&red, &watch), &history, &carriers, red.is_some());
+        // `wire` moves into the request below, so the rows that leave are
+        // captured here and stored once the stream opens.
+        let sent = chat_rows(&wire);
         log(&format!("TURN {}: history_msgs={} tools={}", turn, wire.len(), tools.len()));
         let req_json = match serde_json::to_string(&request_to_json(&wire, &tools)) {
             Ok(j) => j,
@@ -866,6 +791,7 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
                 return Err(e.to_string());
             }
         };
+        conversations::record_send(&to, detector(&red, &watch), &sent, &carriers);
         while let Some(event) = stream.next().await {
             let event = event.map_err(|e| e.to_string())?;
             match event {
@@ -931,6 +857,7 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
                     .unwrap_or_else(|e| format!("Error: {e}"));
                 let ok = !result.starts_with("Error");
                 let report = tool_report(&name, &args, &result, t0.elapsed().as_millis());
+                conversations::record_ledger(&to, &call.id, &report);
                 let _ = app.emit("tool_result", serde_json::json!({
                     "name": &name,
                     "transcript": report.transcript(),
@@ -1072,6 +999,9 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
     // received written down. With the switch on, the run's own redactor is the
     // detector, because it holds the registry and the memory of what left.
     let watch = red.is_none().then(|| watcher(&app, &provider));
+    // The tool that produced each tool-result row: a tool row carries only its
+    // call id, and the report names the carrier.
+    let mut carriers: HashMap<String, String> = HashMap::new();
     // The receiver every leak of this run is recorded against.
     let to = leak::Send {
         conversation,
@@ -1095,8 +1025,23 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
         let rules = rules.as_deref().expect("checked just above");
         let ledger = history_msgs(&prior_history);
         let opening = pinned_opening(&ledger, start, start + cut);
-        let dropped = ledger[start..start + cut].to_vec();
+        let mut dropped = ledger[start..start + cut].to_vec();
+        // The summarizer call is an outbound request like any other, so the pass
+        // runs on every row it carries.
+        if let Some(red) = red.as_mut() {
+            red.tokenize_msgs(&mut dropped);
+        }
+        let opening = opening.map(|text| match red.as_mut() {
+            Some(red) => red.tokenize(&text),
+            None => text,
+        });
         let transcript = brief_transcript(opening.as_deref(), summary.as_deref(), &dropped);
+        // Whatever the pass leaves in the clear reaches the summarizer, and the
+        // report names it.
+        if let Some(text) = opening.as_deref() {
+            leak::record_send(&to, detector(&red, &watch), text, None);
+        }
+        leak::record_rows(&to, detector(&red, &watch), &dropped, &carriers);
         match summarize_http(&client, &url, &api_key, &model, rules, &transcript).await {
             Ok(b) => {
                 log(&format!(
@@ -1107,6 +1052,7 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
                     "compact",
                     serde_json::json!({ "summary": &b, "tokensBefore": threshold, "dropped": cut }),
                 );
+                conversations::record_fold(&to, &b, &dropped);
                 summary = Some(b);
                 kept_from = start + cut;
             }
@@ -1145,9 +1091,6 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
 
     let tools: Vec<serde_json::Value> = agent_tools().as_array().expect("tool array").clone();
     let mut seen: HashMap<String, String> = HashMap::new();
-    // The tool that produced each tool-result row: a tool row carries only its
-    // call id, and the report names the carrier.
-    let mut carriers: HashMap<String, String> = HashMap::new();
     let mut loaded_skills: std::collections::HashSet<String> =
         loaded_skills.into_iter().collect();
     let mut turn = 0;
@@ -1200,7 +1143,7 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
                         "COMPACT: ~{est} tokens over the window; the newest turn alone exceeds the budget, sending as is"
                     ));
                 } else {
-                    let dropped = msgs[1 + head..1 + tail].to_vec();
+                    let mut dropped = msgs[1 + head..1 + tail].to_vec();
                     let freed = context::estimate_tokens(&dropped);
                     if freed < context::MIN_FOLD_SAVINGS_TOKENS {
                         // The budget would drop mostly short rows from the
@@ -1211,27 +1154,32 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
                         ));
                     } else if let Some(rules) = brief_rules() {
                         let opening = pinned_opening(&msgs[1..], head, tail);
+                        // The summarizer call is an outbound request like any
+                        // other, so the pass runs on every row it carries.
+                        if let Some(red) = red.as_mut() {
+                            red.tokenize_msgs(&mut dropped);
+                        }
+                        let opening = opening.map(|text| match red.as_mut() {
+                            Some(red) => red.tokenize(&text),
+                            None => text,
+                        });
                         let transcript = brief_transcript(
                             opening.as_deref(),
                             context::get_summary(&msgs[0]).as_deref(),
                             &dropped,
                         );
-                        // The fold is a send of its own: it carries every row
-                        // it drops to the summarizer, in plaintext, whatever
-                        // the redaction switch says.
-                        record_brief(
-                            &to,
-                            detector(&red, &watch),
-                            opening.as_deref(),
-                            &dropped,
-                            &carriers,
-                            red.is_some(),
-                        );
+                        // Whatever the pass leaves in the clear reaches the
+                        // summarizer, and the report names it.
+                        if let Some(text) = opening.as_deref() {
+                            leak::record_send(&to, detector(&red, &watch), text, None);
+                        }
+                        leak::record_rows(&to, detector(&red, &watch), &dropped, &carriers);
                         match summarize_http(&client, &url, &api_key, &model, &rules, &transcript).await {
                             Ok(b) => {
                                 if brief_clears_gate(&red, &scorer, &b).await {
                                     msgs.drain(1 + head..1 + tail);
                                     context::set_summary(&mut msgs[0], Some(&b));
+                                    conversations::record_fold(&to, &b, &dropped);
                                     measured = None;
                                     let _ = app.emit("compact", serde_json::json!({
                                         "summary": &b, "tokensBefore": est, "dropped": dropped.len()
@@ -1261,10 +1209,6 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
             }
             r.tokenize_msgs(&mut wire);
         }
-        // The leak report records what leaves whatever the switch says, so the
-        // scan reads `msgs`, which still holds the real values. `wire` carries
-        // tokens by now, and a token names no value to the detector.
-        record_rows(&to, detector(&red, &watch), &msgs, &carriers, red.is_some());
         measured_at = msgs.len();
         let body = serde_json::json!({
             "model": model,
@@ -1307,6 +1251,13 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
                 "API error ({status}): {}",
                 text.chars().take(600).collect::<String>()
             ));
+        }
+
+        // The rows go on disk here, because a request that never reached its
+        // receiver sent nothing. The scan reads the same stored text, so one
+        // row is scanned once, whatever the later turns re-send.
+        if let Some(rows) = body["messages"].as_array() {
+            conversations::record_send(&to, detector(&red, &watch), rows, &carriers);
         }
 
         let mut stream = resp.bytes_stream();
@@ -1420,6 +1371,7 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
                     .await
                     .unwrap_or_else(|e| format!("Error: {e}"));
                 let report = tool_report(&name, &args, &result, t0.elapsed().as_millis());
+                conversations::record_ledger(&to, &call.id, &report);
                 let _ = app.emit("tool_result", serde_json::json!({
                     "name": &name,
                     "transcript": report.transcript(),

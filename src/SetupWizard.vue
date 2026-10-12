@@ -298,7 +298,7 @@ onBeforeUnmount(() => {
               <template #feedback>
                 First Mate hides these before it sends your text: card and bank account numbers,
                 SSNs, crypto addresses, API keys, email addresses, phone numbers, and your user
-                folder paths. Your saved conversation keeps the real values.
+                folder paths. A saved conversation still shows the real values.
               </template>
             </n-form-item>
           </n-form>
@@ -316,8 +316,8 @@ onBeforeUnmount(() => {
             What you type, and what First Mate reads back from this PC, goes to the model service
             you picked. With <b>Hide sensitive information</b> on, that service never sees these:
             your card and bank account numbers, SSNs, API keys, email addresses, phone numbers, and
-            file paths. Your saved conversation keeps the real values, so you can always read back
-            what really happened.
+            file paths. A saved conversation still shows the real values, so you can always read
+            back what really happened.
           </p>
           <p class="dim">
             After each answer, First Mate shows how many values it hid. Hide sensitive information

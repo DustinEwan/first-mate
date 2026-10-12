@@ -35,7 +35,7 @@ mod tooldefs;
 mod update;
 mod window;
 
-use crate::conversations::{delete_conversation, list_conversations, load_conversation, save_conversation};
+use crate::conversations::{delete_conversation, list_conversations, list_folds, load_conversation, open_fold};
 use crate::elevate::{self as elevate_mod, ElevationState};
 use crate::harness::{bootstrap_status, cli_version, install_winapp};
 use crate::llm::{chat_with_llm, stop_chat};
@@ -138,7 +138,7 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, probe_decision_server, decision_host, answer_audit, list_models, list_providers, test_llm, chat_with_llm, stop_chat, list_skills, list_conversations, load_conversation, delete_conversation, save_conversation, get_system_prompt, open_path, bootstrap_status, install_winapp, open_settings, elevate, delevate, elevation_status, recovery_key_status, get_recovery_key, ack_recovery_key, leak_report, leak_marks, leak_password, leak_export_pdf])
+        .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, probe_decision_server, decision_host, answer_audit, list_models, list_providers, test_llm, chat_with_llm, stop_chat, list_skills, list_conversations, load_conversation, delete_conversation, open_fold, list_folds, get_system_prompt, open_path, bootstrap_status, install_winapp, open_settings, elevate, delevate, elevation_status, recovery_key_status, get_recovery_key, ack_recovery_key, leak_report, leak_marks, leak_password, leak_export_pdf])
         .setup(|app| {
             app.manage(ElevationState::default());
             let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
@@ -148,6 +148,9 @@ pub fn run() {
             if sealed > 0 || removed > 0 {
                 log(&format!("ENVELOPE: sealed {sealed} store files, removed {removed} plaintext request dumps"));
             }
+            // A declared value added since the last scan makes the stored rows
+            // worth reading again, once.
+            leak::rescan_now(app.handle());
             // Generated scripts and spilled output from earlier sessions
             // would otherwise accumulate in both scratch directories.
             trim_dir(&fm_tmp_dir(), 50);

@@ -196,11 +196,29 @@ the disclose-once override are the planned guards against over-redaction.
 
 ## On-disk truth and the console indicator
 
-How much real text the chat log stores is a choice in the §4 Privacy section.
-The store-only-redacted-text option minimizes on-disk truth. The `blur` and
-`hello` levels need the real text on disk. The `blur` and `hello` levels
-therefore need the envelope described in `docs/ENCRYPTION.md`. The console can
-therefore reveal the stored truth on demand.
+The conversation record is the wire record. `conversations.rs` writes one line per
+message, in the form one request carried it. A stored row is therefore the
+evidence that a value reached a receiver. The send path writes the file, because
+only the send path holds that form. The console holds the detokenized text it
+renders, and `load_conversation` detokenizes each stored row before the console
+shows it.
+
+The record holds handles, and `token_map.json` holds the values behind them. The
+envelope in `docs/ENCRYPTION.md` covers both files. A transcript restored
+without its token map therefore shows handles. The §5 privacy levels decide what
+the console renders, not what the record holds.
+
+A leak scan reads the record. A value in a stored row left the machine. The scan
+reads one row once, when the row goes in. A new value in `entity_registry.json`
+is the only event that reopens an old row, and `leak::rescan` then reads every
+stored row once and adds no row the report already holds.
+
+A fold writes the rows it dropped, and the report lists each fold. One click
+opens those rows read-only. That view shows the wire copy, so a handle stays a
+handle there, and the conversation view shows the real value. The pass runs on
+the summarizer transcript too, because that call is an outbound send like any
+other. With the switch on, the summarizer sees handles, and its brief carries
+those handles into the next system prompt.
 
 The console shows a "Redacted N items" chip on each turn whose pass replaced a
 value. On a chip click, the console lists the fired classes and never shows the

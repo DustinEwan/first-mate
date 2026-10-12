@@ -135,6 +135,8 @@ folds once, before the request.
    loads the brief rules from `prompts/COMPACT.md`, the same lookup `AGENTS.md`
    uses, so the memory policy stays editable content. The summarizer request
    carries those rules as its system row and the dropped rows as its user row.
+   The redaction pass runs on those rows first, because that call is an outbound
+   send to the same endpoint (docs/roadmap/REDACTION.md).
    `brief_transcript` caps that transcript at 60_000 characters: it keeps the
    first three quarters and the last quarter, and marks the gap with
    `[...middle of the dropped transcript omitted...]`. `brief_clears_gate` scores
@@ -145,9 +147,10 @@ folds once, before the request.
    logs that choice. The console keeps its full scrollback, and one divider row
    marks the fold. The divider reads `First Mate summarized the earlier chat so
    it could keep going`, and its tooltip names how many rows the fold replaced.
-   The console stores that divider as a `summary` row. `plan_history` starts
-   after the newest `summary` row, so no fold re-reads rows an earlier fold
-   covered. One request build makes at most one summarizer call.
+   The record stores the fold, with the rows it dropped, and
+   `load_conversation` returns that divider as a `summary` row.
+   `plan_history` starts after the newest `summary` row, so no fold re-reads rows
+   an earlier fold covered. One request build makes at most one summarizer call.
 6. **Re-inject loaded skill bodies at request build.** `ChatView.vue` rebuilds
    the loaded set from the `load_skill` rows in the transcript and passes it as
    `loadedSkills`. `system_prompt_with_skills` appends each loaded skill's

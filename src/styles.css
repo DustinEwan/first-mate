@@ -688,6 +688,82 @@ body {
   word-break: break-word;
 }
 
+/* The fold view replaces the transcript, so the banner names the receiver and
+   the way out. Amber is the product's "do not miss this" signal, same as TEMP
+   and ELEV. */
+.fold-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 12px 0;
+  padding: 8px 10px;
+  border: 1px solid #3a3a41;
+  border-left: 3px solid #f0a020;
+  border-radius: 6px;
+  background: #1f1f23;
+}
+.fold-banner-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #f0a020;
+  font-size: 12px;
+}
+.fold-banner-note {
+  margin: 0;
+  color: #c9ced6;
+  font-size: 12px;
+  line-height: 1.5;
+  user-select: text;
+}
+.fold-banner-meta {
+  margin: 0;
+  color: #8a8f98;
+  font-size: 11px;
+  word-break: break-word;
+}
+.fold-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 38%;
+  min-height: 0;
+}
+.fold-head {
+  color: #8a8f98;
+  font-size: 12px;
+}
+.fold-list {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.fold-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid #2c2c31;
+  border-left: 3px solid #f0a020;
+  border-radius: 6px;
+  background: #141518;
+}
+.fold-body {
+  flex: 1;
+  min-width: 0;
+}
+.fold-name {
+  color: #c9ced6;
+  font-size: 13px;
+  word-break: break-all;
+}
+
 .input-row {
   padding: 8px 12px;
   border-top: 1px solid #2c2c31;
