@@ -318,11 +318,16 @@ pub fn is_store(path: &Path) -> bool {
 
 /// Bytes as stored. A sealed file inside First Mate's own directories opens, so
 /// `read_file` reaches a spill. Any other file keeps its bytes, so the agent
-/// never sees decrypted text from a file the user owns. The token map keeps its
-/// bytes too, because that map is the key for every marker First Mate issued.
+/// never sees decrypted text from a file the user owns. Two files keep their
+/// bytes even inside the store: the token map, because that map is the key for
+/// every marker First Mate issued, and the leak report, because it names the
+/// values and who received them, so a report the agent can read is a report the
+/// agent can send out again.
 pub fn open_store_bytes(path: &Path, bytes: Vec<u8>) -> Result<Vec<u8>, String> {
-    let key_table = path.file_name().is_some_and(|name| name == TOKEN_MAP);
-    if looks_sealed(&bytes) && is_store(path) && !key_table {
+    let never_plain = path
+        .file_name()
+        .is_some_and(|name| name == TOKEN_MAP || name == crate::leak::LEAKS);
+    if looks_sealed(&bytes) && is_store(path) && !never_plain {
         return open(&bytes);
     }
     Ok(bytes)
@@ -393,8 +398,17 @@ fn recovery_secret() -> Result<Vec<u8>, String> {
     std::fs::create_dir_all(store_dir()).map_err(|e| e.to_string())?;
     let mut secret = [0u8; FILE_KEY];
     random(&mut secret)?;
-    std::fs::write(&path, wrap(&secret)?).map_err(|e| e.to_string())?;
-    Ok(secret.to_vec())
+    // `seal` calls this on every write, so two turns can create the file at the
+    // same moment. The file appears by rename, so no reader ever unwraps half a
+    // secret, and the secret this call returns is the one on disk, because a
+    // rename that loses keeps the other thread's secret.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let temp = path.with_extension(format!("bin.{}", SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+    std::fs::write(&temp, wrap(&secret)?).map_err(|e| e.to_string())?;
+    let _ = std::fs::rename(&temp, &path);
+    let _ = std::fs::remove_file(&temp);
+    let wrapped = std::fs::read(&path).map_err(|e| e.to_string())?;
+    unwrap(&wrapped)
 }
 
 fn derive_recovery(secret: &[u8]) -> Vec<u8> {
