@@ -345,8 +345,9 @@ the design.
 - [ ] `criteria` in `decide.rs` states what counts as a yes and what counts as a
       no. The wording of the question and the wording of the criteria are the only
       tuning. Re-measure the two `Test` scores after any change.
-- [ ] First Mate injects `<!>` into the message row at the position of the value
-      that already left. The console renders the marker highlighted.
+- [ ] First Mate stores the leaked range on the row as metadata. The console colors
+      the value red and appends `⚠` (U+26A0) in the same red. Literal marker text
+      would re-leave on every turn, so the console draws the marker at render time.
 - [ ] The leak report holds one sealed row per leak. Each row links into the
       console at the message that carried the value.
 - [ ] The console exports the leak report as a PDF. The user may protect that PDF

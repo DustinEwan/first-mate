@@ -450,17 +450,25 @@ value from a provider, and no provider offers a control that deletes one string
 from its log. First Mate therefore promises two things: the user sees exactly
 what left and where it went, and the record of that fact survives.
 
-- Mark the leak in place. First Mate injects `<!>` into the message row at the
-  position of the value that already left. The console renders the marker
-  highlighted, and the marker stays on the row after a resume.
+- Mark the leak in place. First Mate stores the leaked range on the row as
+  metadata: the character range, the class, the provider id, the model, and the
+  time of the send. The console colors the leaked value red, the same red as
+  `.msg.error`. The console appends `⚠` (U+26A0) in that red at the end of the
+  row. The tooltip names the class, the provider, the model, and the time. A click
+  opens the leak report row for that leak. The marker survives a resume, because
+  First Mate stores the range with the row.
+- The marker is never literal text in the row. `ChatView.vue` sends the whole
+  transcript to the provider on each turn. Literal marker text would tell the
+  receiver that the value leaked. The Agent Model could also echo that text. The
+  redaction tokens `⟦…⟧` are literal text, because they must replace the value.
+  The leak marker has no such need, so the console draws it at render time.
 - State the leak, and state it exactly. The console names the value, the
   conversation, the message, the provider, the model, and the time of the send.
   The console gives no advice, because the user cannot undo the send.
 - Keep the record. The leak report below holds one row per leak, and each row
   links into the console at the message that carried the value.
-- Record the re-send. `ChatView.vue` sends the whole transcript on each turn. A
-  leaked value therefore leaves again on every later turn under a provider whose
-  switch is off. The marker records each such send.
+- Record the re-send. A leaked value leaves again on every later turn under a
+  provider whose switch is off. The report gains one row for each such send.
 
 The shipped product holds one part of this design. The console adds one red line
 per run, and that line names the classes of the values that left earlier. The
@@ -527,10 +535,10 @@ cannot, because you know the value. The log is evidence, not a guess.
 - The gesture is the write path Layer 2 needs, so the registry grows from a leak
   you observed. You need no upfront configuration, because nobody writes such a
   list in advance.
-- The action cannot retract what already left. The console keeps the persistent
-  `<!>` marker on the row where the value first went out. The marker says the value
-  reached the provider before the rule existed. The word `Redact` alone would
-  imply an undone exposure.
+- The action cannot retract what already left. The console keeps the `⚠` marker
+  from the Mitigation section on the row where the value first went out. The marker
+  says the value reached the provider before the rule existed. The word `Redact`
+  alone would imply an undone exposure.
 - The pass edits the outbound copy only, and the pass re-derives the copy per
   request. The stored transcript keeps real values, per the Core round-trip rule.
   A rule in stored rows fails on resume against another provider, because the
