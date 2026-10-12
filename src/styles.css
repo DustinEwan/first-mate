@@ -332,14 +332,16 @@ body {
   color: #d03050;
 }
 .leak-badge {
-  margin-left: 6px;
-  padding: 0 4px;
+  margin-left: 2px;
+  padding: 0 3px;
   border: none;
   border-radius: 3px;
   background: none;
   color: #d03050;
   font: inherit;
+  font-weight: 700;
   cursor: pointer;
+  user-select: none;
 }
 .leak-badge:hover {
   background: rgba(208, 48, 80, 0.18);
@@ -451,10 +453,6 @@ body {
 }
 .rb-foot.pending {
   font-style: italic;
-}
-
-.msg.tool.report .leak-badge {
-  margin: 0 10px 7px;
 }
 
 .msg.md {

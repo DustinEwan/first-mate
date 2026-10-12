@@ -372,10 +372,10 @@ the design.
 - [ ] `criteria` in `decide.rs` states what counts as a yes and what counts as a
       no. The wording of the question and the wording of the criteria are the only
       tuning. Re-measure the two `Test` scores after any change.
-- [x] The console colors a leaked value red and appends `⚠` (U+26A0) in the same
-      red. Each row carries its own redaction entries, and the console draws the
-      marker at render time, because literal marker text would re-leave on every
-      turn.
+- [x] The console colors a leaked value red and sets `⚠` (U+26A0) in that red right
+      after the value. A row with three leaks shows three markers. The console
+      draws the marker at render time, because literal marker text would re-leave
+      on every turn.
 - [x] The leak report names one value per row that carried it in the clear. Each
       row links into the console at the transcript and the position that carried
       the value.

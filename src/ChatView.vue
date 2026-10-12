@@ -51,8 +51,9 @@ function renderMd(text: string): string {
 // file:// opens Explorer or the default app. The chat window never
 // navigates itself.
 async function onContentClick(e: MouseEvent) {
-  const a = (e.target as HTMLElement).closest("a");
-  if (!a) return;
+  const el = e.target as HTMLElement;
+  if (el.closest?.(".leak-badge")) return;
+  const a = el.closest("a");
   e.preventDefault();
   const href = a.getAttribute("href") || "";
   try {
@@ -540,18 +541,14 @@ function leaked(m: Msg): RowRedaction[] {
   return (m.leaks ?? []).filter((r) => r.isLeaked);
 }
 
-function leakTitles(m: Msg): string {
-  return leaked(m)
-    .map((r) => `${r.class} — ${m.provider ?? ""} — ${m.model ?? ""} — ${timeAt(m.at ?? 0)}`)
-    .join("\n");
-}
+// One marker per value, so a row with three leaks shows three markers.
+type LeakMark = { value: string; title: string };
 
-// The badge lives inside v-html, so it carries its row's values in an attribute.
-// NUL cannot occur in a redacted value.
-function leakValues(m: Msg): string {
-  return leaked(m)
-    .map((r) => r.redactedValue)
-    .join("\u0000");
+function leakMarks(m: Msg): LeakMark[] {
+  return leaked(m).map((r) => ({
+    value: r.redactedValue,
+    title: `${r.class} — ${m.provider ?? ""} — ${m.model ?? ""} — ${timeAt(m.at ?? 0)}`,
+  }));
 }
 
 // The rendered row is markdown output, so the console locates a value by search
@@ -576,7 +573,8 @@ function leakRanges(haystack: string, values: string[]): [number, number][] {
   return kept;
 }
 
-function wrapLeaks(host: HTMLElement, values: string[]) {
+function wrapLeaks(host: HTMLElement, marks: LeakMark[]) {
+  const values = marks.map((m) => m.value);
   const nodes: Text[] = [];
   const starts: number[] = [];
   let text = "";
@@ -589,6 +587,8 @@ function wrapLeaks(host: HTMLElement, values: string[]) {
   // Descending order: splitText shortens only the text right of the cut, and
   // every later range sits left of that cut.
   for (const [from, to] of leakRanges(text, values)) {
+    const value = text.slice(from, to);
+    const title = marks.find((m) => m.value === value)?.title ?? "";
     for (let i = nodes.length - 1; i >= 0; i--) {
       const node = nodes[i];
       const a = Math.max(from, starts[i]);
@@ -600,24 +600,20 @@ function wrapLeaks(host: HTMLElement, values: string[]) {
       mid.splitText(b - a);
       node.parentNode?.insertBefore(hit, mid);
       hit.appendChild(mid);
+      const mark = document.createElement("span");
+      mark.className = "leak-badge";
+      mark.dataset.leak = value;
+      mark.title = title;
+      mark.textContent = "⚠";
+      hit.parentNode?.insertBefore(mark, hit.nextSibling);
     }
   }
 }
 
 function decorate(host: HTMLElement, m: Msg): string {
-  const marks = leaked(m);
+  const marks = leakMarks(m);
   if (marks.length === 0) return host.innerHTML;
-  wrapLeaks(
-    host,
-    marks.map((r) => r.redactedValue),
-  );
-  const badge = document.createElement("button");
-  badge.type = "button";
-  badge.className = "leak-badge";
-  badge.dataset.leak = leakValues(m);
-  badge.title = leakTitles(m);
-  badge.textContent = "⚠";
-  host.appendChild(badge);
+  wrapLeaks(host, marks);
   return host.innerHTML;
 }
 
@@ -633,12 +629,13 @@ function renderTextRow(item: Msg): string {
   return decorate(host, item);
 }
 
-function renderToolLine(item: Msg, line: string): string {
-  const values = leaked(item).map((r) => r.redactedValue);
-  if (values.length === 0 || !values.some((v) => line.includes(v))) return escapeHtml(line);
+// One plain-text line of a tool card: the command, a body line, or the footer.
+function markLeaks(item: Msg, line: string): string {
+  const marks = leakMarks(item);
+  if (marks.length === 0 || !marks.some((m) => line.includes(m.value))) return escapeHtml(line);
   const host = document.createElement("div");
   host.textContent = line;
-  wrapLeaks(host, values);
+  wrapLeaks(host, marks);
   return host.innerHTML;
 }
 
@@ -700,10 +697,13 @@ function openReportPanel(values: string[]) {
 }
 
 function onLeakBadgeClick(e: MouseEvent) {
-  const badge = (e.target as HTMLElement | null)?.closest?.(".leak-badge");
-  if (!badge) return;
-  const packed = badge.getAttribute("data-leak") ?? "";
-  openReportPanel(packed.split("\u0000").filter((v) => v !== ""));
+  const mark = (e.target as HTMLElement | null)?.closest?.(".leak-badge");
+  if (!mark) return;
+  // Markdown turns a leaked address into a link, and the marker can sit inside
+  // that link, so the click must not start the mail client.
+  e.preventDefault();
+  const value = mark.getAttribute("data-leak") ?? "";
+  openReportPanel(value === "" ? [] : [value]);
 }
 
 function generateReportPassword() {
@@ -1164,7 +1164,7 @@ window.addEventListener("keydown", (e) => {
               >
                 <!-- eslint-disable vue/no-v-html -->
                 <!-- v-html is safe: renderMdRow() sanitizes with DOMPurify, and the leak
-                     wrapper adds only spans and a button built from parsed DOM nodes. -->
+                     wrapper adds only spans built from parsed DOM nodes. -->
                 <div
                   v-if="item.cls === 'assistant'"
                   class="msg md assistant"
@@ -1173,24 +1173,19 @@ window.addEventListener("keydown", (e) => {
                 ></div>
                 <div v-else-if="item.cls === 'tool' && item.tool" class="rb-wrap">
                   <div class="msg tool report" :class="{ failed: item.done && !item.tool.ok }">
-                    <div class="rb-head">{{ reportIdentity(item.tool) }}</div>
+                    <div class="rb-head" v-html="markLeaks(item, reportIdentity(item.tool))"></div>
                     <pre v-if="item.tool.body" class="rb-body"><span
                       v-for="(ln, i) in item.tool.body.text.split('\n')"
                       :key="i"
                       class="rb-line"
                       :class="item.tool.body.kind === 'diff' ? (ln.startsWith('+') ? 'add' : ln.startsWith('-') ? 'del' : '') : ''"
-                      v-html="renderToolLine(item, ln) + '\n'"
+                      v-html="markLeaks(item, ln) + '\n'"
                     ></span></pre>
-                    <div class="rb-foot" :class="{ pending: !item.done }">
-                      {{ item.done ? reportFooter(item.tool) : "running…" }}
-                    </div>
-                    <span
-                      v-if="leaked(item).length"
-                      class="leak-badge"
-                      :data-leak="leakValues(item)"
-                      :title="leakTitles(item)"
-                      >⚠</span
-                    >
+                    <div
+                      class="rb-foot"
+                      :class="{ pending: !item.done }"
+                      v-html="item.done ? markLeaks(item, reportFooter(item.tool)) : 'running…'"
+                    ></div>
                   </div>
                 </div>
                 <div
@@ -1378,7 +1373,7 @@ window.addEventListener("keydown", (e) => {
               </div>
             </li>
           </ul>
-          <p v-else class="leak-note">No leak has been recorded.</p>
+          <p v-else-if="!reportBusy" class="leak-note">No leak has been recorded.</p>
           <div v-if="folds.length" class="fold-box">
             <div class="fold-head">Folds — {{ folds.length }}</div>
             <ul class="fold-list">

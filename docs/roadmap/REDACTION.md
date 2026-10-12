@@ -565,13 +565,13 @@ from its log. First Mate therefore promises two things: the user sees exactly
 what left and where it went, and the record of that fact survives.
 
 - Mark the leak in place. `conversations::render` returns the leaked value, its
-  character range, its class, and the token the pass missed. The console colors
-  the leaked value red, the same red as `.msg.error`. The console appends `⚠`
-  (U+26A0) in that red at the end of the row. The tooltip names the class, the
-  provider, the model, and the time of the send. A click opens the leak report
-  row for that leak. The entry comes from the stored wire copy, so every row that
-  sent the value shows the marker. The marker survives a resume, because the scan
-  reads the stored rows again.
+  class, and the token the pass missed. The console colors the leaked value red,
+  the same red as `.msg.error`. The console sets `⚠` (U+26A0) in that red right
+  after the value. A row that carried three values shows three markers. The
+  tooltip names the class, the provider, the model, and the time of the send. A
+  click opens the leak report at that value. The entry comes from the stored wire
+  copy, so every row that sent the value shows the marker. The marker survives a
+  resume, because the scan reads the stored rows again.
 - The marker is never literal text in the row. `ChatView.vue` sends the whole
   transcript to the provider on each turn. Literal marker text would tell the
   receiver that the value leaked. The Agent Model could also echo that text. The
