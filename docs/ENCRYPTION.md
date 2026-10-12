@@ -8,13 +8,12 @@ This document holds the mechanism and the measurement behind it.
 - First Mate encrypts every store file it writes. Encryption is not a setting,
   and no store stays plaintext.
 - AES-256-GCM encrypts each file, and the header `FMENC1` names the format.
-- The header is the envelope: a block that carries a key, not the data. The
-  industry calls this scheme envelope encryption.
+- The header is the envelope: a block that holds a key, not the data.
 - Each file carries its own key. The envelope stores that key twice. One wrap
   sits under the Platform Crypto Provider key, which the TPM holds. The other
   wrap sits under the recovery key, which the user keeps offline.
-- The Platform Crypto Provider exposes itself as
-  `MS_PLATFORM_KEY_STORAGE_PROVIDER`. `NCryptEncrypt` wraps each file key with
+- `crypto.rs` opens the provider by the name `Microsoft Platform Crypto Provider`.
+  `NCryptEncrypt` wraps each file key with
   RSA-OAEP and SHA-256, and `NCryptDecrypt` unwraps it. `NCryptExportKey` cannot
   wrap a key, because the Microsoft providers reject the `hExportKey` parameter
   with `NTE_INVALID_HANDLE`.
@@ -54,10 +53,11 @@ This document holds the mechanism and the measurement behind it.
   therefore carries a second wrap. That wrap uses a key that SHA-256 derives
   from a 32-byte random secret, over a domain string. The secret holds 256
   random bits, so no stretching applies.
-- The setup wizard shows the secret as hex, and keeps it on screen until the user
-  chooses **I saved it**. The app never shows the key again after that choice.
-- `%APPDATA%\com.dusti.firstmate\recovery.ack` records the choice, so a run that
-  ends before the acknowledge opens the wizard on the Privacy step again.
+- The setup wizard shows the secret as hex. The wizard keeps the secret on screen
+  until the user chooses **I saved it**. The app never shows the key again after
+  that choice.
+- `%APPDATA%\com.dusti.firstmate\recovery.ack` records the choice. A run that ends
+  before the acknowledge therefore opens the wizard on the Privacy step again.
 - `recovery.bin` holds the wrapped secret, so any run can show the key text
   before the acknowledge.
 

@@ -65,8 +65,8 @@ directory.
 
 **Execution.** Instructions run through the agent's standing tools, among them
 `run_command` and the file tools. `run_command` keeps one PowerShell session
-alive across calls, runs each cmd command in a fresh `cmd.exe`, and moves a long
-command to a background job. The tool array is **static and
+alive across calls. A cmd command runs in a fresh `cmd.exe`. A command that
+outlives `auto_bg_secs` becomes a background job. The tool array is **static and
 complete on every request**. The tool schema never changes mid-run, so provider
 prefix caching stays warm.
 
@@ -82,5 +82,7 @@ model self-corrects in one turn. The loaded set is the conversation's own
 `load_skill` ledger. That ledger persists across every later turn and across a
 resume from disk. A new conversation starts unloaded. The gate enforces context,
 not security, because
-real protection is UAC consent and the trust tiers (roadmap Phase F). Skill
-content never names tools, so nothing in the gate affects portability.
+real protection is UAC consent and the trust tiers (roadmap Phase F). A skill body
+names First Mate's tools, so those five bodies serve First Mate. The frontmatter
+stays spec-pure, and the validator checks the frontmatter. The gate adds no rule
+that a skill must state in its own text.

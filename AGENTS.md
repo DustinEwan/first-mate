@@ -17,9 +17,9 @@ behavior. Most work in this repo is content, not code.
 - **Every capability is a skill.** Ship every behavior the product agent learns
   as an Agent Skills folder. Keep `SKILL.md` frontmatter spec-pure: `name` and
   `description` only. Make the reference validator pass on every skill folder.
-  Skill content never names a tool, because tools belong to the client. The
-  skill-to-tool mapping is Rust policy in `skill_required()`. The dispatch gate
-  refuses a gated tool until the agent loads its skill.
+  A skill body may name a tool, because that body teaches the agent which tool to
+  call. The skill-to-tool mapping is Rust policy in `skill_required()`. The dispatch
+  gate refuses a gated tool until the agent loads its skill.
   `src-tauri/tests/packaging.rs` enforces packaging.
 - **The user's machine is the user's.** The product runs without elevation by
   default. Administrator reach exists only behind explicit user consent. The

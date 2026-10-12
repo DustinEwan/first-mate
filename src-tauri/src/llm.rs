@@ -227,9 +227,9 @@ fn hold(cause: &str, detail: &str) -> String {
 }
 
 /// The summarizer writes new text, and First Mate puts that text in the system
-/// message, which the gate never scores. A flagged brief stops the fold, so the
-/// dropped rows reach the gate as separate messages. An outage allows the fold,
-/// because an outage must not break compaction.
+/// message, which the gate never scores. A flagged brief stops the fold, so no
+/// unjudged brief enters that message. An outage allows the fold, because an
+/// outage must not break compaction.
 async fn brief_clears_gate(
     red: &Option<redact::Redactor>,
     scorer: &Option<Scorer>,

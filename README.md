@@ -69,6 +69,20 @@ Each conversation earns capability on its own. The `load_skill` entries in the
 ledger re-seed the tool gate on every later turn, including after a resume. A
 loaded skill stays loaded for that chat.
 
+### Outbound text passes a gate
+
+Each provider has a `Hide sensitive information` choice. When that choice is on,
+First Mate replaces each detected value with a marker before the request leaves.
+A shape plus a checksum decides a card number or an SSN. A registry file supplies
+the values no shape can identify. Detokenize restores the real value for the
+console and for each tool call. The agent therefore acts on the real address. The
+console shows a chip with the count of replaced values.
+
+The optional Privacy Model adds a second check over the exact rules. You run that
+server yourself. A flagged message stops before the send and opens the audit card.
+You select the text to redact, then approve or deny.
+`docs/roadmap/REDACTION.md` holds the design and the measured operating point.
+
 ### Every store on disk is encrypted
 
 First Mate encrypts every file it writes that holds your data: each `.chat`
@@ -84,8 +98,7 @@ because `token_map.json` is the key for every marker First Mate issued.
 Each file carries its own AES-256 key. The `FMENC1` header beside the ciphertext
 holds that key twice: once wrapped under the Platform Crypto Provider key that
 the TPM holds, and once wrapped under your recovery key. That header is the
-envelope. The word follows the industry term envelope encryption. Envelope
-encryption means a data key that only a second key can unwrap. Every `NCrypt`
+envelope. Every `NCrypt`
 call passes `NCRYPT_SILENT_FLAG`, so the app reads its own files at logon with
 no prompt.
 
@@ -130,12 +143,13 @@ menu and choose **Settings** to edit them. The `llm` section defines `provider`,
 
 Four keys drive redaction. `hide_sensitive` maps a provider id to the
 `Hide sensitive information` choice. A provider with no entry takes the default
-its roster row declares, and every hosted provider starts on. The entity registry
+its roster row declares. Every hosted provider and every user-added endpoint
+starts on. The entity registry
 lives in `entity_registry.json` beside `settings.json`. It lists exact strings the
 pass replaces, for values no shape identifies, such as a bank account number.
 `decision_server_url`, `decision_server_enabled`, and `decision_threshold` point
-the span gate at the decision server you run. `decision_server_remote_ok` records
-that you let a host off this machine receive every span it scores.
+the decision gate at the decision server you run. `decision_server_remote_ok`
+records that you let a host off this machine receive every message it scores.
 
 The selectable providers come from `src-tauri/src/providers.json`, which the
 binary embeds at compile time. Adding a provider is an edit to that file. You

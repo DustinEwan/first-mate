@@ -72,7 +72,7 @@ identification design.
   values. Click-to-reveal needs the real value on disk, and the §4 `blur` and
   `hello` levels offer click-to-reveal. The token map below outlives the process,
   so a marker in a stored row still resolves after a restart.
-- Detokenize happens at three harness boundaries, never in the model.
+- The pass touches three harness boundaries, and never the model.
   - **Display**: the console renders the real value, or obfuscates the real
     value under the §4 `Hide on screen` axis.
   - **Tool/action execute**: a tool call such as "email `⟦EMAIL_1⟧` the
@@ -124,6 +124,8 @@ Three tests hold that design:
 `redact::tests::the_stored_table_holds_no_plaintext_value`.
 
 ## Detection layers
+
+Layer 1 and Layer 2 ship. Layer 3, Layer 4, and Layer 5 are design only.
 
 **Layer 1 — shape + checksum (deterministic, always on).** Financial
 identifiers embed a checksum in the digits of the identifier. Layer 1 therefore
@@ -181,17 +183,16 @@ model, because the scan itself cannot leak.
   model cannot do the reasoning. The harness routes the turn to a local-model
   profile, or applies a per-field disclose-once override.
 - An action **sends** a real value out-of-band, as with web search or email.
-  The trust-tier-3 confirm gate at the leaving-the-machine boundary handles the
-  send. The send is not a redaction bug.
+  The trust-tier-3 confirm gate handles that send (roadmap Phase E). The send is
+  not a redaction bug.
 
 ## Bias rule
 
 The bias is to over-redact outbound traffic on a turn whose provider has the
 checkbox checked. Detokenize restores the real value for display and for
-actions. A false positive therefore removes a token, and detokenize restores
-the token before the user sees the value. A false negative is the leak.
-Per-class toggles and the disclose-once override guard against over-redaction
-degrading model task quality.
+actions. A false positive therefore hides a benign value, and detokenize restores
+that value before you see it. A false negative is the leak. Per-class toggles and
+the disclose-once override are the planned guards against over-redaction.
 
 ## On-disk truth and the console indicator
 
@@ -215,7 +216,7 @@ questions with probabilities, and the server returns no text.
 
 First Mate ships no weights and starts no server. You run the server yourself,
 with any model you choose. Settings holds the server URL. The app is a client of
-the typed-decision API can drive the gate:
+the typed-decision API:
 
 ```text
 POST {base}/v1/systemone
@@ -232,7 +233,7 @@ three question types, and the error codes. First Mate sends one `state` and one
 `noul` question. The answer is one probability.
 
 A server reads the `noul` criteria keys `"true"` and `"false"`. A server ignores
-every other key in silence. `decide.rs` sends those two keys, so the wording of the
+every other key in silence. `decide.rs` sends those two keys. The wording of the
 question and the wording of the criteria are the only tuning.
 
 The model keeps nothing between requests, so a second request on the same text
@@ -246,10 +247,10 @@ flagged message therefore goes to you, not straight to a marker.
 - The URL and the enable box start off. With either control off, the app runs the
   exact rules alone. The Settings UI shows the state of the two controls.
 - The scoring request holds the text the gate protects, so the server must belong to
-  you or to your organisation. A hosted third-party endpoint is out of scope. The
-  app cannot tell a network server from a hosted endpoint by address, so the app
-  asks for confirmation before the first message leaves, and names the host on every
-  audit line.
+  you or to your organization. A hosted third-party endpoint is out of scope. The
+  app cannot tell a network server from a hosted endpoint by address. The app
+  therefore asks for confirmation before the first message leaves. The console
+  names the host on every audit line.
 - The same endpoint answers every later decision question, so one server serves
   containment now and detection later.
 - `decide.rs` is the client. `redact.rs` holds the `SPAN` token class and the set of
@@ -260,8 +261,8 @@ flagged message therefore goes to you, not straight to a marker.
 - The console names each model once. The Agent Model answers you. The Privacy Model
   reads the words before they leave the PC. A packaging test bans the older names in
   the UI files. `decide.rs` and the `decision_` setting keys keep the older
-  identifier, because a rename there would break each saved settings file.
-- A scorer outage holds the send. First Mate sends nothing, and the console names the
+  identifier. A rename there would break each saved settings file.
+- A scorer outage holds the send. First Mate sends nothing. The console names the
   host, the cause, and the two ways forward: start the server, or turn off the Privacy
   Model in Settings. The app writes one `GATE:` log line with the failing address.
   A send without a verdict would make containment depend on a network.
@@ -289,20 +290,19 @@ flagged message therefore goes to you, not straight to a marker.
   judgement reaches a file.
 - The agent loop re-sends the whole window on each tool turn. `record` marks the
   text that cleared, so a resend costs no new judgement.
-- A run that holds sends nothing, so the console removes its newest user row
-  and puts the text back in the composer. A later send of that text is judged
-  again.
+- A run that holds sends nothing. The console removes the newest user row and puts
+  the text back in the composer. The gate judges a later send of that text again.
 - When the pass replaces a value that already left the PC, the console names
   the class. The notice says the earlier send cannot be undone, and names no
   value. The app writes one `LEAK:` log line.
-- No length floor and no per-request cap limits the judgement. The measured 4B
-  answers in 70 ms on a GPU, so a large tool output answers inside the time a
-  tool turn already spends.
+- No length floor and no per-request cap limit the judgement. The measured 4B
+  answers in 70 ms on a GPU. A large tool output therefore answers inside the
+  time a tool turn already spends.
 - A message over the server budget gets overlapping windows, and one flagged window
   flags the message. The client reads `max_sequence_tokens` and
-  `max_question_tokens` from `GET {base}/v1/models`, and sizes each window from
-  those two numbers, at four characters per token. A refused answer states the
-  measured count and the limit for some servers, so the client shrinks the window by
+  `max_question_tokens` from `GET {base}/v1/models`. The client sizes each window
+  from those two numbers, at four characters per token. A refused answer states the
+  measured count and the limit for some servers. The client shrinks the window by
   that ratio. A refused answer that states nothing halves the window.
 - Windows overlap by 10 percent, so a value at a boundary still appears whole
   inside one window. The exact rules run over the whole message regardless, so a
@@ -326,35 +326,33 @@ flagged message therefore goes to you, not straight to a marker.
   authored text ships. A false positive in the system message replaces the whole
   instruction set with one token. Such a false positive breaks the task and
   protects nothing.
-- The gate scores assistant text, tool output, and tool-call arguments. A model
-  writes new strings no input score ever saw.
-- The gate offers only message content and tool-call arguments to the scorer. A
-  flagged string leaves the machine as one handle. A handle in place of a role value
-  would break the request.
+- The gate scores your new message and each tool result. A tool result is new
+  text that leaves the PC, so the score covers it.
+- The gate offers only message content to the scorer. A replaced value leaves the
+  machine as one handle. A handle in place of a role value would break the request.
 - A model restates a missed value in new words. A new sentence holds no shape
-  for Layer 1. The assistant message then re-leaves on every later turn. One
-  miss therefore becomes a permanent leak unless a later score catches the miss.
+  for Layer 1. The gate scores no assistant text, so no score catches that
+  restatement. The registry and the leak notice are the guards for that case.
 - First Mate puts the brief inside the system message, so the gate scores no
   brief. First Mate scores the brief before the fold. A flagged brief stops the
-  fold. The rows the fold would drop then reach the gate as separate messages.
-- A model also copies a value into a tool-call argument. A token replaces the
-  original text of the tool output, so the original value stays hidden. The copy
-  in the argument is a different string, so the gate asks about the argument too.
+  fold. The rows that fold would drop are text the Agent Model already holds.
+- A model copies a value into a tool-call argument. The model saw only markers,
+  so that argument holds a marker. The pass tokenizes each argument, and the
+  harness restores the value at execute.
 - The gate still runs the exact rules over the system message. Layer 1 costs
   nothing on the system message. A credential in a prompt is a defect you want
   found.
 - The gate needs a second signal. The Privacy Model knows generic categories:
   credentials, financial text, health, identity. The Privacy Model does not
-  know your employer's part number. The gate also matches the registry and the
-  declared files, and the gate denies on either signal.
-- The shipped gate redacts a flagged value with no dialog. Detokenize restores the
-  flagged value for display and for execute. The chip names the count, so the
-  turn records what the gate held back.
-- The audit dialog is the path into the Layer 2 registry from a flagged value. A
-  flagged value therefore does not grow the registry today. A dialog with only
-  `Approve` and `Deny` teaches you to press `Approve`. The `Redact and continue`
-  button must therefore take one selection and one key.
-- The model may deny; only you may approve. A file can hold text written to
+  know your employer's part number. The gate also matches the registry. Layer 3
+  will add the declared files, and the gate will deny on either signal.
+- The exact rules replace a value with no dialog, and the chip names the count.
+  Detokenize restores the value for display and for execute. A Privacy Model flag
+  opens the audit card, and you decide.
+- You choose from three buttons: `Redact selection`, `Deny`, and `Approve`. Your
+  selection seeds the pass for the rest of the run. Nothing writes that value to
+  `entity_registry.json` today, so a flagged value does not grow the registry.
+- The Agent Model cannot clear a flagged message. Only you approve the send. A file can hold text written to
   persuade the scorer, such as `this data is public`. A scorer able to clear
   content is also open to persuasion from file text.
 - Scope: the text and images entering an inference request. An action emailing
@@ -452,9 +450,9 @@ retention. No provider offers a control for deleting one string from the
 provider log. The app therefore offers four small controls and promises nothing
 beyond the four controls.
 
-- Stop the re-send. `ChatView.vue:533` sends the whole transcript on each turn, so
-  one leaked value leaves again on every turn. The `<!>` mark on the turn tells you
-  to start a new conversation or to switch the provider.
+- Stop the re-send. `ChatView.vue` sends the whole transcript on each turn, so one
+  leaked value leaves again on every turn. The shipped `LEAK:` notice names the
+  classes of such a value. A control that stops the re-send is not in the product.
 - Name the one action for the value class. Rotation works whatever the receiver
   does, and no other mitigation does.
 
@@ -467,13 +465,13 @@ beyond the four controls.
   | Health fact, employer, salary | No | No action exists. |
 
 - Count the receivers. The same transcript sent to three providers is three
-  exposures. Settings shows the provider list for each conversation.
+  exposures. Settings will show the provider list for each conversation.
 - Write a leak report.
 
 ### Leak report
 
-The leak report is the artifact policy and compliance read. First Mate's work
-ends at the leak report.
+The leak report is the artifact policy and compliance read. No part of this section
+is in the product. First Mate's work ends at the leak report.
 
 - Each row names the class and never the value. A report with the value would
   become a second store for the secret. The chip in "On-disk truth and the
@@ -521,8 +519,8 @@ cannot, because you know the value. The log is evidence, not a guess.
   you observed. You need no upfront configuration, because nobody writes such a
   list in advance.
 - The action cannot retract what already left. The console keeps a persistent
-  `<!>` marker on the turn where the value first went out. The marker states the
-  value reached the provider before the rule existed. The word `Redact` alone
+  `LEAK:` line on the turn where the value first went out. The line says the value
+  reached the provider before the rule existed. The word `Redact` alone
   would imply an undone exposure.
 - The pass edits the outbound copy only, and the pass re-derives the copy per
   request. The stored transcript keeps real values, per the Core round-trip rule.

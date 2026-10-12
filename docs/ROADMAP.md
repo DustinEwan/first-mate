@@ -74,27 +74,28 @@ gone stale is also open. No scoring design supports that rule yet.
 or financial data. The dividing line is not "local vs remote". The dividing
 line is _who receives the data_. An agent on the same LAN is local, and you may
 still not want that agent reading your payroll. A hosted model reached through
-your own proxy is remote, and that model is still yours. The control this
-product exposes is the user's intent toward the destination. That control is
-never an inference drawn from an IP address.
+your own proxy is remote, and that model is still yours. One control governs the
+pass: you choose what that receiver may see. An address never decides that
+answer.
 
 **The switch.** The Settings UI shows one checkbox per provider, named `Hide
 sensitive information`. The label says what the checkbox does. The checkbox
-starts checked for every public provider. Whether the checkbox also starts
-checked for user-added endpoints is the open call. That choice would make
-redaction opt-out everywhere. `Spec::is_local` stays exactly what it is today:
-the hint that shows the Base URL field.
+starts checked for every public provider. A user-added endpoint also starts
+checked, because you did not inspect that address. `Spec::hide_sensitive_default`
+holds that choice, and a roster row that omits the key starts checked. The three
+on-machine rows set `hideSensitiveDefault: false` in `providers.json`.
+`Spec::is_local` stays the hint that shows the Base URL field.
 
 **Design sketch.** A reversible tokenize pass runs on every outbound request
 whose provider has the switch on. That pass runs detect → tokenize → send.
-Detokenize happens at the harness boundaries: display, tool execute, and
-inbound tool output. Detokenize never happens in the model. Detection stacks
-four controls: deterministic shape and checksum checks, a user-seeded entity
-registry, provenance marks, and a decision server. You run the decision server,
+Detokenize runs at display, and at tool execute. A tool gets real values, so its
+output needs no detokenize pass. Detokenize never happens in the model.
+Detection stacks four controls: deterministic shape and checksum checks, a
+user-seeded entity registry, provenance marks, and a decision server. You run
+the decision server,
 and the app calls that server over the typed-decision API.
-Over-redaction is the accepted bias,
-because detokenize restores the real text everywhere the user can see. Full
-design: `docs/roadmap/REDACTION.md`.
+Over-redaction is the accepted bias, because detokenize restores the real text
+everywhere you can see it. The full design lives in `docs/roadmap/REDACTION.md`.
 
 **Dependency.** Profile model bindings (§1) decide which provider a turn uses,
 and that provider's switch states whether redaction runs. Encryption at rest
@@ -149,14 +150,14 @@ session is open, the console shows real values.
 - The lifetime is 10 minutes, and it is the backstop. The app has no idle timer,
   because no input does not mean no person: the user reads what the agent wrote.
   The user holds the explicit End control, and the hide rule covers the rest.
-- The window has `alwaysOnTop: true`, so a console that stays visible while the
-  user steps away stays readable until the lifetime elapses. The lifetime bounds
+- The window has `alwaysOnTop: true`. A visible console therefore stays readable
+  while the user steps away, until the lifetime elapses. The lifetime bounds
   that time, and the UI states the bound instead of implying safety.
 - Hiding the window closes the session, so the tray icon needs no state. No open
   session can exist while the console is hidden.
-- The hotkey and the close button both hide the window by different paths:
-  `toggle_window` in `window.rs`, and a direct `win.hide()` call in the
-  `CloseRequested` handler in `lib.rs`. Both paths must close the session.
+- The hotkey and the close button both hide the window through
+  `window::hide_window`. The reveal-session hook sits in that one function, so
+  both paths close the session.
 - Extend costs a Windows Hello check. A free extension would keep real values
   shown forever after one check.
 - Expiry closes display only. The file key stays unlocked, because the app must
@@ -196,8 +197,8 @@ no link to the task that made them, and nothing sends the agent's writes there.
 - `write_file`, the screenshot path, and spilled tool output resolve to the
   current run's workspace when no destination is given. `output/` becomes that
   folder's spill subdirectory.
-- The console shows the run's workspace as one link, so the question "what did
-  it leave behind" is one click. Clearing that folder is one action, not an
+- The console shows the run's workspace as one link. The console answers "what
+  did it leave behind" in one click. Clearing that folder is one action, not an
   inventory of filenames.
 - Deleting a conversation deletes its workspaces, which replaces the 50-entry
   trim with a lifetime the user understands.
@@ -225,9 +226,10 @@ full analysis: `docs/roadmap/COPILOT-ANALYSIS.md`.
 Each entry states its job first. First Mate chooses the mechanism.
 
 **Next — Harness trust tiers.** _(job: bounded delegation)_ Users delegate only
-when the harness grades the trust they place. Today the exec harness runs at
-privilege. The tiers are: 0 read-only, 1 workspace-scoped writes, 2 destructive
-with per-call confirm, and 3 anything sent out-of-band. A profile default picks
+when the harness grades the trust they place. Today the exec harness runs with
+the user's full privilege. The tiers are: 0 read-only, 1 workspace-scoped
+writes, 2 destructive with per-call confirm, and 3 anything sent out-of-band. A
+profile default picks
 the tier. `route.rs` already gates program disclosure, and these tiers extend
 that same gate. Graded tiers are the precondition for everything else below,
 and for §2's self-authored skills running unattended.
@@ -276,16 +278,16 @@ three items depend on a profile.
 
 Two shipped items sit outside that spine, because they predate this checklist.
 Context compaction in `src-tauri/src/context.rs` folds a long conversation before
-the window overflows; `docs/COMPACTION.md` holds the design. Encryption at rest in
-`src-tauri/src/crypto.rs` encrypts every store file; `docs/ENCRYPTION.md` holds
+the window overflows. `docs/COMPACTION.md` holds the design. Encryption at rest in
+`src-tauri/src/crypto.rs` encrypts every store file. `docs/ENCRYPTION.md` holds
 the design.
 
 ### Phase A — Sensitive-info redaction (§3)
 
 - [x] Trust registry: `hide_sensitive` on the resolved provider is the single
-      trigger source. The settings UI checks that box for public providers. An
-      endpoint address is never a privacy decision, and `is_local` stays a
-      Base-URL hint.
+      trigger source. The Settings UI checks that box for a public provider and
+      for a user-added endpoint. An endpoint address is never a privacy
+      decision, and `is_local` stays a Base-URL hint.
 - [x] `redact.rs` layer 1 replaces each detected secret with a `⟦CLASS_N⟧`
       token. Layer 1 detects Luhn+BIN cards, IBAN mod-97, ABA mod-10, SWIFT, and
       SSN validity. Layer 1 also detects crypto checksums, API-key shapes, JWT,
@@ -330,18 +332,14 @@ the design.
       records the one `GATE:` line that names the failing address.
 - [x] The Privacy Model judges the text First Mate puts on the wire: your new
       message, and each tool result. It never judges the instruction set, text
-      the provider authored, or text that already left the PC. The
-      60-character floor and the 16-message cap go away with the resend
-      re-judgement.
+      the provider authored, or text that already left the PC.
 - [x] The audit card holds a flagged message: the message, its score, your
       selection, then approve or deny. Deny holds the send, and you write the
       next message. `docs/roadmap/REDACTION.md` holds the design.
 - [x] The scorer sends one message per request. A message over the server budget
-      gets overlapping windows, and one flagged window flags the message. The client
-      reads the budget from `GET {base}/v1/models`, and a 422 answer shrinks the
-      window.
-- [x] `MAX_SPAN_CHARS`, `clip`, and `MAX_SPANS_PER_REQUEST` are gone, so no scored
-      text is cut in silence.
+      gets overlapping windows, and one flagged window flags the message. The
+      client reads the budget from `GET {base}/v1/models`, and a 413 or 422
+      answer shrinks the window. The scorer sees every character of the message.
 - [ ] The configured server must accept image input. When the server accepts no
       image, the console says that the image went out unjudged.
 - [ ] `criteria` in `decide.rs` states what counts as a yes and what counts as a
@@ -414,8 +412,8 @@ transcript holds real values.
 - [ ] The exec harness enforces tiers 0–3, and that enforcement extends the
       gate that `route.rs` already implements.
 - [ ] The profile `tier_default` is enforced behavior, not stored metadata.
-- [ ] Tier 2 and above show a confirm UI on each call, and tier 3 gates
-      detokenize at execute.
+- [ ] Tier 2 and above show a confirm UI on each call. Tier 3 gates detokenize
+      at execute.
 - [ ] Approval gates skill actions: the user confirms before the agent clicks or
       types, under tier enforcement.
 - **Accept:** a `general`-profile agent cannot delete outside its workspace
@@ -443,7 +441,7 @@ and its tier gate.
 
 - [ ] A conversation gets a workspace folder, and a run gets a subfolder of it.
 - [ ] `write_file`, the screenshot path, and tool-output spill resolve to the
-      current run's workspace when no destination is given.
+      run's workspace when no destination is given.
 - [ ] The winapp skill passes that path to every screenshot, so no image lands
       in the app's working directory.
 - [ ] The console links the run's workspace, and one action clears it.
