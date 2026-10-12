@@ -15,11 +15,6 @@ pub(crate) fn log(msg: &str) {
 #[cfg(not(debug_assertions))]
 pub(crate) fn log(_msg: &str) {}
 
-/// Whether this build writes the debug log.
-pub(crate) fn diagnostics_enabled_inner() -> bool {
-    cfg!(debug_assertions)
-}
-
 pub(crate) fn home_dir() -> std::path::PathBuf {
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))

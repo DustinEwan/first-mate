@@ -64,8 +64,6 @@ async function onContentClick(e: MouseEvent) {
 
 const win = getCurrentWindow();
 
-const diagnostics = ref(false);
-
 // Backend-produced facts about one tool call. The backend also ships a
 // model-facing transcript; glyphs and wording in this file are UI-only.
 interface ToolReport {
@@ -474,7 +472,6 @@ onMounted(() => {
   invoke<boolean>("recovery_key_status").then((pending) => {
     if (pending) wizardOpen.value = true;
   });
-  invoke<boolean>("diagnostics_enabled").then((on) => (diagnostics.value = on));
   listen("open_setup", () => (wizardOpen.value = true));
   invoke<{ active: boolean; commands: number }>("elevation_status").then((s) => {
     elevActive.value = s.active;
@@ -658,18 +655,14 @@ async function submit() {
     }
   } catch (e) {
     const msg = typeof e === "string" ? e : e && e.message ? e.message : String(e);
-    // A release build writes no debug log, so name that file only in a debug build.
-    const hint = diagnostics.value
-      ? " For details, open firstmate.log in your temp folder (Windows: Win+R → %temp%)."
-      : "";
     const held = /^held:(\w+)(?: (.*))?$/.exec(msg);
     const sentence = held ? HELD_TEXT[held[1]]?.(held[2] ?? "") : undefined;
     if (held?.[1] === "outage" && sentence) {
-      addMsg(`Error: ${sentence}${hint}`, "error");
+      addMsg(`Error: ${sentence}`, "error");
     } else if (sentence) {
       addMsg(sentence, "dim");
     } else {
-      addMsg(`Error: ${msg}\n\nThe agent stopped.${hint}`, "error");
+      addMsg(`Error: ${msg}\n\nThe agent stopped.`, "error");
     }
   } finally {
     isThinking.value = false;
