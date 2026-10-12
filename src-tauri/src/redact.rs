@@ -903,8 +903,8 @@ impl Redactor {
             }
         }
         push_matches(&RE_API_KEY, text, Class::ApiKey, &mut found);
-        push_matches(&RE_USER_PATH, text, Class::UserPath, &mut found);
-        push_matches(&RE_PROFILE_PATH, text, Class::UserPath, &mut found);
+        push_path_matches(&RE_USER_PATH, text, Class::UserPath, &mut found);
+        push_path_matches(&RE_PROFILE_PATH, text, Class::UserPath, &mut found);
         for m in RE_ABA.find_iter(text) {
             if aba_ok(m.as_str()) {
                 found.push(Hit {
@@ -970,6 +970,28 @@ fn push_matches(re: &Regex, text: &str, class: Class, out: &mut Vec<Hit>) {
         out.push(Hit {
             start: m.start(),
             end: m.end(),
+            class,
+        });
+    }
+}
+
+/// A path match admits spaces, so prose after a path sits inside the greedy
+/// match. A comma, a period, or a semicolon that a space follows means a
+/// sentence followed, not a folder name. Windows strips a trailing dot and a
+/// trailing space from a name, so no path ends in either.
+fn push_path_matches(re: &Regex, text: &str, class: Class, out: &mut Vec<Hit>) {
+    for m in re.find_iter(text) {
+        let matched = m.as_str();
+        let cut = [", ", ". ", "; ", "? ", "! "]
+            .iter()
+            .filter_map(|stop| matched.find(stop))
+            .min()
+            .unwrap_or(matched.len());
+        let value = matched[..cut]
+            .trim_end_matches([' ', '\t', '.', ',', ';', '!', '?', ')', ']', '}', '\'']);
+        out.push(Hit {
+            start: m.start(),
+            end: m.start() + value.len(),
             class,
         });
     }
@@ -1237,6 +1259,51 @@ mod tests {
                       plus 2026-10-10 and a 30-day window.";
         let mut r = Redactor::new();
         assert_eq!(r.tokenize(source), source);
+    }
+
+    #[test]
+    fn a_path_at_the_end_of_a_sentence_keeps_the_period_out_of_the_token() {
+        let source = format!("Reading that path now. See {PATH}.");
+        let mut r = Redactor::new();
+        let sent = r.tokenize(&source);
+        assert!(
+            sent.ends_with("⟦USER_PATH_1⟧."),
+            "the sentence tail went into the value: {sent}"
+        );
+        assert_eq!(r.detokenize(&sent), source);
+    }
+
+    #[test]
+    fn a_folder_name_with_a_space_stays_inside_the_token() {
+        let source = r"open C:\Users\dusti\OneDrive\My Documents\list.txt.";
+        let mut r = Redactor::new();
+        let sent = r.tokenize(source);
+        assert!(
+            !sent.contains("My Documents"),
+            "the token stopped at the space: {sent}"
+        );
+        assert!(
+            sent.ends_with("⟦USER_PATH_1⟧."),
+            "the sentence tail went into the value: {sent}"
+        );
+        assert_eq!(r.detokenize(&sent), source);
+    }
+
+    #[test]
+    fn a_path_in_prose_stops_where_the_sentence_continues() {
+        let source = "It sits at C:\\Users\\dusti\\OneDrive\\My Documents\\list.txt, and the mail \
+                      went to dustin@example.com.";
+        let mut r = Redactor::new();
+        let sent = r.tokenize(source);
+        assert!(
+            sent.contains("⟦USER_PATH_1⟧, and the mail went to"),
+            "the value swallowed the sentence: {sent}"
+        );
+        assert!(
+            !sent.contains("My Documents") && !sent.contains("dustin@"),
+            "a value leaked: {sent}"
+        );
+        assert_eq!(r.detokenize(&sent), source);
     }
 
     #[test]
