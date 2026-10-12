@@ -14,12 +14,6 @@ const CLOSE: char = '⟧';
 
 const MAX_TOKEN_CHARS: usize = 48;
 
-/// The measured audit used a 60-character floor.
-const MIN_SCORE_CHARS: usize = 60;
-
-/// Each score costs one round trip, so the cap bounds request latency.
-const MAX_SPANS_PER_REQUEST: usize = 16;
-
 static RE_TOKEN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"⟦[^⟧]{1,48}⟧").unwrap());
 
@@ -572,26 +566,24 @@ impl Redactor {
     /// one token, which breaks the run.
     pub(crate) fn pending(&self, msgs: &mut [serde_json::Value]) -> Vec<String> {
         let mut found: Vec<String> = Vec::new();
-        for msg in msgs.iter_mut().rev() {
+        for msg in msgs.iter().rev() {
             if msg.get("role").and_then(|r| r.as_str()) == Some("system") {
                 continue;
             }
-            walk_strings(msg, &mut |s: &mut String| found.push(s.clone()));
+            scoreable(msg, &mut found);
         }
-        self.budget(found)
+        self.unscored(found)
     }
 
     pub(crate) fn pending_from<'a>(&self, spans: impl Iterator<Item = &'a str>) -> Vec<String> {
-        self.budget(spans.map(str::to_string).collect())
+        self.unscored(spans.map(str::to_string).collect())
     }
 
-    fn budget(&self, found: Vec<String>) -> Vec<String> {
-        let mut kept: Vec<String> = found
+    fn unscored(&self, found: Vec<String>) -> Vec<String> {
+        found
             .into_iter()
-            .filter(|s| s.chars().count() >= MIN_SCORE_CHARS && !self.scored.contains(s))
-            .collect();
-        kept.truncate(MAX_SPANS_PER_REQUEST);
-        kept
+            .filter(|s| !self.scored.contains(s))
+            .collect()
     }
 
     pub(crate) fn record_score(&mut self, span: &str, score: f64, threshold: f64) -> bool {
@@ -810,6 +802,37 @@ fn registry_hits(text: &str, registry: &[String], out: &mut Vec<Hit>) {
                 class: Class::Entity,
             });
             from = start + value.len();
+        }
+    }
+}
+
+/// A flagged string leaves the machine as one handle, so a structural string
+/// must never be offered: a flagged `"user"` would replace the role value and
+/// break the request. Only what the model reads is scoreable.
+fn scoreable(msg: &serde_json::Value, out: &mut Vec<String>) {
+    match msg.get("content") {
+        Some(serde_json::Value::String(text)) => out.push(text.clone()),
+        Some(serde_json::Value::Array(parts)) => {
+            for part in parts {
+                if part.get("type").and_then(|t| t.as_str()) != Some("text") {
+                    continue;
+                }
+                if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+                    out.push(text.to_string());
+                }
+            }
+        }
+        _ => {}
+    }
+    if let Some(calls) = msg.get("tool_calls").and_then(|t| t.as_array()) {
+        for call in calls {
+            if let Some(args) = call
+                .get("function")
+                .and_then(|f| f.get("arguments"))
+                .and_then(|a| a.as_str())
+            {
+                out.push(args.to_string());
+            }
         }
     }
 }
@@ -1040,6 +1063,9 @@ mod tests {
             1
         );
         r.record_score(span, 0.91, 0.5);
+        assert!(r
+            .pending(msgs.as_array_mut().unwrap().as_mut_slice())
+            .is_empty());
         r.tokenize_msgs(msgs.as_array_mut().unwrap());
         assert_eq!(msgs[0]["content"], "⟦SPAN_1⟧");
         assert_eq!(
@@ -1047,9 +1073,6 @@ mod tests {
             span,
             "the console must show the real sentence"
         );
-        assert!(r
-            .pending(msgs.as_array_mut().unwrap().as_mut_slice())
-            .is_empty());
     }
 
     #[test]
@@ -1058,53 +1081,6 @@ mod tests {
         let mut r = Redactor::new();
         r.record_score(span, 0.4, 0.5);
         assert_eq!(r.tokenize(span), span);
-    }
-
-    #[test]
-    fn a_short_span_is_never_offered_to_the_server() {
-        let mut msgs = serde_json::json!([{"role": "user", "content": "call me at 555-867-5309"}]);
-        let r = Redactor::new();
-        assert!(r
-            .pending(msgs.as_array_mut().unwrap().as_mut_slice())
-            .is_empty());
-    }
-
-    #[test]
-    fn one_request_offers_at_most_the_span_budget() {
-        let items: Vec<serde_json::Value> = (0..MAX_SPANS_PER_REQUEST + 5)
-            .map(|i| {
-                serde_json::json!({"role": "user",
-                                   "content": format!("row {i}: {}", "x".repeat(70))})
-            })
-            .collect();
-        let mut msgs = serde_json::Value::Array(items);
-        let r = Redactor::new();
-        assert_eq!(
-            r.pending(msgs.as_array_mut().unwrap().as_mut_slice())
-                .len(),
-            MAX_SPANS_PER_REQUEST
-        );
-    }
-
-    #[test]
-    fn the_newest_span_wins_the_span_budget() {
-        let mut items: Vec<serde_json::Value> = (0..MAX_SPANS_PER_REQUEST)
-            .map(|i| {
-                serde_json::json!({"role": "user",
-                                   "content": format!("old row {i}: {}", "x".repeat(400))})
-            })
-            .collect();
-        items.push(serde_json::json!(
-            {"role": "user", "content": "just typed: my lease ends this month and the landlord kept my deposit"}
-        ));
-        let mut msgs = serde_json::Value::Array(items);
-        let r = Redactor::new();
-        let offered = r.pending(msgs.as_array_mut().unwrap().as_mut_slice());
-        assert_eq!(offered.len(), MAX_SPANS_PER_REQUEST);
-        assert!(
-            offered.iter().any(|s| s.starts_with("just typed:")),
-            "the newest message lost the budget to older history"
-        );
     }
 
     #[test]
@@ -1119,6 +1095,31 @@ mod tests {
             r.pending(msgs.as_array_mut().unwrap().as_mut_slice()),
             vec![private.to_string()],
             "the instruction set must never reach the scorer"
+        );
+    }
+
+    /// The scorer sees only the text the model reads, never the strings that
+    /// hold a message together.
+    #[test]
+    fn only_the_text_the_model_reads_reaches_the_scorer() {
+        let content = "My lease ends this month and the landlord kept my deposit.";
+        let args = r#"{"path":"C:\\Users\\me\\notes.md"}"#;
+        let mut msgs = serde_json::json!([
+            {"role": "user", "content": [
+                {"type": "text", "text": content},
+                {"type": "image_url",
+                 "image_url": {"url": format!("data:image/png;base64,{CARD}")}}
+            ]},
+            {"role": "assistant", "content": null, "tool_calls": [
+                {"id": "call_7", "type": "function",
+                 "function": {"name": "run_command", "arguments": args}}
+            ]}
+        ]);
+        let r = Redactor::new();
+        assert_eq!(
+            r.pending(msgs.as_array_mut().unwrap().as_mut_slice()),
+            vec![args.to_string(), content.to_string()],
+            "a structural string reached the scorer"
         );
     }
 

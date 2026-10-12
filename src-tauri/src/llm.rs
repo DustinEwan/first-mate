@@ -163,9 +163,15 @@ fn scorer(app: &tauri::AppHandle) -> Option<Scorer> {
     Some(Scorer { base, threshold })
 }
 
-/// The gate only adds detection, so one unanswered question must not end a
-/// turn.
-async fn gate(red: &mut redact::Redactor, scorer: &Scorer, spans: Vec<String>) {
+/// A scorer outage holds the send, because a send without a verdict would make
+/// containment depend on a network. `docs/roadmap/REDACTION.md` states that
+/// rule. `gate` scores no further message after a failure, because each question
+/// waits out its own two-second timeout.
+async fn gate(
+    red: &mut redact::Redactor,
+    scorer: &Scorer,
+    spans: Vec<String>,
+) -> Result<(), String> {
     for span in spans {
         match decide::score(&scorer.base, &span).await {
             Ok(p) => {
@@ -174,11 +180,12 @@ async fn gate(red: &mut redact::Redactor, scorer: &Scorer, spans: Vec<String>) {
                 }
             }
             Err(e) => {
-                log(&format!("GATE: {e}; sending on the exact rules"));
-                return;
+                log(&format!("GATE: {e}; holding the send"));
+                return Err(outage_message(&scorer.base));
             }
         }
     }
+    Ok(())
 }
 
 /// The summarizer writes new text, and First Mate puts that text in the system
@@ -237,6 +244,19 @@ fn emit_redacted(app: &tauri::AppHandle, red: &Option<redact::Redactor>) {
             serde_json::json!({ "count": count, "classes": r.breakdown() }),
         );
     }
+}
+
+/// `outage_message` names the host and the two ways forward, because
+/// `docs/roadmap/REDACTION.md` requires both.
+fn outage_message(base: &str) -> String {
+    let host = settings::decision_host(base.to_string())["host"]
+        .as_str()
+        .unwrap_or(base)
+        .to_string();
+    format!(
+        "First Mate did not send your message. The second model at {host} did not answer. \
+         Start that server, or turn off Advanced detection in Settings."
+    )
 }
 
 /// The tool ledger records which skills loaded, not what their `SKILL.md`
@@ -629,7 +649,7 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
                     }
                 }
                 let spans = r.pending_from(found.into_iter());
-                gate(r, s, spans).await;
+                gate(r, s, spans).await?;
             }
             tokenize_chat(r, &mut wire);
         }
@@ -1027,7 +1047,7 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
         if let Some(r) = red.as_mut() {
             if let Some(s) = scorer.as_ref() {
                 let spans = r.pending(&mut wire);
-                gate(r, s, spans).await;
+                gate(r, s, spans).await?;
             }
             r.tokenize_msgs(&mut wire);
         }
