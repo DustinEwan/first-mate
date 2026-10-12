@@ -450,13 +450,15 @@ value from a provider, and no provider offers a control that deletes one string
 from its log. First Mate therefore promises two things: the user sees exactly
 what left and where it went, and the record of that fact survives.
 
-- Mark the leak in place. First Mate stores the leaked range on the row as
-  metadata: the character range, the class, the provider id, the model, and the
-  time of the send. The console colors the leaked value red, the same red as
+- Mark the leak in place. `leak.rs` keeps one sealed row per leak: the value,
+  its character range, the class, the provider id, the model, the Base URL, and
+  the time of the send. The console colors the leaked value red, the same red as
   `.msg.error`. The console appends `⚠` (U+26A0) in that red at the end of the
-  row. The tooltip names the class, the provider, the model, and the time. A click
-  opens the leak report row for that leak. The marker survives a resume, because
-  First Mate stores the range with the row.
+  row. The tooltip names the class, the provider, the model, and the time. A
+  click opens the leak report row for that leak. The console matches the value
+  into the conversation's rows when it renders them, so every row that carried
+  the value shows the marker. The marker survives a resume, because the report
+  file survives it.
 - The marker is never literal text in the row. `ChatView.vue` sends the whole
   transcript to the provider on each turn. Literal marker text would tell the
   receiver that the value leaked. The Agent Model could also echo that text. The
@@ -470,36 +472,41 @@ what left and where it went, and the record of that fact survives.
 - Record the re-send. A leaked value leaves again on every later turn under a
   provider whose switch is off. The report gains one row for each such send.
 
-The shipped product holds one part of this design. The console adds one red line
-per run, and that line names the classes of the values that left earlier. The
-inline marker, the exact statement, and the leak report are not in the product.
+The product ships the inline marker, the exact statement, and the leak report.
+The console keeps its one red line per run too, because that line sits beside the
+row. The recall measurement in the last bullet below stays open.
 
 ### Leak report
 
 The leak report is the artifact the user, a lawyer, an insurer, or an auditor
-reads. No part of this section is in the product. First Mate's work ends at the
-report.
+reads. First Mate's work ends at the report.
 
 - Each row names the leaked value in full. The user, or the user's organization,
   owns the security of the report once First Mate writes it. First Mate's duty is
   an exact record, not a redacted one.
 - Each row holds the value and its class. Each row holds the conversation, the
-  message, and the tool or message part that carried the value. Each row holds the
-  provider id, the model, the Base URL, and the time of the send.
-- Each row links into the console. The user opens the conversation, and the console
-  scrolls the message into view. The user then reads the leak in context.
+  character range of the value in the text that left, and the tool that carried
+  it, when a tool did. Each row holds the provider id, the model, the Base URL,
+  and the time of the send.
+- Each row links into the console. The user opens the conversation, and the
+  console scrolls the message into view. The user then reads the leak in context.
+  A row whose conversation was never saved has no stored message, so the console
+  leaves that row inert.
 - First Mate stores no retention claim. The client cannot learn how long one
   provider keeps one message, so no row states an exposure window. The provider
   terms below record what each provider publishes.
 - First Mate keeps the report for as long as the user wants it. The default is
   forever, and no rotation or expiry exists.
-- The store file is append-only JSONL, and First Mate encrypts it with the envelope
-  in `docs/ENCRYPTION.md`. The file holds real values under the TPM key or the
-  recovery key. The file opens on this machine only.
-- The console exports the report as a PDF. The user may protect that PDF with a
-  password. First Mate generates the password, or the user types one. The export
-  dialog states that the PDF holds the real values. The user then knows what the
-  file carries once it leaves this machine.
+- The store file is `leaks.jsonl`, append-only, sealed with the envelope
+  `crypto.rs` writes. The file holds real values under the TPM key or the
+  recovery key. The file opens on this machine only. `crypto::open_store_bytes`
+  refuses the file to `read_file`, so the agent cannot read the record back.
+- The console exports the report as a PDF, and `lopdf` writes that file. The
+  export lands in the user's Downloads folder, because the file holds the real
+  values in the clear. The user may protect the PDF with a password of at most
+  127 bytes. First Mate generates the password, or the user types one. The
+  export panel states that the PDF holds the real values. The user then knows
+  what the file carries once it leaves this machine.
 - The console chip keeps its count-only rule, because the chip sits in the chat log
   beside the row. The report is the place that names the value.
 - Scope: the report covers sends First Mate made. The report cannot cover a leak by

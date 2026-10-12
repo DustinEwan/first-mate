@@ -345,12 +345,12 @@ the design.
 - [ ] `criteria` in `decide.rs` states what counts as a yes and what counts as a
       no. The wording of the question and the wording of the criteria are the only
       tuning. Re-measure the two `Test` scores after any change.
-- [ ] First Mate stores the leaked range on the row as metadata. The console colors
-      the value red and appends `⚠` (U+26A0) in the same red. Literal marker text
-      would re-leave on every turn, so the console draws the marker at render time.
-- [ ] The leak report holds one sealed row per leak. Each row links into the
+- [x] `leak.rs` keeps one sealed row per leak, and the console colors the value
+      red and appends `⚠` (U+26A0) in the same red. Literal marker text would
+      re-leave on every turn, so the console draws the marker at render time.
+- [x] The leak report holds one sealed row per leak. Each row links into the
       console at the message that carried the value.
-- [ ] The console exports the leak report as a PDF. The user may protect that PDF
+- [x] The console exports the leak report as a PDF. The user may protect that PDF
       with a generated password or a password of their own.
 - **Accept:** a checked box produces the same tokenized request on a local
   endpoint and on a public endpoint. That request carries a fake card, a JWT,
@@ -360,8 +360,8 @@ the design.
   pattern matches still leaves the machine tokenized. With no server, that
   sentence leaves the machine unchanged. A flagged message stops before the send
   and waits on the audit card. A row that an earlier run sent never goes to the
-  Privacy Model a second time. A value that already left the PC is named by its
-  class, and the notice names no value. A long message whose flagged text sits
+  Privacy Model a second time. A value that already left the PC gains the red
+  marker on every row that carried it, and the report holds one row per send.
   past the first window still stops before the send.
 
 ### Phase B — Agent profiles (§1)

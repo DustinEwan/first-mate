@@ -40,6 +40,23 @@ pub(crate) fn fm_out_dir() -> std::path::PathBuf {
     d
 }
 
+/// The user's Downloads folder. The leak report export lands there, because the
+/// exported file holds the real values in the clear, and `crypto::is_store`
+/// covers everything under `fm_dir`, where the agent reads on the user's behalf.
+pub(crate) fn downloads_dir() -> Option<std::path::PathBuf> {
+    use windows::Win32::System::Com::CoTaskMemFree;
+    use windows::Win32::UI::Shell::{FOLDERID_Downloads, KF_FLAG_DEFAULT, SHGetKnownFolderPath};
+    // The shell hands back a task-allocated buffer, so the path is copied
+    // before the buffer is freed.
+    let dir = unsafe {
+        let text = SHGetKnownFolderPath(&FOLDERID_Downloads, KF_FLAG_DEFAULT, None).ok()?;
+        let dir = std::path::PathBuf::from(text.to_string().ok()?);
+        CoTaskMemFree(Some(text.0 as *const core::ffi::c_void));
+        dir
+    };
+    (!dir.as_os_str().is_empty()).then_some(dir)
+}
+
 /// A failed request body, sealed in the spill directory. `%TEMP%` keeps no
 /// plaintext copy, so a support read needs `read_file`.
 pub(crate) fn dump_request(turn: usize, body: &str) -> std::path::PathBuf {

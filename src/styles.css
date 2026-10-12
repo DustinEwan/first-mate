@@ -102,6 +102,27 @@ body {
   color: #f0a020;
 }
 
+/* A leak is a fact the user must not miss while the window is open, so the
+   count takes the red of the row marker. */
+.titlebar .leak-toggle {
+  -webkit-app-region: no-drag;
+  background: none;
+  border: none;
+  color: #565c66;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 0 8px;
+  cursor: pointer;
+}
+
+.titlebar .leak-toggle:hover {
+  color: #ffffff;
+}
+
+.titlebar .leak-toggle.on {
+  color: #d03050;
+}
+
 /* Chat + expandable side panel */
 .body {
   flex: 1;
@@ -304,6 +325,25 @@ body {
 .msg.error {
   color: #d03050;
 }
+
+/* The leak marker is drawn at render time, so the stored row and the text that
+   left the machine keep the exact value. Same red as `.msg.error`. */
+.leak-hit {
+  color: #d03050;
+}
+.leak-badge {
+  margin-left: 6px;
+  padding: 0 4px;
+  border: none;
+  border-radius: 3px;
+  background: none;
+  color: #d03050;
+  font: inherit;
+  cursor: pointer;
+}
+.leak-badge:hover {
+  background: rgba(208, 48, 80, 0.18);
+}
 .msg.tool {
   color: #b0a040;
   font-size: 13px;
@@ -413,6 +453,10 @@ body {
   font-style: italic;
 }
 
+.msg.tool.report .leak-badge {
+  margin: 0 10px 7px;
+}
+
 .msg.md {
   white-space: normal;
   line-height: 1.5;
@@ -509,6 +553,139 @@ body {
 .msg.md .katex-display > .katex {
   display: inline-block;
   text-align: initial;
+}
+
+/* The leak report overlay: the record the user hands to a lawyer, an insurer, or
+   an auditor. It states what left and where it went, and gives no advice,
+   because the send cannot be undone. */
+.leak-panel {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(16, 17, 19, 0.92);
+}
+.leak-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  max-width: 620px;
+  max-height: 100%;
+  padding: 16px 18px;
+  border: 1px solid #2c2c31;
+  border-radius: 10px;
+  background: #18181c;
+}
+.leak-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+}
+.leak-close {
+  border: none;
+  background: none;
+  color: #8a8f98;
+  font-size: 14px;
+  cursor: pointer;
+}
+.leak-close:hover {
+  color: #ffffff;
+}
+.leak-note {
+  color: #8a8f98;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.leak-export {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #2c2c31;
+  border-radius: 8px;
+  background: #141518;
+}
+.leak-real {
+  /* Amber is the product's "do not miss this" signal, same as TEMP and ELEV. */
+  color: #f0a020;
+  font-size: 12px;
+}
+.leak-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.leak-btn {
+  padding: 3px 12px;
+  border: 1px solid #3a3a41;
+  border-radius: 4px;
+  background: none;
+  color: #c9ced6;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.leak-btn:hover {
+  color: #ffffff;
+}
+.leak-path {
+  color: #63e2b7;
+  font-size: 12px;
+  word-break: break-all;
+}
+.leak-error {
+  color: #d03050;
+  font-size: 12px;
+  word-break: break-word;
+}
+.leak-list {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.leak-list li {
+  padding: 6px 8px;
+  border: 1px solid #2c2c31;
+  border-left: 3px solid #d03050;
+  border-radius: 6px;
+  background: #141518;
+  cursor: pointer;
+}
+.leak-list li:hover {
+  border-color: #3c3c41;
+  background: #1a1a1e;
+}
+.leak-list li.on {
+  border-left-color: #f0a020;
+  background: #1f1f23;
+}
+/* A temporary conversation was never saved, so its row links nowhere. */
+.leak-list li.inert {
+  border-left-color: #3c3c41;
+  cursor: default;
+}
+.leak-value {
+  color: #d03050;
+  font-family: monospace;
+  font-size: 13px;
+  word-break: break-all;
+}
+.leak-meta {
+  margin-top: 2px;
+  color: #8a8f98;
+  font-size: 11px;
+  word-break: break-word;
 }
 
 .input-row {

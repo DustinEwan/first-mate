@@ -18,10 +18,12 @@ mod elevate;
 mod execute;
 mod fileedit;
 mod harness;
+mod leak;
 mod llm;
 mod log;
 mod modelapi;
 mod openpath;
+mod pdf;
 mod provider_catalog;
 mod psrep;
 mod redact;
@@ -37,7 +39,7 @@ use crate::conversations::{delete_conversation, list_conversations, load_convers
 use crate::elevate::{self as elevate_mod, ElevationState};
 use crate::harness::{bootstrap_status, cli_version, install_winapp};
 use crate::llm::{chat_with_llm, stop_chat};
-use crate::log::{fm_out_dir, fm_tmp_dir, log, trim_dir};
+use crate::log::{fm_dir, fm_out_dir, fm_tmp_dir, log, trim_dir};
 use crate::modelapi::{list_models, list_providers, test_llm};
 use crate::openpath::open_path;
 use crate::settings::{
@@ -81,13 +83,62 @@ fn answer_audit(approved: bool, redactions: Vec<String>) -> bool {
     audit::resolve(approved, redactions)
 }
 
+#[tauri::command]
+fn leak_report() -> Vec<leak::LeakRow> {
+    leak::all()
+}
+
+#[tauri::command]
+fn leak_marks(conversation: String) -> Vec<leak::LeakMark> {
+    leak::marks(&conversation)
+}
+
+#[tauri::command]
+fn leak_password() -> String {
+    pdf::password()
+}
+
+/// The export holds the real values in the clear, so it lands in the user's
+/// Downloads folder, outside every directory `crypto::is_store` covers.
+/// `open_path` opens the returned path.
+#[tauri::command]
+fn leak_export_pdf(password: Option<String>) -> Result<String, String> {
+    const COLUMNS: [&str; 8] = ["Sent", "Conversation", "Value", "Class", "Provider", "Model", "Base URL", "Carried by"];
+    let rows: Vec<Vec<String>> = leak::all()
+        .iter()
+        .map(|row| {
+            vec![
+                pdf::clock(row.at),
+                row.conversation.clone(),
+                row.value.clone(),
+                row.class.clone(),
+                row.provider.clone(),
+                row.model.clone(),
+                row.base_url.clone(),
+                row.tool.clone().unwrap_or_else(|| "message".to_string()),
+            ]
+        })
+        .collect();
+    let bytes = pdf::table("First Mate leak report", &COLUMNS, &rows, password.as_deref())?;
+    let dir = crate::log::downloads_dir().unwrap_or_else(fm_dir);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let mut path = dir.join("leak-report.pdf");
+    let mut copy = 2;
+    while path.exists() {
+        path = dir.join(format!("leak-report-{copy}.pdf"));
+        copy += 1;
+    }
+    std::fs::write(&path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(path.display().to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, probe_decision_server, decision_host, answer_audit, list_models, list_providers, test_llm, chat_with_llm, stop_chat, list_skills, list_conversations, load_conversation, delete_conversation, save_conversation, get_system_prompt, open_path, bootstrap_status, install_winapp, open_settings, elevate, delevate, elevation_status, recovery_key_status, get_recovery_key, ack_recovery_key])
+        .invoke_handler(tauri::generate_handler![get_hotkey, get_settings, save_settings, probe_decision_server, decision_host, answer_audit, list_models, list_providers, test_llm, chat_with_llm, stop_chat, list_skills, list_conversations, load_conversation, delete_conversation, save_conversation, get_system_prompt, open_path, bootstrap_status, install_winapp, open_settings, elevate, delevate, elevation_status, recovery_key_status, get_recovery_key, ack_recovery_key, leak_report, leak_marks, leak_password, leak_export_pdf])
         .setup(|app| {
             app.manage(ElevationState::default());
             let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
@@ -174,9 +225,13 @@ pub fn run() {
             app.global_shortcut()
                 .on_shortcut(HOTKEY, |app, _, event| {
                     if event.state == ShortcutState::Pressed {
+                        // The log separates "Windows never delivered the key"
+                        // from "the handler ran and the window stayed shown".
+                        log("HOTKEY: summon");
                         toggle_window(app);
                     }
-                })?;
+                })
+                .map_err(|e| format!("{HOTKEY} did not register: {e}"))?;
 
             if let Some(window) = app.get_webview_window("main") {
                 let win = window.clone();

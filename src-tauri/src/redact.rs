@@ -369,6 +369,18 @@ struct Hit {
     class: Class,
 }
 
+/// One value the detector found in text that is about to leave the machine.
+/// `start` and `end` count `chars()`, because the console marks a row in
+/// characters, not bytes. `left` says the Agent Model already holds the value,
+/// which is what turns a redaction into a leak. `leak.rs` records it.
+pub(crate) struct Found {
+    pub value: String,
+    pub class: &'static str,
+    pub start: usize,
+    pub end: usize,
+    pub left: bool,
+}
+
 /// The token table for every conversation this machine has tokenized. The table
 /// is the key that opens each marker, so the envelope seals the file and
 /// `read_file` never decrypts it.
@@ -612,6 +624,32 @@ impl Redactor {
     /// A later audit cannot take back a value the Agent Model already holds.
     fn leaked(&self, value: &str) -> bool {
         !self.sent_blob.is_empty() && self.sent_blob.contains(value)
+    }
+
+    /// Detection with no store write, so a leak scan cannot inflate the chip
+    /// count. `tokenize` issues a token and commits the map; `scan` reads the
+    /// same detector and keeps neither.
+    pub(crate) fn scan(&self, text: &str) -> Vec<Found> {
+        let hits = self.hits(text);
+        let mut found = Vec::with_capacity(hits.len());
+        // `hits` is ascending and never overlaps, so one walk converts byte
+        // offsets to char offsets. A count per hit would re-read the text for
+        // every value of a long row.
+        let mut byte = 0;
+        let mut chars = 0;
+        for hit in hits {
+            chars += text[byte..hit.start].chars().count();
+            byte = hit.start;
+            let value = &text[hit.start..hit.end];
+            found.push(Found {
+                left: self.leaked(value),
+                value: value.to_string(),
+                class: hit.class.label(),
+                start: chars,
+                end: chars + value.chars().count(),
+            });
+        }
+        found
     }
 
     pub(crate) fn tokenize(&mut self, text: &str) -> String {
@@ -1207,6 +1245,30 @@ mod tests {
         assert!(crate::crypto::looks_sealed(&bytes), "the table must be sealed");
         assert!(!String::from_utf8_lossy(&bytes).contains("4111"));
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_scan_sees_every_occurrence_and_writes_no_token() {
+        let mut r = Redactor::new();
+        let found = r.scan(&format!("pay {CARD} now, then pay {CARD} again"));
+        assert_eq!(found.len(), 2, "a scan judges each occurrence");
+        assert_eq!(found[0].class, "CARD");
+        assert_eq!(found[0].value, CARD);
+        assert!(!found[0].left, "the value never left this machine");
+        assert_eq!(r.redacted_count(), 0, "a scan issued a token");
+        assert!(r.breakdown().is_empty(), "a scan moved the chip count");
+        r.note_sent(std::iter::once(format!("I paid {CARD} last week")));
+        let again = r.scan(&format!("pay {CARD} now"));
+        assert!(again[0].left, "a value the Agent Model holds has left");
+        assert_eq!(r.redacted_count(), 0, "a scan issued a token");
+    }
+
+    #[test]
+    fn a_scan_counts_characters_and_not_bytes() {
+        let r = Redactor::new();
+        let found = r.scan(&format!("Zahlungskarte ✓ {CARD}"));
+        assert_eq!(found[0].start, 16, "the offset counts chars");
+        assert_eq!(found[0].end, 35, "the offset ends one past the value");
     }
 
 }
