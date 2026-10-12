@@ -1,4 +1,6 @@
-use crate::fileedit::{base_name, clip_chars, clip_lines, extract_diff_fence, fence_for, result_tag};
+use crate::fileedit::{
+    base_name, clip_chars, clip_lines, extract_diff_fence, fence_for, result_tag,
+};
 
 /// Facts about one tool call, with no presentation. The frontend renders
 /// these fields in the report panel. `transcript()` serializes the same
@@ -94,7 +96,10 @@ impl ToolReport {
             "read_file" => format!(
                 "→ {}{}",
                 base_name(&self.subject),
-                self.detail.as_deref().map(|d| format!(":{d}")).unwrap_or_default()
+                self.detail
+                    .as_deref()
+                    .map(|d| format!(":{d}"))
+                    .unwrap_or_default()
             ),
             "edit_file" => format!(
                 "✎ {} #{} {}",
@@ -118,7 +123,10 @@ impl ToolReport {
             "kill_command" => format!("✖ kill pid {}", self.subject),
             "load_skill" => format!("📖 load_skill {}", self.subject),
             "read_skill_resource" => format!("📖 {}", self.subject),
-            _ => clip_chars(&format!("{} {}", self.tool, self.detail.clone().unwrap_or_default()), 140),
+            _ => clip_chars(
+                &format!("{} {}", self.tool, self.detail.clone().unwrap_or_default()),
+                140,
+            ),
         }
     }
 
@@ -284,12 +292,12 @@ pub(crate) fn tool_report(
             .then_some(true),
         from_tag: opt("tag"),
         ok,
-        error: (!ok)
-            .then(|| clip_chars(result.strip_prefix("Error: ").unwrap_or(result), 400)),
+        error: (!ok).then(|| clip_chars(result.strip_prefix("Error: ").unwrap_or(result), 400)),
         status: None,
-        pid: args.get("pid").and_then(|v| v.as_u64()).filter(|_| {
-            matches!(name, "get_command_output" | "kill_command")
-        }),
+        pid: args
+            .get("pid")
+            .and_then(|v| v.as_u64())
+            .filter(|_| matches!(name, "get_command_output" | "kill_command")),
         wall_ms: wall_ms as u64,
         tag: (ok && matches!(name, "write_file" | "edit_file"))
             .then(|| result_tag(result))
@@ -314,7 +322,10 @@ mod tests {
         );
         assert_eq!(r.subject, "echo hi");
         assert_eq!(r.shell.as_deref(), Some("powershell"));
-        assert_eq!(r.transcript(), "$ echo hi [powershell]\n```\nhi\n```\n✅ 1.4s");
+        assert_eq!(
+            r.transcript(),
+            "$ echo hi [powershell]\n```\nhi\n```\n✅ 1.4s"
+        );
         let edit_result = "edited C:\\x\\notes.md: PUT 3.3 -> 1 line(s)\n```diff\n-for\n+EDITED\n```\n[C:\\x\\notes.md#F926] - line numbers shifted";
         let r = tool_report(
             "edit_file",
@@ -343,7 +354,10 @@ mod tests {
         );
         assert_eq!((r.count, r.unit.as_deref()), (Some(12), Some("bytes")));
         let t = r.transcript();
-        assert!(t.starts_with("✎ d.md (12 bytes)") && !t.contains("secret"), "{t}");
+        assert!(
+            t.starts_with("✎ d.md (12 bytes)") && !t.contains("secret"),
+            "{t}"
+        );
         assert!(t.contains("#ABCD"), "{t}");
         let r = tool_report(
             "read_file",
@@ -365,11 +379,15 @@ mod tests {
         assert_eq!(r.body.as_ref().unwrap().kind, BodyKind::Output);
         let t = r.transcript();
         assert!(
-            t.starts_with("$ dir\n")
-                && t.ends_with("❌ Blocked: duplicates list_dir 0.0s"),
+            t.starts_with("$ dir\n") && t.ends_with("❌ Blocked: duplicates list_dir 0.0s"),
             "{t}"
         );
-        let r = tool_report("kill_command", &serde_json::json!({ "pid": 42 }), "killed", 0);
+        let r = tool_report(
+            "kill_command",
+            &serde_json::json!({ "pid": 42 }),
+            "killed",
+            0,
+        );
         assert_eq!(r.subject, "42");
         assert_eq!(r.pid, Some(42));
         assert_eq!(r.transcript(), "✖ kill pid 42\n✅");

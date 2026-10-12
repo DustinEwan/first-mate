@@ -1,4 +1,3 @@
-
 /// The registry in OpenAI function-calling format, not the lmkit format.
 pub(crate) fn agent_tools() -> serde_json::Value {
     serde_json::json!([
@@ -199,9 +198,8 @@ pub(crate) fn agent_tools() -> serde_json::Value {
 
 pub(crate) fn skill_required(tool: &str) -> Option<&'static str> {
     match tool {
-        "read_file" | "edit_file" | "write_file" | "list_dir" | "search_files" | "list_processes" => {
-            Some("filesystem")
-        }
+        "read_file" | "edit_file" | "write_file" | "list_dir" | "search_files"
+        | "list_processes" => Some("filesystem"),
         "elevate" | "delevate" | "run_elevated" => Some("elevation"),
         _ => None,
     }
@@ -209,13 +207,11 @@ pub(crate) fn skill_required(tool: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 pub(crate) fn tool_schema(name: &str) -> Option<serde_json::Value> {
-    agent_tools()
-        .as_array()
-        .and_then(|all| {
-            all.iter()
-                .find(|t| t.pointer("/function/name").and_then(|n| n.as_str()) == Some(name))
-                .cloned()
-        })
+    agent_tools().as_array().and_then(|all| {
+        all.iter()
+            .find(|t| t.pointer("/function/name").and_then(|n| n.as_str()) == Some(name))
+            .cloned()
+    })
 }
 
 pub(crate) fn to_tool_defs(values: &[serde_json::Value]) -> Vec<lmkit::ToolDefinition> {
@@ -282,10 +278,17 @@ mod tests {
         let all = agent_tools().as_array().expect("tool array").clone();
         let names: Vec<&str> = all
             .iter()
-            .map(|t| t.pointer("/function/name").and_then(|n| n.as_str()).unwrap())
+            .map(|t| {
+                t.pointer("/function/name")
+                    .and_then(|n| n.as_str())
+                    .unwrap()
+            })
             .collect();
         for gated in ["read_file", "list_dir", "elevate", "run_elevated"] {
-            assert!(names.contains(&gated), "{gated} must be in the static array");
+            assert!(
+                names.contains(&gated),
+                "{gated} must be in the static array"
+            );
         }
     }
 }

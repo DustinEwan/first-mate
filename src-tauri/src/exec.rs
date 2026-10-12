@@ -1,9 +1,9 @@
-use std::collections::HashMap;
-use tauri::Emitter;
 use crate::crypto;
 use crate::fileedit::line_diff;
 use crate::log::{fm_out_dir, log};
 use crate::report::{BodyKind, ReportBody, ToolReport};
+use std::collections::HashMap;
+use tauri::Emitter;
 
 pub(crate) fn parse_command(cmd: &str) -> Vec<String> {
     let mut args = Vec::new();
@@ -40,11 +40,41 @@ pub(crate) fn needs_shell(cmd: &str) -> bool {
         return true;
     }
     matches!(
-        cmd.split_whitespace().next().unwrap_or("").to_ascii_lowercase().as_str(),
-        "if" | "for" | "echo" | "set" | "dir" | "copy" | "move" | "del" | "erase"
-            | "type" | "cd" | "chdir" | "mkdir" | "md" | "rmdir" | "rd" | "ren"
-            | "rename" | "start" | "call" | "pause" | "timeout" | "exit" | "shift"
-            | "setlocal" | "endlocal" | "pushd" | "popd" | "path" | "rem" | "goto"
+        cmd.split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .as_str(),
+        "if" | "for"
+            | "echo"
+            | "set"
+            | "dir"
+            | "copy"
+            | "move"
+            | "del"
+            | "erase"
+            | "type"
+            | "cd"
+            | "chdir"
+            | "mkdir"
+            | "md"
+            | "rmdir"
+            | "rd"
+            | "ren"
+            | "rename"
+            | "start"
+            | "call"
+            | "pause"
+            | "timeout"
+            | "exit"
+            | "shift"
+            | "setlocal"
+            | "endlocal"
+            | "pushd"
+            | "popd"
+            | "path"
+            | "rem"
+            | "goto"
     )
 }
 
@@ -73,7 +103,10 @@ fn truncate_if_over(s: String, max: usize) -> String {
         SPILL_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     let omitted = count - head.chars().count() - tail.chars().count();
-    let pointer = if crypto::seal(s.as_bytes()).and_then(|bytes| std::fs::write(&path, bytes).map_err(|e| e.to_string())).is_ok() {
+    let pointer = if crypto::seal(s.as_bytes())
+        .and_then(|bytes| std::fs::write(&path, bytes).map_err(|e| e.to_string()))
+        .is_ok()
+    {
         format!(
             "\n...[{omitted} of {count} chars omitted; FULL output saved: {} — read_file path=\"{}\" offset=<line> for the middle]...\n",
             path.display(),
@@ -82,18 +115,28 @@ fn truncate_if_over(s: String, max: usize) -> String {
     } else {
         format!("\n...[{omitted} chars truncated; spill write failed]...\n")
     };
-    log(&format!("BUDGET: spilled {count} chars to {}", path.display()));
+    log(&format!(
+        "BUDGET: spilled {count} chars to {}",
+        path.display()
+    ));
     format!("{head}{pointer}{tail}")
 }
 
 /// Keep one tool result from filling the whole context window. `seen` maps a
 /// tool call to its full result. The caller passes one map across a chat run,
 /// so repeat calls are detected.
-pub(crate) fn budget_output(seen: &mut HashMap<String, String>, key: String, result: String) -> String {
+pub(crate) fn budget_output(
+    seen: &mut HashMap<String, String>,
+    key: String,
+    result: String,
+) -> String {
     const MAX: usize = 8000;
     if let Some(prev) = seen.get(&key) {
         if *prev == result {
-            log(&format!("BUDGET: deduped identical result ({} bytes)", result.len()));
+            log(&format!(
+                "BUDGET: deduped identical result ({} bytes)",
+                result.len()
+            ));
             seen.insert(key, result.clone());
             return format!(
                 "[identical to your earlier call: {} bytes, unchanged — the state has not changed]",
@@ -185,9 +228,8 @@ pub(crate) const MAX_BG_OUTPUT: usize = 256 * 1024;
 
 const MAX_BG_JOBS: usize = 32;
 
-static BG_REGISTRY: std::sync::LazyLock<
-    std::sync::Mutex<std::collections::HashMap<u32, BgJob>>,
-> = std::sync::LazyLock::new(Default::default);
+static BG_REGISTRY: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<u32, BgJob>>> =
+    std::sync::LazyLock::new(Default::default);
 
 pub(crate) fn bg_registry() -> &'static std::sync::Mutex<std::collections::HashMap<u32, BgJob>> {
     &BG_REGISTRY
@@ -314,10 +356,7 @@ impl BgNotifier for AppNotifier {
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
-async fn spawn_background(
-    cmd: tokio::process::Command,
-    command: &str,
-) -> Result<String, String> {
+async fn spawn_background(cmd: tokio::process::Command, command: &str) -> Result<String, String> {
     spawn_background_notify(std::sync::Arc::new(NoopNotifier), cmd, command).await
 }
 
@@ -401,12 +440,7 @@ pub(crate) async fn exec_or_background(
     if let Some(err) = child.stderr.take() {
         pump_bg_output(err, stderr.clone());
     }
-    match tokio::time::timeout(
-        std::time::Duration::from_secs(auto_bg_secs()),
-        child.wait(),
-    )
-    .await
-    {
+    match tokio::time::timeout(std::time::Duration::from_secs(auto_bg_secs()), child.wait()).await {
         Ok(Ok(status)) => {
             wait_for_pump_flush().await;
             if let Some(p) = &script_path {
@@ -504,7 +538,9 @@ mod tests {
     #[test]
     fn shell_features_route_to_cmd() {
         assert!(needs_shell(r#"tasklist | findstr /i "zen""#));
-        assert!(needs_shell("winapp ui click a && winapp ui send-keys ctrl+t"));
+        assert!(needs_shell(
+            "winapp ui click a && winapp ui send-keys ctrl+t"
+        ));
         assert!(needs_shell("winapp ui inspect -a zen 2>&1"));
         assert!(needs_shell(r#"if exist "C:\x" (dir /b "C:\x")"#));
         assert!(needs_shell("dir /b C:\\"));
@@ -513,7 +549,9 @@ mod tests {
     #[test]
     fn plain_commands_run_direct() {
         assert!(!needs_shell("winapp ui inspect -a zen"));
-        assert!(!needs_shell(r#"winapp ui search "Qwen 3.8 Flash Next" -a zen"#));
+        assert!(!needs_shell(
+            r#"winapp ui search "Qwen 3.8 Flash Next" -a zen"#
+        ));
         assert!(!needs_shell("tasklist /FI \"IMAGENAME eq zen.exe\""));
     }
 
@@ -556,7 +594,9 @@ mod tests {
     #[test]
     fn oversized_output_is_capped_with_spill_pointer() {
         let mut seen = HashMap::new();
-        let huge: String = (0..9000usize).map(|i| (b'a' + (i % 26) as u8) as char).collect();
+        let huge: String = (0..9000usize)
+            .map(|i| (b'a' + (i % 26) as u8) as char)
+            .collect();
         let out = budget_output(&mut seen, "c".into(), huge.clone());
         assert!(out.contains("chars omitted; FULL output saved:"));
         assert!(out.starts_with('a'));
@@ -573,7 +613,10 @@ mod tests {
             .next()
             .unwrap()
             .to_string();
-        assert_eq!(crypto::open(&std::fs::read(&path).unwrap()).unwrap(), huge.as_bytes());
+        assert_eq!(
+            crypto::open(&std::fs::read(&path).unwrap()).unwrap(),
+            huge.as_bytes()
+        );
         let _ = std::fs::remove_file(&path);
     }
 
@@ -592,7 +635,11 @@ mod tests {
     #[test]
     fn wholesale_change_falls_back_to_full_output() {
         let mut seen = HashMap::new();
-        budget_output(&mut seen, "k".into(), "completely\ndifferent\ncontent".into());
+        budget_output(
+            &mut seen,
+            "k".into(),
+            "completely\ndifferent\ncontent".into(),
+        );
         let now = "a\nb".to_string();
         let out = budget_output(&mut seen, "k".into(), now.clone());
         // Diff (3 removals + 2 additions) is bigger than the output itself.
@@ -670,7 +717,10 @@ mod tests {
             }
             assert!(poll.contains("status: exited: 0"), "{poll}");
             let stdout = poll.split("--- stdout ---").nth(1).unwrap();
-            assert!(!stdout.trim().is_empty(), "background stdout must be captured");
+            assert!(
+                !stdout.trim().is_empty(),
+                "background stdout must be captured"
+            );
         });
     }
 
@@ -716,7 +766,10 @@ mod tests {
             )
             .await
             .unwrap();
-            assert!(out.contains("CAPTURED_FOREGROUND"), "shell path lost stdout: {out:?}");
+            assert!(
+                out.contains("CAPTURED_FOREGROUND"),
+                "shell path lost stdout: {out:?}"
+            );
             // This call exercises the direct branch with a quoted argument.
             let out = execute_tool_inner(
                 "run_command",
@@ -746,8 +799,8 @@ mod tests {
             .next()
             .expect("terminator")
             .to_string();
-        let full =
-            String::from_utf8(crypto::open(&std::fs::read(&path).unwrap()).unwrap()).expect("spill holds UTF-8");
+        let full = String::from_utf8(crypto::open(&std::fs::read(&path).unwrap()).unwrap())
+            .expect("spill holds UTF-8");
         assert_eq!(full, big);
         let _ = std::fs::remove_file(&path);
     }
@@ -763,7 +816,10 @@ mod tests {
         .expect("auto-bg notice");
         std::env::remove_var("FIRSTMATE_AUTO_BG_SECS");
         assert!(r.contains("moved to background (pid"), "got: {r}");
-        assert!(r.contains("do NOT poll"), "never-poll contract in notice: {r}");
+        assert!(
+            r.contains("do NOT poll"),
+            "never-poll contract in notice: {r}"
+        );
         let pid: u32 = r
             .split("pid ")
             .nth(1)

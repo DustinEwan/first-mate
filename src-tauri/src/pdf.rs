@@ -22,7 +22,7 @@ use lopdf::encryption::crypt_filters::{Aes256CryptFilter, CryptFilter};
 use lopdf::encryption::{EncryptionState, EncryptionVersion, Permissions};
 use lopdf::{dictionary, Dictionary, Document, Object, Stream, StringFormat};
 use windows::core::Error;
-use windows::Win32::Security::Cryptography::{BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptGenRandom};
+use windows::Win32::Security::Cryptography::{BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG};
 
 /// ISO 32000-2 §7.6.4.4.1: a password contributes at most 127 bytes. A longer
 /// password opens the file by its first 127 bytes only, so this module refuses
@@ -56,7 +56,9 @@ fn why(error: Error) -> String {
 }
 
 fn random(bytes: &mut [u8]) -> Result<(), String> {
-    unsafe { BCryptGenRandom(None, bytes, BCRYPT_USE_SYSTEM_PREFERRED_RNG) }.ok().map_err(why)
+    unsafe { BCryptGenRandom(None, bytes, BCRYPT_USE_SYSTEM_PREFERRED_RNG) }
+        .ok()
+        .map_err(why)
 }
 
 /// A strong password for a report the user typed no password for: 144 random
@@ -94,7 +96,10 @@ fn ansi(text: &str) -> Vec<u8> {
             0x0a => b'\n',
             0x20..=0x7f => ch as u8,
             0xa0..=0xff => ch as u8,
-            code => CP1252.iter().find(|&&(point, _)| point == code).map_or(b'?', |&(_, byte)| byte),
+            code => CP1252
+                .iter()
+                .find(|&&(point, _)| point == code)
+                .map_or(b'?', |&(_, byte)| byte),
         });
     }
     out
@@ -173,7 +178,10 @@ fn break_lines(text: &[u8], width: usize) -> Vec<Vec<u8>> {
     let mut lines: Vec<Vec<u8>> = Vec::new();
     for part in text.split(|&byte| byte == b'\n') {
         let mut line: Vec<u8> = Vec::new();
-        for word in part.split(|&byte| byte == b' ').filter(|word| !word.is_empty()) {
+        for word in part
+            .split(|&byte| byte == b' ')
+            .filter(|word| !word.is_empty())
+        {
             let mut rest = word;
             loop {
                 let gap = usize::from(!line.is_empty());
@@ -276,7 +284,11 @@ impl Sheet {
             .collect();
         let mut sum: usize = cols.iter().sum();
         while sum > chars {
-            let widest = cols.iter().enumerate().max_by_key(|(_, &col)| col).map(|(i, _)| i);
+            let widest = cols
+                .iter()
+                .enumerate()
+                .max_by_key(|(_, &col)| col)
+                .map(|(i, _)| i);
             let Some(widest) = widest else { break };
             if cols[widest] <= 1 {
                 break;
@@ -297,11 +309,17 @@ impl Sheet {
             x.push(left);
             left += col as f32 * CELL * MONO;
         }
-        let head: Vec<Vec<Vec<u8>>> =
-            columns.iter().enumerate().map(|(i, name)| break_lines(&ansi(name), cells_of(cols[i], HEAD))).collect();
+        let head: Vec<Vec<Vec<u8>>> = columns
+            .iter()
+            .enumerate()
+            .map(|(i, name)| break_lines(&ansi(name), cells_of(cols[i], HEAD)))
+            .collect();
         let head_h = head.iter().map(Vec::len).max().unwrap_or(1) as f32 * LEAD + 2.0 * PAD;
         Sheet {
-            title: break_lines(&ansi(title), ((PAGE_W - 2.0 * SIDE) / (TITLE * BOLD)).floor() as usize),
+            title: break_lines(
+                &ansi(title),
+                ((PAGE_W - 2.0 * SIDE) / (TITLE * BOLD)).floor() as usize,
+            ),
             head,
             head_h,
             cols,
@@ -314,10 +332,21 @@ impl Sheet {
     /// Start a page. The title sits on the first one only.
     fn open(&mut self) {
         let numbered = !self.pages.is_empty();
-        let mut page = Page { ops: Vec::new(), top: PAGE_H - TOP, cursor: PAGE_H - TOP };
+        let mut page = Page {
+            ops: Vec::new(),
+            top: PAGE_H - TOP,
+            cursor: PAGE_H - TOP,
+        };
         if !numbered {
             for (k, line) in self.title.iter().enumerate() {
-                show(&mut page.ops, "F1", TITLE, SIDE, page.cursor - TITLE * ASCENT - k as f32 * (TITLE + 4.0), line);
+                show(
+                    &mut page.ops,
+                    "F1",
+                    TITLE,
+                    SIDE,
+                    page.cursor - TITLE * ASCENT - k as f32 * (TITLE + 4.0),
+                    line,
+                );
             }
             page.cursor -= self.title.len().max(1) as f32 * (TITLE + 4.0) + 8.0;
         }
@@ -336,7 +365,13 @@ impl Sheet {
                 show(&mut page.ops, "F1", HEAD, self.x[i] + 2.0, y, line);
             }
         }
-        rule(&mut page.ops, SIDE, page.cursor - h, self.right, page.cursor - h);
+        rule(
+            &mut page.ops,
+            SIDE,
+            page.cursor - h,
+            self.right,
+            page.cursor - h,
+        );
         page.cursor -= h;
         page.top = page.cursor;
     }
@@ -354,7 +389,11 @@ impl Sheet {
             .map(|(i, cell)| break_lines(cell, self.cols[i].saturating_sub(1).max(1)))
             .collect();
         let height = lines.iter().map(Vec::len).max().unwrap_or(1) as f32 * LEAD + 2.0 * PAD;
-        if self.pages.last().is_some_and(|page| page.cursor - height < FOOT) {
+        if self
+            .pages
+            .last()
+            .is_some_and(|page| page.cursor - height < FOOT)
+        {
             self.close();
             self.open();
         }
@@ -371,7 +410,9 @@ impl Sheet {
 
     /// Close the open page: the column rules span the rows that landed on it.
     fn close(&mut self) {
-        let Some(page) = self.pages.last_mut() else { return };
+        let Some(page) = self.pages.last_mut() else {
+            return;
+        };
         let (top, bottom) = (page.top, page.cursor);
         for i in 0..=self.x.len() {
             let x = self.x.get(i).copied().unwrap_or(self.right);
@@ -407,7 +448,9 @@ fn show(out: &mut Vec<u8>, font: &str, size: f32, x: f32, y: f32, bytes: &[u8]) 
 }
 
 fn rule(out: &mut Vec<u8>, x1: f32, y1: f32, x2: f32, y2: f32) {
-    out.extend_from_slice(format!("0.6 w 0.45 G {x1:.2} {y1:.2} m {x2:.2} {y2:.2} l S\n").as_bytes());
+    out.extend_from_slice(
+        format!("0.6 w 0.45 G {x1:.2} {y1:.2} m {x2:.2} {y2:.2} l S\n").as_bytes(),
+    );
 }
 
 fn fill(out: &mut Vec<u8>, x: f32, y: f32, w: f32, h: f32) {
@@ -420,7 +463,11 @@ fn fill(out: &mut Vec<u8>, x: f32, y: f32, w: f32, h: f32) {
 /// the column count.
 fn encode(columns: &[&str], rows: &[Vec<String>]) -> Vec<Vec<Vec<u8>>> {
     rows.iter()
-        .map(|row| (0..columns.len()).map(|i| ansi(row.get(i).map_or("", String::as_str))).collect())
+        .map(|row| {
+            (0..columns.len())
+                .map(|i| ansi(row.get(i).map_or("", String::as_str)))
+                .collect()
+        })
         .collect()
 }
 
@@ -442,7 +489,10 @@ pub(crate) fn table(
 ) -> Result<Vec<u8>, String> {
     if let Some(secret) = password {
         if secret.len() > MAX_PASSWORD {
-            return Err(format!("a PDF password holds {MAX_PASSWORD} bytes, this one holds {}", secret.len()));
+            return Err(format!(
+                "a PDF password holds {MAX_PASSWORD} bytes, this one holds {}",
+                secret.len()
+            ));
         }
     }
     let grid = encode(columns, rows);
@@ -459,8 +509,9 @@ pub(crate) fn table(
     let mut doc = Document::with_version("1.7");
     let bold = doc.add_object(font("Helvetica-Bold"));
     let mono = doc.add_object(font("Courier"));
-    let pages =
-        doc.add_object(dictionary! { "Type" => "Pages", "Kids" => Object::Array(Vec::new()), "Count" => 0 });
+    let pages = doc.add_object(
+        dictionary! { "Type" => "Pages", "Kids" => Object::Array(Vec::new()), "Count" => 0 },
+    );
     let mut kids: Vec<Object> = Vec::with_capacity(total);
     for page in &sheet.pages {
         let content = doc.add_object(Stream::new(dictionary! {}, page.ops.clone()));
@@ -479,8 +530,12 @@ pub(crate) fn table(
     tree.set("Kids", Object::Array(kids));
     tree.set("Count", i64::try_from(total).unwrap_or_default());
 
-    let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => Object::Reference(pages) });
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|elapsed| elapsed.as_secs()).unwrap_or_default();
+    let catalog =
+        doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => Object::Reference(pages) });
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or_default();
     let info = doc.add_object(dictionary! {
         "Producer" => Object::String(b"First Mate".to_vec(), StringFormat::Literal),
         "CreationDate" => Object::String(stamp(now).into_bytes(), StringFormat::Literal),
@@ -516,7 +571,14 @@ mod tests {
     use super::*;
 
     fn columns() -> Vec<&'static str> {
-        vec!["When", "Conversation", "Value", "Class", "Provider", "Model"]
+        vec![
+            "When",
+            "Conversation",
+            "Value",
+            "Class",
+            "Provider",
+            "Model",
+        ]
     }
 
     fn rows() -> Vec<Vec<String>> {
@@ -584,10 +646,16 @@ mod tests {
         assert!(!doc.is_encrypted(), "a plain table carries no handler");
         let text = doc.extract_text(&[1]).expect("the text of page 1");
         assert!(text.contains("Leak report"), "title");
-        assert!(text.contains("Renée"), "an accented name survives WinAnsiEncoding");
+        assert!(
+            text.contains("Renée"),
+            "an accented name survives WinAnsiEncoding"
+        );
         // A cell wraps at its column width, so the path reads across lines.
         let flat: String = text.chars().filter(|c| !c.is_whitespace()).collect();
-        assert!(flat.contains(r"C:\Users\Renée\Desktop\api_key=sk-live-0p3n.txt"), "a Windows path");
+        assert!(
+            flat.contains(r"C:\Users\Renée\Desktop\api_key=sk-live-0p3n.txt"),
+            "a Windows path"
+        );
         assert!(text.contains("4111 1111 1111 1111"), "the value in full");
         assert!(text.contains("page 1 of 1"), "footer");
     }
@@ -596,9 +664,17 @@ mod tests {
     /// a password that works leaves nothing of the report in the clear.
     #[test]
     fn a_password_table_hides_every_value() {
-        let pdf = table("Leak report", &columns(), &rows(), Some("correct horse")).expect("encrypted table");
+        let pdf = table("Leak report", &columns(), &rows(), Some("correct horse"))
+            .expect("encrypted table");
         let text = String::from_utf8_lossy(&pdf).into_owned();
-        for clear in ["sk-live", "Contract review", "gpt-4o", "Leak report", "api-key", "qwen2.5"] {
+        for clear in [
+            "sk-live",
+            "Contract review",
+            "gpt-4o",
+            "Leak report",
+            "api-key",
+            "qwen2.5",
+        ] {
             assert!(!text.contains(clear), "{clear} left the file in the clear");
         }
         let doc = Document::load_mem(&pdf).expect("a reader opens the file");
@@ -611,7 +687,10 @@ mod tests {
     fn a_password_longer_than_the_format_allows_is_refused() {
         let one = vec![vec!["x".to_string()]];
         let columns = ["Value"];
-        assert!(table("Report", &columns, &one, Some(&"x".repeat(MAX_PASSWORD))).is_ok(), "127 bytes pass");
+        assert!(
+            table("Report", &columns, &one, Some(&"x".repeat(MAX_PASSWORD))).is_ok(),
+            "127 bytes pass"
+        );
         let long = "x".repeat(MAX_PASSWORD + 1);
         let why = table("Report", &columns, &one, Some(&long)).expect_err("128 bytes fail");
         assert!(why.contains("127"), "the refusal names the limit: {why}");
@@ -621,16 +700,30 @@ mod tests {
     fn a_long_table_paginates() {
         let columns = vec!["#", "Class", "Value"];
         let rows: Vec<Vec<String>> = (0..400)
-            .map(|i| vec![format!("{i:03}"), "api-key".to_string(), format!("sk-live-{i:0>8}")])
+            .map(|i| {
+                vec![
+                    format!("{i:03}"),
+                    "api-key".to_string(),
+                    format!("sk-live-{i:0>8}"),
+                ]
+            })
             .collect();
         let pdf = table("Long report", &columns, &rows, None).expect("long table");
         let doc = Document::load_mem(&pdf).expect("a reader opens the file");
         let pages = doc.get_pages();
         assert!(pages.len() > 4, "{} pages for 400 rows", pages.len());
         let last = *pages.keys().next_back().expect("the last page");
-        let text = doc.extract_text(&[last]).expect("the text of the last page");
-        assert!(text.contains(&format!("page {last} of {}", pages.len())), "the footer names the count");
-        assert!(text.contains(&format!("sk-live-{:0>8}", 399)), "the last row survives");
+        let text = doc
+            .extract_text(&[last])
+            .expect("the text of the last page");
+        assert!(
+            text.contains(&format!("page {last} of {}", pages.len())),
+            "the footer names the count"
+        );
+        assert!(
+            text.contains(&format!("sk-live-{:0>8}", 399)),
+            "the last row survives"
+        );
     }
 
     #[test]
@@ -640,7 +733,10 @@ mod tests {
         assert_eq!(first.len(), 24, "144 bits at six bits a character");
         assert!(first.len() >= 20);
         assert_ne!(first, second, "two draws differ");
-        assert!(first.chars().all(|c| c.is_ascii() && !c.is_whitespace()), "typeable anywhere");
+        assert!(
+            first.chars().all(|c| c.is_ascii() && !c.is_whitespace()),
+            "typeable anywhere"
+        );
     }
 
     /// The independent reader check needs the bytes on disk. Run it with
@@ -653,7 +749,16 @@ mod tests {
         let secret = "Sk-Report-2026-Passphrase";
         // The column set `lib.rs` exports, so a sample is the real report, and
         // the `Sent` column comes from `clock`.
-        let columns = ["Sent", "Conversation", "Value", "Class", "Provider", "Model", "Base URL", "Carried by"];
+        let columns = [
+            "Sent",
+            "Conversation",
+            "Value",
+            "Class",
+            "Provider",
+            "Model",
+            "Base URL",
+            "Carried by",
+        ];
         let at = 1_760_000_000u64;
         let rows = vec![
             vec![
@@ -681,7 +786,13 @@ mod tests {
         let locked = table("First Mate leak report", &columns, &rows, Some(secret)).unwrap();
         let columns = vec!["#", "Class", "Value"];
         let rows: Vec<Vec<String>> = (0..260)
-            .map(|i| vec![format!("{i:03}"), "api-key".to_string(), format!("sk-live-{i:0>8}")])
+            .map(|i| {
+                vec![
+                    format!("{i:03}"),
+                    "api-key".to_string(),
+                    format!("sk-live-{i:0>8}"),
+                ]
+            })
             .collect();
         let long = table("Long report", &columns, &rows, Some(secret)).unwrap();
         std::fs::write(dir.join("plain.pdf"), plain).unwrap();

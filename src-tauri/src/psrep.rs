@@ -1,4 +1,4 @@
-use crate::exec::{MAX_BG_OUTPUT, cmd_timeout};
+use crate::exec::{cmd_timeout, MAX_BG_OUTPUT};
 
 // One long-lived `powershell.exe` owned by a dedicated worker thread. Each
 // command is script text written to the child's stdin as data, never argv,
@@ -36,7 +36,11 @@ enum PsMsg {
 enum PsReply {
     /// stderr is buffered separately, so cross-stream interleaving is not
     /// preserved.
-    Done { stdout: String, code: i32, stderr: String },
+    Done {
+        stdout: String,
+        code: i32,
+        stderr: String,
+    },
     /// Command never ran; one-shot fallback is safe.
     Broken { note: String },
     /// Command may have partially run; partial output only, never re-run.
@@ -45,9 +49,18 @@ enum PsReply {
 
 #[derive(Debug)]
 pub(crate) enum PsRun {
-    Done { stdout: String, code: i32, stderr: String },
-    Broken { note: String },
-    TimedOut { partial: String, note: String },
+    Done {
+        stdout: String,
+        code: i32,
+        stderr: String,
+    },
+    Broken {
+        note: String,
+    },
+    TimedOut {
+        partial: String,
+        note: String,
+    },
 }
 
 struct PsState {
@@ -58,9 +71,8 @@ struct PsState {
     nonce: u64,
 }
 
-static PS_QUEUE: std::sync::LazyLock<
-    std::sync::Mutex<Option<std::sync::mpsc::Sender<PsMsg>>>,
-> = std::sync::LazyLock::new(Default::default);
+static PS_QUEUE: std::sync::LazyLock<std::sync::Mutex<Option<std::sync::mpsc::Sender<PsMsg>>>> =
+    std::sync::LazyLock::new(Default::default);
 
 fn ps_worker_tx() -> std::sync::mpsc::Sender<PsMsg> {
     let mut guard = PS_QUEUE.lock().unwrap();
@@ -80,7 +92,13 @@ fn ps_spawn() -> Result<PsState, String> {
         .unwrap_or(1)
         % 1_000_000_000;
     let mut child = std::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", PS_REPL])
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            PS_REPL,
+        ])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -177,7 +195,10 @@ fn ps_handle(cmd: PsCommand, seq: u64, state: &mut Option<PsState>) {
     let mut script = String::new();
     if let Some(dir) = &cmd.cwd {
         // Session cwd persists into later commands by design.
-        script.push_str(&format!("Set-Location -LiteralPath '{}'\n", dir.replace('\'', "''")));
+        script.push_str(&format!(
+            "Set-Location -LiteralPath '{}'\n",
+            dir.replace('\'', "''")
+        ));
     }
     script.push_str(&cmd.text);
     if !script.ends_with('\n') {
@@ -187,7 +208,12 @@ fn ps_handle(cmd: PsCommand, seq: u64, state: &mut Option<PsState>) {
     // underscores. The echoed `__FM_END_<id>:` must match Rust's sentinel
     // exactly.
     script.push_str(&format!("__FM_RUN_{id}\n"));
-    if st.stdin.write_all(script.as_bytes()).and_then(|_| st.stdin.flush()).is_err() {
+    if st
+        .stdin
+        .write_all(script.as_bytes())
+        .and_then(|_| st.stdin.flush())
+        .is_err()
+    {
         let _ = st.child.kill();
         *state = None;
         let _ = cmd.reply.send(PsReply::Broken {
@@ -220,8 +246,7 @@ fn ps_handle(cmd: PsCommand, seq: u64, state: &mut Option<PsState>) {
                         .and_then(|s| s.trim().parse::<i32>().ok())
                         .unwrap_or(1);
                     let code = if ok == 0 { 1 } else { lastexit.unwrap_or(0) };
-                    let stderr =
-                        std::mem::take(&mut *st.errbuf.lock().unwrap());
+                    let stderr = std::mem::take(&mut *st.errbuf.lock().unwrap());
                     let _ = cmd.reply.send(PsReply::Done {
                         stdout: out,
                         code,
@@ -288,10 +313,7 @@ fn ps_handle(cmd: PsCommand, seq: u64, state: &mut Option<PsState>) {
                 } else if status.is_some() {
                     "session child exited mid-command without an exit code".into()
                 } else {
-                    format!(
-                        "session command timed out after {}s",
-                        cmd.timeout.as_secs()
-                    )
+                    format!("session command timed out after {}s", cmd.timeout.as_secs())
                 },
             });
         }
@@ -313,7 +335,9 @@ pub(crate) async fn ps_session_exec(
         }))
         .is_err()
     {
-        return PsRun::Broken { note: "session worker thread gone".into() };
+        return PsRun::Broken {
+            note: "session worker thread gone".into(),
+        };
     }
     // The worker enforces each command's own deadline. A command can also queue
     // behind one stuck predecessor, which is killed at its own cap. The margin
@@ -321,9 +345,15 @@ pub(crate) async fn ps_session_exec(
     let margin = timeout + cmd_timeout() + std::time::Duration::from_secs(30);
     let joined = tokio::task::spawn_blocking(move || reply_rx.recv_timeout(margin)).await;
     match joined {
-        Ok(Ok(PsReply::Done { stdout, code, stderr })) => {
-            PsRun::Done { stdout, code, stderr }
-        }
+        Ok(Ok(PsReply::Done {
+            stdout,
+            code,
+            stderr,
+        })) => PsRun::Done {
+            stdout,
+            code,
+            stderr,
+        },
         Ok(Ok(PsReply::Broken { note })) => PsRun::Broken { note },
         Ok(Ok(PsReply::TimedOut { partial, note })) => PsRun::TimedOut { partial, note },
         // The reply never arrived, so the command may or may not have run. The
@@ -362,10 +392,15 @@ mod tests {
         use std::time::Duration;
         let t = Duration::from_secs(60);
         let a = ps_session_exec("$fmTestVar = 6 * 7", None, t).await;
-        assert!(matches!(a, PsRun::Done { code: 0, .. }), "spawn+assign: {a:?}");
+        assert!(
+            matches!(a, PsRun::Done { code: 0, .. }),
+            "spawn+assign: {a:?}"
+        );
         let b = ps_session_exec("Write-Output \"val=$fmTestVar\"", None, t).await;
         match b {
-            PsRun::Done { stdout, code: 0, .. } => {
+            PsRun::Done {
+                stdout, code: 0, ..
+            } => {
                 assert!(stdout.contains("val=42"), "state must persist: {stdout}");
             }
             other => panic!("expected Done, got {other:?}"),
@@ -377,7 +412,9 @@ mod tests {
         )
         .await;
         match c {
-            PsRun::Done { stdout, code: 0, .. } => {
+            PsRun::Done {
+                stdout, code: 0, ..
+            } => {
                 assert!(stdout.contains("line one") && stdout.contains("line two"));
             }
             other => panic!("here-string: {other:?}"),
@@ -391,9 +428,15 @@ mod tests {
             other => panic!("throw: {other:?}"),
         }
         let e = ps_session_exec("Write-Output alive", None, t).await;
-        assert!(matches!(e, PsRun::Done { code: 0, .. }), "session survives throw: {e:?}");
+        assert!(
+            matches!(e, PsRun::Done { code: 0, .. }),
+            "session survives throw: {e:?}"
+        );
         let f = ps_session_exec("", Some("C:\\Windows".into()), t).await;
-        assert!(matches!(f, PsRun::Done { code: 0, .. }), "set-location: {f:?}");
+        assert!(
+            matches!(f, PsRun::Done { code: 0, .. }),
+            "set-location: {f:?}"
+        );
         let g = ps_session_exec("(Get-Location).Path", None, t).await;
         match g {
             PsRun::Done { stdout, .. } => {
@@ -415,7 +458,9 @@ mod tests {
         )
         .await;
         match j {
-            PsRun::Done { stdout, code: 0, .. } => assert!(stdout.contains("survived")),
+            PsRun::Done {
+                stdout, code: 0, ..
+            } => assert!(stdout.contains("survived")),
             other => panic!("protocol-var clobber must complete, got {other:?}"),
         }
         crate::llm::stop_chat();

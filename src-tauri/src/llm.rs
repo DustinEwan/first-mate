@@ -1,22 +1,23 @@
-use std::collections::HashMap;
-use tauri::Emitter;
 use crate::audit;
 use crate::context;
 use crate::conversations;
 use crate::decide;
 use crate::execute::execute_tool;
-use crate::leak;
 use crate::log::{dump_request, log};
 use crate::provider_catalog::{self, Api};
 use crate::redact;
 use crate::report::tool_report;
 use crate::route::looks_like_unexecuted_intent;
+use crate::scan;
 use crate::settings;
 use crate::tooldefs::{agent_tools, to_tool_defs};
+use std::collections::HashMap;
+use tauri::Emitter;
 
 /// The tool loop has no turn cap, so a stop request is the only bound on the
 /// loop.
-pub(crate) static CHAT_STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub(crate) static CHAT_STOP: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 fn chat_stop_requested() -> bool {
     CHAT_STOP.load(std::sync::atomic::Ordering::SeqCst)
@@ -76,16 +77,19 @@ fn request_to_json(
     tools: &[lmkit::ToolDefinition],
 ) -> serde_json::Value {
     let msgs = chat_rows(history);
-    let tools_arr: Vec<serde_json::Value> = tools.iter().map(|t| {
-        serde_json::json!({
-            "type": "function",
-            "function": {
-                "name": t.function.name,
-                "description": t.function.description,
-                "parameters": t.function.parameters
-            }
+    let tools_arr: Vec<serde_json::Value> = tools
+        .iter()
+        .map(|t| {
+            serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": t.function.name,
+                    "description": t.function.description,
+                    "parameters": t.function.parameters
+                }
+            })
         })
-    }).collect();
+        .collect();
     serde_json::json!({ "messages": msgs, "tools": tools_arr })
 }
 
@@ -113,8 +117,8 @@ struct ChatParams {
     /// `docs/COMPACTION.md` defines the `context_window` 0 sentinel.
     context_window: u32,
     compact_at_percent: u8,
-    /// The conversation name the leak report records, already resolved: a run
-    /// with no saved conversation records `leak::UNSAVED`.
+    /// The conversation the transcript records, already resolved: a run with no
+    /// saved conversation writes the transcript the conversation list hides.
     conversation: String,
 }
 
@@ -136,13 +140,10 @@ pub(crate) async fn chat_with_llm(
     context_window: u32,
     compact_at_percent: u8,
     // The conversation the console saves this transcript to, or None when the
-    // user never saved it. The leak report names it.
+    // user never saved it. The transcript names itself.
     conversation: Option<String>,
 ) -> Result<String, String> {
     CHAT_STOP.store(false, std::sync::atomic::Ordering::SeqCst);
-    // A declared value added while First Mate ran makes the stored rows worth
-    // reading again, once, before this run adds more rows.
-    leak::rescan_now(&app);
     let params = ChatParams {
         provider,
         base_url,
@@ -154,11 +155,11 @@ pub(crate) async fn chat_with_llm(
         loaded_skills,
         context_window,
         compact_at_percent,
-        // A conversation the user never saved has no name, and a report row with
-        // no name names no conversation.
+        // A conversation the user never saved has no name. Its transcript stays
+        // out of the conversation list.
         conversation: conversation
             .filter(|name| !name.trim().is_empty())
-            .unwrap_or_else(|| leak::UNSAVED.to_string()),
+            .unwrap_or_else(|| scan::TEMPORARY.to_string()),
     };
     // lmkit owns the Anthropic and Gemini wire formats, so those providers
     // use it. Every other provider speaks the OpenAI-compatible HTTP API.
@@ -173,6 +174,7 @@ pub(crate) async fn chat_with_llm(
 fn redactor(
     app: &tauri::AppHandle,
     provider: &str,
+    conversation: &str,
     history: &[HistoryItem],
 ) -> Option<redact::Redactor> {
     let (hide, values) = settings::redaction_for(app, provider);
@@ -183,35 +185,9 @@ fn redactor(
     for value in values {
         red.seed(&value);
     }
-    red.seed_left();
+    red.seed_left(scan::left_values(app, conversation));
     red.note_sent(history.iter().map(|h| h.content.clone()));
     Some(red)
-}
-
-/// The detector the leak report reads when the provider redacts nothing. The
-/// switch decides what the provider sees; it decides nothing about what the
-/// report records, so a provider with no redaction still has every value it
-/// received written down. The registry seeds it, because a declared value has no
-/// shape the patterns would match.
-fn watcher(app: &tauri::AppHandle, provider: &str) -> redact::Redactor {
-    let (_, values) = settings::redaction_for(app, provider);
-    let mut watch = redact::Redactor::new();
-    for value in values {
-        watch.seed(&value);
-    }
-    watch
-}
-
-/// The detector for this send. With the switch on, the run's own redactor is
-/// the detector, because it holds the registry and the memory of what already
-/// left. With the switch off, the bare watcher is.
-fn detector<'a>(
-    red: &'a Option<redact::Redactor>,
-    watch: &'a Option<redact::Redactor>,
-) -> &'a redact::Redactor {
-    red.as_ref()
-        .or(watch.as_ref())
-        .expect("a detector exists whatever the switch says")
 }
 
 struct Scorer {
@@ -262,7 +238,10 @@ async fn gate(
             red.seed(value);
         }
         if !answer.approved {
-            log(&format!("AUDIT: you denied a message at {:.2}", verdict.best));
+            log(&format!(
+                "AUDIT: you denied a message at {:.2}",
+                verdict.best
+            ));
             return Err(hold("denied", ""));
         }
         red.record(&message);
@@ -294,7 +273,10 @@ async fn brief_clears_gate(
     };
     match decide::score(&s.base, brief).await {
         Ok(v) if v.best >= s.threshold => {
-            log(&format!("COMPACT: the scorer flagged the brief at {:.2}", v.best));
+            log(&format!(
+                "COMPACT: the scorer flagged the brief at {:.2}",
+                v.best
+            ));
             false
         }
         Ok(_) => true,
@@ -576,9 +558,8 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
     } = p;
     use futures_util::StreamExt;
     use lmkit::{
-        create_chat_provider, merge_tool_call_deltas, ChatEvent, ChatMessage,
-        ChatRequest, Provider, ProviderConfig, Role, ToolCallDelta,
-        ToolDefinition,
+        create_chat_provider, merge_tool_call_deltas, ChatEvent, ChatMessage, ChatRequest,
+        Provider, ProviderConfig, Role, ToolCallDelta, ToolDefinition,
     };
 
     let base = base_url.trim_end_matches('/');
@@ -590,9 +571,9 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
         return Err("no model selected".into());
     }
 
-    // The receiver every leak of this run is recorded against. The provider
-    // config takes the model by value below, so the report keeps its own copy.
-    let to = leak::Send {
+    // The receiver every row of this run went to. The provider config takes the
+    // model by value below, so the record keeps its own copy.
+    let to = conversations::Send {
         conversation,
         provider: provider.clone(),
         model: model.clone(),
@@ -609,7 +590,12 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
 
     log(&format!(
         "CHAT START: provider={} base={} model={} msg_len={} sys_len={} prior={}",
-        provider, base, model, message.len(), system_prompt.len(), prior_history.len()
+        provider,
+        base,
+        model,
+        message.len(),
+        system_prompt.len(),
+        prior_history.len()
     ));
 
     let provider_enum = match provider.as_str() {
@@ -627,12 +613,7 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
         ProviderConfig::with_base_url(provider_enum, api_key, format!("{base}/v1"), model)
     };
     let llm = create_chat_provider(&config).map_err(|e| e.to_string())?;
-    let mut red = redactor(&app, &provider, &prior_history);
-    // The leak report runs whatever the provider's `Hide sensitive information`
-    // switch says, so a provider that redacts nothing still has every value it
-    // received written down. With the switch on, the run's own redactor is the
-    // detector, because it holds the registry and the memory of what left.
-    let watch = red.is_none().then(|| watcher(&app, &provider));
+    let mut red = redactor(&app, &provider, &to.conversation, &prior_history);
     // The tool that produced each tool-result row: a tool row carries only its
     // call id, and the report names the carrier.
     let mut carriers: HashMap<String, String> = HashMap::new();
@@ -643,18 +624,15 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
     // static. Availability is not schema-gated: the dispatch gate in
     // `execute.rs` enforces the skill contract. The identical array also keeps
     // provider prefix caching warm (docs/SKILLS.md).
-    let active: Vec<serde_json::Value> = agent_tools()
-        .as_array()
-        .expect("tool array")
-        .clone();
+    let active: Vec<serde_json::Value> = agent_tools().as_array().expect("tool array").clone();
 
     // Every provider windows the persisted transcript the same way. The brief
     // stands in for rows too old to send. The tail is cut only at a turn
     // boundary (docs/COMPACTION.md).
     let threshold = context::threshold_tokens(window, compact_at_percent);
     let overhead = context::tools_tokens();
-    let keep_budget =
-        context::target_tokens(threshold).saturating_sub(context::estimate_str(&system_prompt) + overhead);
+    let keep_budget = context::target_tokens(threshold)
+        .saturating_sub(context::estimate_str(&system_prompt) + overhead);
     let (mut summary, start, mut cut) = plan_history(&prior_history, keep_budget);
     let mut kept_from = start;
     let rules = if cut > 0 { brief_rules() } else { None };
@@ -666,14 +644,7 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
         let rules = rules.as_deref().expect("checked just above");
         let ledger = history_msgs(&prior_history);
         let opening = pinned_opening(&ledger, start, start + cut);
-        let (dropped, opening) =
-            fold_wire(&mut red, ledger[start..start + cut].to_vec(), opening);
-        // Whatever the pass leaves in the clear reaches the summarizer, and the
-        // report names it.
-        if let Some(text) = opening.as_deref() {
-            leak::record_send(&to, detector(&red, &watch), text, None);
-        }
-        leak::record_rows(&to, detector(&red, &watch), &dropped, &carriers);
+        let (dropped, opening) = fold_wire(&mut red, ledger[start..start + cut].to_vec(), opening);
         let brief_request = ChatRequest {
             messages: vec![
                 ChatMessage::system(rules),
@@ -741,8 +712,7 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
     // First Mate remembers tool results for one run, so a later turn can drop or
     // shorten a repeat.
     let mut seen: HashMap<String, String> = HashMap::new();
-    let mut loaded_skills: std::collections::HashSet<String> =
-        loaded_skills.into_iter().collect();
+    let mut loaded_skills: std::collections::HashSet<String> = loaded_skills.into_iter().collect();
     let mut turn = 0;
     let mut nudged = false;
     loop {
@@ -774,7 +744,12 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
         // `wire` moves into the request below, so the rows that leave are
         // captured here and stored once the stream opens.
         let sent = chat_rows(&wire);
-        log(&format!("TURN {}: history_msgs={} tools={}", turn, wire.len(), tools.len()));
+        log(&format!(
+            "TURN {}: history_msgs={} tools={}",
+            turn,
+            wire.len(),
+            tools.len()
+        ));
         let req_json = match serde_json::to_string(&request_to_json(&wire, &tools)) {
             Ok(j) => j,
             Err(e) => {
@@ -799,13 +774,20 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
         let mut stream = match llm.complete_stream(&request).await {
             Ok(s) => s,
             Err(e) => {
-                log(&format!("TURN {} ERROR: complete_stream failed: {}", turn, e));
+                log(&format!(
+                    "TURN {} ERROR: complete_stream failed: {}",
+                    turn, e
+                ));
                 let dump = dump_request(turn, &req_json);
-                log(&format!("TURN {} REQUEST DUMPED to {}", turn, dump.display()));
+                log(&format!(
+                    "TURN {} REQUEST DUMPED to {}",
+                    turn,
+                    dump.display()
+                ));
                 return Err(e.to_string());
             }
         };
-        conversations::record_send(&to, detector(&red, &watch), &sent, &carriers);
+        conversations::record_send(&to, &sent, &carriers);
         while let Some(event) = stream.next().await {
             let event = event.map_err(|e| e.to_string())?;
             match event {
@@ -826,7 +808,10 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
         }
         log(&format!(
             "TURN {} STREAM DONE: text_len={} tool_deltas={} history_msgs={}",
-            turn, text.len(), deltas.len(), history.len()
+            turn,
+            text.len(),
+            deltas.len(),
+            history.len()
         ));
 
         let calls = merge_tool_call_deltas(&deltas);
@@ -853,8 +838,7 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
                 }
                 let name = call.function.name.clone();
                 let mut args: serde_json::Value =
-                    serde_json::from_str(&call.function.arguments)
-                        .unwrap_or(serde_json::json!({}));
+                    serde_json::from_str(&call.function.arguments).unwrap_or(serde_json::json!({}));
                 if let Some(r) = red.as_ref() {
                     r.detokenize_json(&mut args);
                 }
@@ -872,11 +856,14 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
                 let ok = !result.starts_with("Error");
                 let report = tool_report(&name, &args, &result, t0.elapsed().as_millis());
                 conversations::record_ledger(&to, &call.id, &report);
-                let _ = app.emit("tool_result", serde_json::json!({
-                    "name": &name,
-                    "transcript": report.transcript(),
-                    "report": &report,
-                }));
+                let _ = app.emit(
+                    "tool_result",
+                    serde_json::json!({
+                        "name": &name,
+                        "transcript": report.transcript(),
+                        "report": &report,
+                    }),
+                );
                 history.push(ChatMessage::tool(call.id.clone(), result));
                 carriers.insert(call.id.clone(), name.clone());
                 if name == "load_skill" && ok {
@@ -887,7 +874,9 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
             }
             log(&format!(
                 "TURN {} TOOL TURN: {} calls, history_msgs={}",
-                turn, calls.len(), history.len()
+                turn,
+                calls.len(),
+                history.len()
             ));
             turn += 1;
             continue;
@@ -897,7 +886,9 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
         // The nudge makes "Let me verify X" produce the verification.
         if !nudged && calls.is_empty() && looks_like_unexecuted_intent(&text) {
             nudged = true;
-            log(&format!("INTENT NUDGE: turn {turn} declared action without a tool call: {text:?}"));
+            log(&format!(
+                "INTENT NUDGE: turn {turn} declared action without a tool call: {text:?}"
+            ));
             history.push(ChatMessage {
                 role: Role::Assistant,
                 content: Some(text.clone()),
@@ -1005,19 +996,14 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
     let client = reqwest::Client::new();
     let (window, window_src) =
         resolve_window(&provider, base, &api_key, &model, context_window).await;
-    let mut red = redactor(&app, &provider, &prior_history);
+    let mut red = redactor(&app, &provider, &conversation, &prior_history);
     let scorer = scorer(&app);
     let mut carry = String::new();
-    // The leak report runs whatever the provider's `Hide sensitive information`
-    // switch says, so a provider that redacts nothing still has every value it
-    // received written down. With the switch on, the run's own redactor is the
-    // detector, because it holds the registry and the memory of what left.
-    let watch = red.is_none().then(|| watcher(&app, &provider));
     // The tool that produced each tool-result row: a tool row carries only its
     // call id, and the report names the carrier.
     let mut carriers: HashMap<String, String> = HashMap::new();
-    // The receiver every leak of this run is recorded against.
-    let to = leak::Send {
+    // The receiver every row of this run went to.
+    let to = conversations::Send {
         conversation,
         provider: provider.clone(),
         model: model.clone(),
@@ -1026,8 +1012,8 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
 
     let threshold = context::threshold_tokens(window, compact_at_percent);
     let overhead = context::tools_tokens();
-    let keep_budget =
-        context::target_tokens(threshold).saturating_sub(context::estimate_str(&system_prompt) + overhead);
+    let keep_budget = context::target_tokens(threshold)
+        .saturating_sub(context::estimate_str(&system_prompt) + overhead);
     let (mut summary, start, mut cut) = plan_history(&prior_history, keep_budget);
     let mut kept_from = start;
     let rules = if cut > 0 { brief_rules() } else { None };
@@ -1039,15 +1025,8 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
         let rules = rules.as_deref().expect("checked just above");
         let ledger = history_msgs(&prior_history);
         let opening = pinned_opening(&ledger, start, start + cut);
-        let (dropped, opening) =
-            fold_wire(&mut red, ledger[start..start + cut].to_vec(), opening);
+        let (dropped, opening) = fold_wire(&mut red, ledger[start..start + cut].to_vec(), opening);
         let transcript = brief_transcript(opening.as_deref(), summary.as_deref(), &dropped);
-        // Whatever the pass leaves in the clear reaches the summarizer, and the
-        // report names it.
-        if let Some(text) = opening.as_deref() {
-            leak::record_send(&to, detector(&red, &watch), text, None);
-        }
-        leak::record_rows(&to, detector(&red, &watch), &dropped, &carriers);
         match summarize_http(&client, &url, &api_key, &model, rules, &transcript).await {
             Ok(b) => {
                 log(&format!(
@@ -1097,8 +1076,7 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
 
     let tools: Vec<serde_json::Value> = agent_tools().as_array().expect("tool array").clone();
     let mut seen: HashMap<String, String> = HashMap::new();
-    let mut loaded_skills: std::collections::HashSet<String> =
-        loaded_skills.into_iter().collect();
+    let mut loaded_skills: std::collections::HashSet<String> = loaded_skills.into_iter().collect();
     let mut turn = 0;
     let mut nudged = false;
     // The endpoint's own token count for the last request, and the length of
@@ -1166,13 +1144,9 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
                             context::get_summary(&msgs[0]).as_deref(),
                             &dropped,
                         );
-                        // Whatever the pass leaves in the clear reaches the
-                        // summarizer, and the report names it.
-                        if let Some(text) = opening.as_deref() {
-                            leak::record_send(&to, detector(&red, &watch), text, None);
-                        }
-                        leak::record_rows(&to, detector(&red, &watch), &dropped, &carriers);
-                        match summarize_http(&client, &url, &api_key, &model, &rules, &transcript).await {
+                        match summarize_http(&client, &url, &api_key, &model, &rules, &transcript)
+                            .await
+                        {
                             Ok(b) => {
                                 if brief_clears_gate(&red, &scorer, &b).await {
                                     msgs.drain(1 + head..1 + tail);
@@ -1231,7 +1205,11 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
             Err(e) => {
                 log(&format!("TURN {} ERROR: request failed: {}", turn, e));
                 let dump = dump_request(turn, &body_json);
-                log(&format!("TURN {} REQUEST DUMPED to {}", turn, dump.display()));
+                log(&format!(
+                    "TURN {} REQUEST DUMPED to {}",
+                    turn,
+                    dump.display()
+                ));
                 return Err(format!("request failed: {e}"));
             }
         };
@@ -1244,7 +1222,11 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
                 text.chars().take(400).collect::<String>()
             ));
             let dump = dump_request(turn, &body_json);
-            log(&format!("TURN {} REQUEST DUMPED to {}", turn, dump.display()));
+            log(&format!(
+                "TURN {} REQUEST DUMPED to {}",
+                turn,
+                dump.display()
+            ));
             return Err(format!(
                 "API error ({status}): {}",
                 text.chars().take(600).collect::<String>()
@@ -1255,7 +1237,7 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
         // receiver sent nothing. The scan reads the same stored text, so one
         // row is scanned once, whatever the later turns re-send.
         if let Some(rows) = body["messages"].as_array() {
-            conversations::record_send(&to, detector(&red, &watch), rows, &carriers);
+            conversations::record_send(&to, rows, &carriers);
         }
 
         let mut stream = resp.bytes_stream();
@@ -1268,7 +1250,9 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
             while let Some(pos) = buf.find('\n') {
                 let line: String = buf.drain(..=pos).collect();
                 let line = line.trim();
-                let Some(data) = line.strip_prefix("data:") else { continue };
+                let Some(data) = line.strip_prefix("data:") else {
+                    continue;
+                };
                 let data = data.trim();
                 if data == "[DONE]" {
                     continue;
@@ -1287,16 +1271,24 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
                 if let Some(p) = v.pointer("/usage/prompt_tokens").and_then(|p| p.as_u64()) {
                     measured = Some(p as usize);
                 }
-                let Some(choice) = v.get("choices").and_then(|c| c.get(0)) else { continue };
+                let Some(choice) = v.get("choices").and_then(|c| c.get(0)) else {
+                    continue;
+                };
                 let delta = choice.get("delta");
-                if let Some(t) = delta.and_then(|d| d.get("content")).and_then(|c| c.as_str()) {
+                if let Some(t) = delta
+                    .and_then(|d| d.get("content"))
+                    .and_then(|c| c.as_str())
+                {
                     if !t.is_empty() {
                         let shown = shown(&red, &mut carry, t);
                         text.push_str(t);
                         let _ = app.emit("stream_chunk", serde_json::json!({ "text": shown }));
                     }
                 }
-                if let Some(tcs) = delta.and_then(|d| d.get("tool_calls")).and_then(|t| t.as_array()) {
+                if let Some(tcs) = delta
+                    .and_then(|d| d.get("tool_calls"))
+                    .and_then(|t| t.as_array())
+                {
                     for tc in tcs {
                         merge_tool_call_delta(&mut calls, tc);
                     }
@@ -1370,11 +1362,14 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
                     .unwrap_or_else(|e| format!("Error: {e}"));
                 let report = tool_report(&name, &args, &result, t0.elapsed().as_millis());
                 conversations::record_ledger(&to, &call.id, &report);
-                let _ = app.emit("tool_result", serde_json::json!({
-                    "name": &name,
-                    "transcript": report.transcript(),
-                    "report": &report,
-                }));
+                let _ = app.emit(
+                    "tool_result",
+                    serde_json::json!({
+                        "name": &name,
+                        "transcript": report.transcript(),
+                        "report": &report,
+                    }),
+                );
                 msgs.push(serde_json::json!({
                     "role": "tool", "tool_call_id": call.id, "content": result
                 }));
@@ -1400,7 +1395,11 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
                                     } }
                                 ]
                             }));
-                            log(&format!("VISION: attached {} bytes from {}", bytes.len(), path));
+                            log(&format!(
+                                "VISION: attached {} bytes from {}",
+                                bytes.len(),
+                                path
+                            ));
                         }
                         Err(e) => log(&format!("VISION: cannot read {path}: {e}")),
                     }
@@ -1423,7 +1422,9 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
 
         if !nudged && looks_like_unexecuted_intent(&text) {
             nudged = true;
-            log(&format!("INTENT NUDGE: turn {turn} declared action without a tool call: {text:?}"));
+            log(&format!(
+                "INTENT NUDGE: turn {turn} declared action without a tool call: {text:?}"
+            ));
             msgs.push(serde_json::json!({"role": "assistant", "content": text}));
             msgs.push(serde_json::json!({
                 "role": "user",
@@ -1477,7 +1478,11 @@ mod tests {
         ];
         let (summary, start, cut) = plan_history(&with_brief, 10);
         assert_eq!(summary.as_deref(), Some("the brief"));
-        assert_eq!((start, cut), (2, 2), "the pre-brief rows are not counted twice");
+        assert_eq!(
+            (start, cut),
+            (2, 2),
+            "the pre-brief rows are not counted twice"
+        );
         assert_eq!(with_brief[start + cut].role, "user");
 
         let one_turn = vec![row("user", "task"), row("assistant", "done")];
@@ -1506,11 +1511,17 @@ mod tests {
             1,
             "it is offered once, as the instruction, not again as a row"
         );
-        assert!(t.contains("[tool] 338 entries"), "the folded rows follow it: {t}");
+        assert!(
+            t.contains("[tool] 338 entries"),
+            "the folded rows follow it: {t}"
+        );
 
         // The pre-run shape: the cut is a prefix. When the cut swallows the
         // opening row, the dropped material already carries the instruction.
-        let ledger = history_msgs(&[row("user", "count the fonts folder"), row("assistant", "did it")]);
+        let ledger = history_msgs(&[
+            row("user", "count the fonts folder"),
+            row("assistant", "did it"),
+        ]);
         assert_eq!(pinned_opening(&ledger, 0, 1), None);
         assert_eq!(
             pinned_opening(&ledger, 1, 2).as_deref(),
@@ -1537,10 +1548,13 @@ mod tests {
             assert_eq!(s, None);
             (start, cut)
         };
-        let after =
-            context::estimate_tokens(&history_msgs(&prior[start + cut..])) + context::tools_tokens();
+        let after = context::estimate_tokens(&history_msgs(&prior[start + cut..]))
+            + context::tools_tokens();
         assert!(cut > 0, "the history must actually be folded");
-        assert!(after <= threshold, "the fold must land under the threshold: {after}");
+        assert!(
+            after <= threshold,
+            "the fold must land under the threshold: {after}"
+        );
         assert!(
             threshold - after > threshold / 10,
             "and leave headroom before the next fold: {after} of {threshold}"
@@ -1571,7 +1585,10 @@ mod tests {
             ]}),
         ];
         let t = brief_transcript(None, Some("user wanted drivers"), &dropped);
-        assert!(t.starts_with("Earlier brief"), "the old brief is folded in: {t}");
+        assert!(
+            t.starts_with("Earlier brief"),
+            "the old brief is folded in: {t}"
+        );
         assert!(t.contains("user wanted drivers"));
         assert!(t.contains("[user] open the drivers page"));
         // The call names itself, so the later result carries that name.
@@ -1582,7 +1599,11 @@ mod tests {
 
     #[test]
     fn resumed_skills_carry_their_instructions_into_the_prompt() {
-        let loaded = ["winapp".to_string(), "filesystem".to_string(), "winapp".to_string()];
+        let loaded = [
+            "winapp".to_string(),
+            "filesystem".to_string(),
+            "winapp".to_string(),
+        ];
         let out = system_prompt_with_skills("BASE", &loaded);
         assert!(out.starts_with("BASE\n\n## Loaded skill: "));
         let fs = out
@@ -1650,7 +1671,8 @@ mod tests {
         assert_eq!(extract_screenshot_path("no image here").as_deref(), None);
         // Deduped results never re-attach the image.
         assert_eq!(
-            extract_screenshot_path("[identical to your earlier call: 152 bytes, unchanged]").as_deref(),
+            extract_screenshot_path("[identical to your earlier call: 152 bytes, unchanged]")
+                .as_deref(),
             None
         );
     }
@@ -1675,7 +1697,10 @@ mod tests {
         let (wire, opening) = fold_wire(&mut red, ledger, Some(format!("pay {CARD} now")));
         let text: Vec<String> = wire.iter().map(conversations::row_text).collect();
         let text = text.join("\n");
-        assert!(!text.contains(CARD), "the fold sent the card in the clear: {text}");
+        assert!(
+            !text.contains(CARD),
+            "the fold sent the card in the clear: {text}"
+        );
         assert!(
             !text.contains(r"C:\Users\dusti"),
             "the fold sent a path in the clear: {text}"
@@ -1685,6 +1710,9 @@ mod tests {
             "the fold sent no handle: {text}"
         );
         let opening = opening.expect("the opening line survives the pass");
-        assert!(!opening.contains(CARD), "the opening line kept the card: {opening}");
+        assert!(
+            !opening.contains(CARD),
+            "the opening line kept the card: {opening}"
+        );
     }
 }

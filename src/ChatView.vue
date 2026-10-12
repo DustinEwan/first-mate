@@ -103,6 +103,11 @@ interface Msg {
   folded?: number;
   // View-only: a reopened conversation has no chip.
   redact?: RedactReport;
+  // What this row's own send carried. Only a loaded conversation has it.
+  leaks?: RowRedaction[];
+  at?: number;
+  provider?: string;
+  model?: string;
 }
 
 const TOOL_GLYPH: Record<string, string> = {
@@ -299,6 +304,11 @@ interface DisplayRow {
   text: string;
   report?: ToolReport;
   folded?: number;
+  redactions?: RowRedaction[];
+  at: number;
+  provider?: string;
+  model?: string;
+  toolName?: string;
 }
 interface FoldInfo {
   conversation: string;
@@ -397,6 +407,10 @@ function displayMsg(row: DisplayRow): Msg {
     cls: row.role,
     ...(row.role === "tool" && row.report ? { tool: row.report, done: true } : {}),
     ...(row.folded != null ? { folded: row.folded } : {}),
+    ...(row.redactions ? { leaks: row.redactions } : {}),
+    at: row.at,
+    ...(row.provider ? { provider: row.provider } : {}),
+    ...(row.model ? { model: row.model } : {}),
   };
 }
 
@@ -411,9 +425,27 @@ function openConversation(c: ConvInfo): Promise<void> {
       tempChat.value = false;
       panelOpen.value = false;
       refreshBehavior();
-      return refreshLeakMarks();
     })
     .catch((e) => console.error("load failed", e));
+}
+
+// The stored rows hold each row's own redaction evidence, so a finished run
+// takes its badges from the copy on disk. The live row and the stored row hold
+// the same text, so the text names the row.
+function refreshRowLeaks(): Promise<void> {
+  const name = convName.value;
+  if (tempChat.value || !name) return Promise.resolve();
+  const conv = conversations.value.find((c) => c.name === name);
+  if (!conv) return Promise.resolve();
+  return invoke<DisplayRow[]>("load_conversation", { path: conv.path })
+    .then((rows) => {
+      const stored = new Map(rows.map((r) => [r.text, r.redactions]));
+      for (const m of messages.value) {
+        const found = stored.get(m.text);
+        if (found && found.length > 0) m.leaks = found;
+      }
+    })
+    .catch((e) => console.error("row leaks failed", e));
 }
 
 function newChat() {
@@ -423,7 +455,6 @@ function newChat() {
   panelOpen.value = false;
   foldView.value = null;
   refreshBehavior();
-  refreshLeakMarks();
 }
 
 // Prompt and skill ads are content files. The window is hidden on close,
@@ -452,7 +483,6 @@ function newTempChat() {
   panelOpen.value = false;
   foldView.value = null;
   refreshBehavior();
-  refreshLeakMarks();
   addMsg("Temporary conversation — nothing here is saved to disk.", "dim");
 }
 
@@ -465,95 +495,74 @@ function deleteConversation(c: ConvInfo) {
     .catch((e) => console.error("delete failed", e));
 }
 
-// The marker lives only in the rendered DOM. ChatView.vue sends the whole
-// transcript on every turn, so literal marker text in the row would tell the
-// receiver that the value leaked.
-interface LeakMark {
-  value: string;
+// One row's own redaction evidence: the markers that row carried, and the
+// values that row left in the clear. `docs/roadmap/REDACTION.md` is the design.
+interface RowRedaction {
+  redactedValue: string;
+  placeholder: string;
+  isLeaked: boolean;
   class: string;
-  start: number;
-  end: number;
-  at: number;
-  provider: string;
-  model: string;
 }
 
-interface LeakRow {
+interface ReportRow {
   at: number;
   conversation: string;
+  path: string;
+  index: number;
+  fold?: number;
   value: string;
+  placeholder: string;
   class: string;
-  start: number;
-  end: number;
   provider: string;
   model: string;
   baseUrl: string;
-  tool: string | null;
+  tool?: string;
 }
 
-const leakMarks = ref<LeakMark[]>([]);
-const leakRows = ref<LeakRow[]>([]);
-const leakOpen = ref(false);
-const leakPassword = ref("");
-const leakPath = ref("");
-const leakError = ref("");
+const reportRows = ref<ReportRow[]>([]);
+const reportOpen = ref(false);
+const reportBusy = ref(false);
+const reportDone = ref(0);
+const reportTotal = ref(0);
+const reportPassword = ref("");
+const reportPath = ref("");
+const reportError = ref("");
+const reportCount = ref(0);
 const activeLeaks = ref(new Set<string>());
-const leakCount = ref(0);
-
-// LeakStore records this name for a temporary conversation, which has no
-// stored message to open.
-const UNSAVED = "(unsaved)";
-
-function leakKey(m: LeakMark | LeakRow): string {
-  return `${m.value}\u0000${m.at}\u0000${m.provider}\u0000${m.model}`;
-}
 
 function timeAt(seconds: number): string {
   return new Date(seconds * 1000).toLocaleString();
 }
 
-function leakTitles(marks: LeakMark[]): string {
-  return marks.map((m) => `${m.class} — ${m.provider} — ${m.model} — ${timeAt(m.at)}`).join("\n");
+// A leak is a value the wire copy carried in the clear. A marker in the same
+// row is proof the receiver never saw that value.
+function leaked(m: Msg): RowRedaction[] {
+  return (m.leaks ?? []).filter((r) => r.isLeaked);
 }
 
-function leakIndexes(marks: LeakMark[]): string {
-  return marks.map((m) => leakMarks.value.indexOf(m)).join(",");
+function leakTitles(m: Msg): string {
+  return leaked(m)
+    .map((r) => `${r.class} — ${m.provider ?? ""} — ${m.model ?? ""} — ${timeAt(m.at ?? 0)}`)
+    .join("\n");
 }
 
-function refreshLeakMarks(): Promise<void> {
-  // A fold view shows another conversation's rows. A temporary conversation has
-  // no name, and the backend records its leaks under UNSAVED.
-  const conversation = foldView.value?.info.conversation ?? convName.value ?? UNSAVED;
-  return invoke<LeakMark[]>("leak_marks", { conversation })
-    .then((rows) => {
-      leakMarks.value = rows;
-    })
-    .catch((e) => console.error("leak marks failed", e));
+// The badge lives inside v-html, so it carries its row's values in an attribute.
+// NUL cannot occur in a redacted value.
+function leakValues(m: Msg): string {
+  return leaked(m)
+    .map((r) => r.redactedValue)
+    .join("\u0000");
 }
 
-function rowLeaks(text: string): LeakMark[] {
-  if (!text) return [];
-  return leakMarks.value.filter((m) => m.value && text.includes(m.value));
-}
-
-// A tool row shows the report body; the stored row text is the transcript the
-// provider saw. Either one can carry the value.
-function toolLeaks(item: Msg): LeakMark[] {
-  const body = item.tool?.body?.text ?? "";
-  return leakMarks.value.filter(
-    (m) => m.value && (item.text.includes(m.value) || body.includes(m.value)),
-  );
-}
-
-// The stored ranges index the row text; the rendered row is markdown output, so
-// the console locates the value by search over the rendered text nodes.
-function leakRanges(haystack: string, marks: LeakMark[]): [number, number][] {
+// The rendered row is markdown output, so the console locates a value by search
+// over the rendered text nodes.
+function leakRanges(haystack: string, values: string[]): [number, number][] {
   const found: [number, number][] = [];
-  for (const m of marks) {
-    let at = haystack.indexOf(m.value);
+  for (const value of values) {
+    let at = haystack.indexOf(value);
     while (at >= 0) {
-      found.push([at, at + m.value.length]);
-      at = haystack.indexOf(m.value, at + m.value.length);
+      found.push([at, at + value.length]);
+      at = haystack.indexOf(value, at + value.length);
     }
   }
   found.sort((a, b) => b[0] - a[0]);
@@ -567,7 +576,7 @@ function leakRanges(haystack: string, marks: LeakMark[]): [number, number][] {
   return kept;
 }
 
-function wrapLeaks(host: HTMLElement, marks: LeakMark[]) {
+function wrapLeaks(host: HTMLElement, values: string[]) {
   const nodes: Text[] = [];
   const starts: number[] = [];
   let text = "";
@@ -579,7 +588,7 @@ function wrapLeaks(host: HTMLElement, marks: LeakMark[]) {
   }
   // Descending order: splitText shortens only the text right of the cut, and
   // every later range sits left of that cut.
-  for (const [from, to] of leakRanges(text, marks)) {
+  for (const [from, to] of leakRanges(text, values)) {
     for (let i = nodes.length - 1; i >= 0; i--) {
       const node = nodes[i];
       const a = Math.max(from, starts[i]);
@@ -595,14 +604,18 @@ function wrapLeaks(host: HTMLElement, marks: LeakMark[]) {
   }
 }
 
-function decorate(host: HTMLElement, marks: LeakMark[]): string {
+function decorate(host: HTMLElement, m: Msg): string {
+  const marks = leaked(m);
   if (marks.length === 0) return host.innerHTML;
-  wrapLeaks(host, marks);
+  wrapLeaks(
+    host,
+    marks.map((r) => r.redactedValue),
+  );
   const badge = document.createElement("button");
   badge.type = "button";
   badge.className = "leak-badge";
-  badge.dataset.leak = leakIndexes(marks);
-  badge.title = leakTitles(marks);
+  badge.dataset.leak = leakValues(m);
+  badge.title = leakTitles(m);
   badge.textContent = "⚠";
   host.appendChild(badge);
   return host.innerHTML;
@@ -611,32 +624,38 @@ function decorate(host: HTMLElement, marks: LeakMark[]): string {
 function renderMdRow(item: Msg): string {
   const host = document.createElement("div");
   host.innerHTML = renderMd(item.text);
-  return decorate(host, rowLeaks(item.text));
+  return decorate(host, item);
 }
 
 function renderTextRow(item: Msg): string {
   const host = document.createElement("div");
   host.textContent = item.text;
-  return decorate(host, rowLeaks(item.text));
+  return decorate(host, item);
 }
 
 function renderToolLine(item: Msg, line: string): string {
-  const marks = toolLeaks(item).filter((m) => line.includes(m.value));
-  if (marks.length === 0) return escapeHtml(line);
+  const values = leaked(item).map((r) => r.redactedValue);
+  if (values.length === 0 || !values.some((v) => line.includes(v))) return escapeHtml(line);
   const host = document.createElement("div");
   host.textContent = line;
-  wrapLeaks(host, marks);
+  wrapLeaks(host, values);
   return host.innerHTML;
 }
 
-function refreshLeakReport(): Promise<void> {
-  return invoke<LeakRow[]>("leak_report")
+function generateReport(): Promise<void> {
+  reportBusy.value = true;
+  reportDone.value = 0;
+  reportTotal.value = 0;
+  return invoke<ReportRow[]>("report_generate")
     .then((rows) => {
-      leakRows.value = rows;
-      leakCount.value = rows.length;
+      reportRows.value = rows;
+      reportCount.value = rows.length;
     })
     .catch((e) => {
-      leakError.value = String(e);
+      reportError.value = String(e);
+    })
+    .finally(() => {
+      reportBusy.value = false;
     });
 }
 
@@ -646,122 +665,99 @@ function refreshFolds(): Promise<void> {
       folds.value = list;
     })
     .catch((e) => {
-      leakError.value = String(e);
+      reportError.value = String(e);
     });
 }
 
-function showFold(fold: FoldInfo) {
-  leakError.value = "";
+// A report row inside a fold opens that fold, because the conversation no longer
+// holds the row the summarizer dropped.
+function showFold(fold: FoldInfo, index = -1) {
+  reportError.value = "";
   invoke<DisplayRow[]>("open_fold", { conversation: fold.conversation, at: fold.at })
     .then((rows) => {
       foldView.value = { info: fold, rows: rows.map(displayMsg) };
-      leakOpen.value = false;
-      void refreshLeakMarks();
+      reportOpen.value = false;
       return nextTick();
     })
-    .then(() => scrollerRef.value?.scrollToItem?.(0))
+    .then(() => scrollerRef.value?.scrollToItem?.(index < 0 ? 0 : index))
     .catch((e) => {
-      leakError.value = String(e);
+      reportError.value = String(e);
     });
 }
 
 function closeFold() {
   foldView.value = null;
-  void refreshLeakMarks();
   scrollToBottom();
 }
 
-function openLeakPanel(indexes: string) {
-  activeLeaks.value = new Set(
-    indexes
-      .split(",")
-      .filter((i) => i !== "")
-      .map((i) => leakMarks.value[Number(i)])
-      .filter((m): m is LeakMark => m !== undefined)
-      .map(leakKey),
-  );
-  leakError.value = "";
-  leakPath.value = "";
-  leakOpen.value = true;
-  void refreshLeakReport();
+function openReportPanel(values: string[]) {
+  activeLeaks.value = new Set(values);
+  reportError.value = "";
+  reportPath.value = "";
+  reportOpen.value = true;
+  if (reportRows.value.length === 0 && !reportBusy.value) void generateReport();
   void refreshFolds();
 }
 
 function onLeakBadgeClick(e: MouseEvent) {
   const badge = (e.target as HTMLElement | null)?.closest?.(".leak-badge");
   if (!badge) return;
-  openLeakPanel(badge.getAttribute("data-leak") ?? "");
+  const packed = badge.getAttribute("data-leak") ?? "";
+  openReportPanel(packed.split("\u0000").filter((v) => v !== ""));
 }
 
-function generateLeakPassword() {
-  leakError.value = "";
-  invoke<string>("leak_password")
+function generateReportPassword() {
+  reportError.value = "";
+  invoke<string>("report_password")
     .then((password) => {
-      leakPassword.value = password;
+      reportPassword.value = password;
     })
     .catch((e) => {
-      leakError.value = String(e);
+      reportError.value = String(e);
     });
 }
 
-function exportLeakPdf() {
-  leakError.value = "";
-  leakPath.value = "";
+function exportReportPdf() {
+  reportError.value = "";
+  reportPath.value = "";
   // An empty field is the user's choice: a PDF with no password.
-  const password = leakPassword.value.trim() || null;
-  invoke<string>("leak_export_pdf", { password })
+  const password = reportPassword.value.trim() || null;
+  invoke<string>("report_export_pdf", { rows: reportRows.value, password })
     .then((path) => {
-      leakPath.value = path;
+      reportPath.value = path;
     })
     .catch((e) => {
-      leakError.value = String(e);
+      reportError.value = String(e);
     });
 }
 
-function leakElement(value: string): HTMLElement | null {
-  const root = scrollerRef.value?.$el as HTMLElement | undefined;
-  if (!root) return null;
-  for (const el of root.querySelectorAll<HTMLElement>(".leak-hit")) {
-    const text = el.textContent;
-    if (text && value.startsWith(text)) return el;
-  }
-  return null;
-}
-
-// A report row for a conversation that was never saved has no stored message.
-function jumpToLeak(row: LeakRow) {
-  if (row.conversation === UNSAVED) return;
-  leakOpen.value = false;
-  // A leak row names a message in the conversation, not a row in the fold view.
-  foldView.value = null;
-  const conv = conversations.value.find((c) => c.name === row.conversation);
-  if (!conv) {
-    addMsg(`Conversation ${row.conversation} is no longer on disk.`, "dim");
+// A report row names its transcript file and the position of the row inside that
+// transcript, so the jump needs no text matching and no entry in the list.
+function jumpToRow(row: ReportRow) {
+  reportOpen.value = false;
+  if (row.fold != null) {
+    const fold = folds.value.find((f) => f.conversation === row.conversation && f.at === row.fold);
+    if (fold) showFold(fold, row.index);
     return;
   }
-  const load = conv.name === convName.value ? refreshLeakMarks() : openConversation(conv);
-  load
-    .then(() => nextTick())
+  invoke<DisplayRow[]>("load_conversation", { path: row.path })
+    .then((rows) => {
+      foldView.value = null;
+      // A hidden transcript stays a transcript, so a later send appends to the
+      // same file.
+      messages.value = rows.map(displayMsg);
+      convName.value = row.conversation;
+      tempChat.value = false;
+      panelOpen.value = false;
+      refreshBehavior();
+      return nextTick();
+    })
     .then(() => {
-      const index = messages.value.findIndex(
-        (m) => isTranscriptRow(m) && m.text.includes(row.value),
-      );
-      if (index < 0) return;
       // The load pinned the view to the bottom. This jump owns the scroll now.
       userScrollAbort = true;
-      scrollerRef.value?.scrollToItem?.(index);
-      let tries = 0;
-      const step = () => {
-        userScrollAbort = true;
-        const el = leakElement(row.value);
-        if (el) {
-          el.scrollIntoView({ block: "center" });
-        } else if (++tries < 60) {
-          requestAnimationFrame(step);
-        }
-      };
-      requestAnimationFrame(step);
-    });
+      scrollerRef.value?.scrollToItem?.(row.index);
+    })
+    .catch((e) => addMsg(String(e), "dim"));
 }
 
 // The console caches the provider, so a wizard save reaches the next message
@@ -783,7 +779,10 @@ onMounted(() => {
       openConversation(conversations.value[0]);
     }
   });
-  void refreshLeakReport();
+  listen<{ done: number; total: number }>("report-progress", (e) => {
+    reportDone.value = e.payload.done;
+    reportTotal.value = e.payload.total;
+  });
   invoke<string>("get_hotkey").then((hotkey) => {
     addMsg(`First Mate is online. Summon with ${hotkey}.`, "dim");
   });
@@ -1010,11 +1009,10 @@ async function submit() {
     liveMsgId = -1;
     pendingRedact = undefined;
     audit.value = null;
-    // Rust wrote the transcript inside chat_with_llm. A temporary chat wrote
-    // nothing.
+    // Rust wrote the transcript inside chat_with_llm. A temporary chat wrote the
+    // transcript the conversation list hides.
     if (!tempChat.value) void refreshConversations();
-    refreshLeakMarks();
-    void refreshLeakReport();
+    void refreshRowLeaks();
   }
 }
 
@@ -1085,7 +1083,7 @@ window.addEventListener("click", onLeakBadgeClick);
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     if (wizardOpen.value) return; // dismissed only via Skip/Finish
-    if (leakOpen.value) leakOpen.value = false;
+    if (reportOpen.value) reportOpen.value = false;
     else if (panelOpen.value) panelOpen.value = false;
     else if (foldView.value) closeFold();
     else hide();
@@ -1126,15 +1124,15 @@ window.addEventListener("keydown", (e) => {
         </button>
         <button
           class="leak-toggle"
-          :class="{ on: leakCount > 0 }"
+          :class="{ on: reportCount > 0 }"
           :title="
-            leakCount
-              ? `Leak report — ${leakCount} value(s) left this PC. Click to open.`
-              : 'Leak report — nothing has left this PC.'
+            reportCount
+              ? `Leak report — ${reportCount} value(s) left this PC. Click to open.`
+              : 'Leak report — click to check every conversation.'
           "
-          @click="openLeakPanel('')"
+          @click="openReportPanel([])"
         >
-          &#9888;{{ leakCount ? ` ${leakCount}` : "" }}
+          &#9888;{{ reportCount ? ` ${reportCount}` : "" }}
         </button>
         <button class="settings-gear" title="Settings" @click="openSettings">&#9881;</button>
         <button class="close" @click="hide">&#10005;</button>
@@ -1162,7 +1160,7 @@ window.addEventListener("keydown", (e) => {
               <DynamicScrollerItem
                 :item="item"
                 :active="active"
-                :size-dependencies="[item.text, openSummaries.has(item.id), leakMarks]"
+                :size-dependencies="[item.text, openSummaries.has(item.id)]"
               >
                 <!-- eslint-disable vue/no-v-html -->
                 <!-- v-html is safe: renderMdRow() sanitizes with DOMPurify, and the leak
@@ -1187,10 +1185,10 @@ window.addEventListener("keydown", (e) => {
                       {{ item.done ? reportFooter(item.tool) : "running…" }}
                     </div>
                     <span
-                      v-if="toolLeaks(item).length"
+                      v-if="leaked(item).length"
                       class="leak-badge"
-                      :data-leak="leakIndexes(toolLeaks(item))"
-                      :title="leakTitles(toolLeaks(item))"
+                      :data-leak="leakValues(item)"
+                      :title="leakTitles(item)"
                       >⚠</span
                     >
                   </div>
@@ -1314,11 +1312,11 @@ window.addEventListener("keydown", (e) => {
           </ul>
         </aside>
       </div>
-      <div v-if="leakOpen" class="leak-panel">
+      <div v-if="reportOpen" class="leak-panel">
         <div class="leak-card">
           <div class="leak-head">
-            <span>Leak report — {{ leakRows.length }}</span>
-            <button class="leak-close" title="Close the leak report" @click="leakOpen = false">
+            <span>Leak report — {{ reportRows.length }}</span>
+            <button class="leak-close" title="Close the leak report" @click="reportOpen = false">
               &#10005;
             </button>
           </div>
@@ -1326,10 +1324,21 @@ window.addEventListener("keydown", (e) => {
             Each row names the value that left this PC, the conversation and the message that
             carried it, and where it went.
           </p>
+          <div class="leak-actions">
+            <button
+              class="leak-btn"
+              title="Read every conversation on disk again, including the hidden ones."
+              :disabled="reportBusy"
+              @click="generateReport"
+            >
+              {{ reportBusy ? "Scanning…" : "Check every chat" }}
+            </button>
+            <span v-if="reportBusy" class="leak-meta">{{ reportDone }} of {{ reportTotal }}</span>
+          </div>
           <div class="leak-export">
             <p class="leak-real">The exported PDF holds the real values, not the redacted text.</p>
             <n-input
-              v-model:value="leakPassword"
+              v-model:value="reportPassword"
               type="password"
               show-password-toggle
               size="small"
@@ -1339,26 +1348,24 @@ window.addEventListener("keydown", (e) => {
               <button
                 class="leak-btn"
                 title="Write a generated password into the field."
-                @click="generateLeakPassword"
+                @click="generateReportPassword"
               >
                 Generate
               </button>
-              <button class="leak-btn" @click="exportLeakPdf">Export PDF</button>
+              <button class="leak-btn" :disabled="reportRows.length === 0" @click="exportReportPdf">
+                Export PDF
+              </button>
             </div>
           </div>
-          <div v-if="leakPath" class="leak-path">Wrote {{ leakPath }}</div>
-          <div v-if="leakError" class="leak-error">{{ leakError }}</div>
-          <ul v-if="leakRows.length" class="leak-list">
+          <div v-if="reportPath" class="leak-path">Wrote {{ reportPath }}</div>
+          <div v-if="reportError" class="leak-error">{{ reportError }}</div>
+          <ul v-if="reportRows.length" class="leak-list">
             <li
-              v-for="(r, i) in leakRows"
+              v-for="(r, i) in reportRows"
               :key="i"
-              :class="{ on: activeLeaks.has(leakKey(r)), inert: r.conversation === UNSAVED }"
-              :title="
-                r.conversation === UNSAVED
-                  ? 'That conversation was never saved, so there is no message to open.'
-                  : 'Open ' + r.conversation + ' at this message.'
-              "
-              @click="jumpToLeak(r)"
+              :class="{ on: activeLeaks.has(r.value) }"
+              :title="'Open ' + r.conversation + ' at this message.'"
+              @click="jumpToRow(r)"
             >
               <div class="leak-value">{{ r.value }}</div>
               <div class="leak-meta">
@@ -1366,7 +1373,8 @@ window.addEventListener("keydown", (e) => {
               </div>
               <div class="leak-meta">
                 {{ r.conversation }} · {{ r.baseUrl
-                }}<template v-if="r.tool"> · {{ r.tool }}</template>
+                }}<template v-if="r.tool"> · {{ r.tool }}</template
+                ><template v-if="r.fold"> · dropped by a fold</template>
               </div>
             </li>
           </ul>

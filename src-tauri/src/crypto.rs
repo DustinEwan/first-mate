@@ -10,17 +10,17 @@ use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, OnceLock};
 
 use sha2::{Digest, Sha256};
-use windows::core::{Error, PCWSTR, w};
+use windows::core::{w, Error, PCWSTR};
 use windows::Win32::Security::Cryptography::{
-    BCRYPT_AES_ALGORITHM, BCRYPT_ALG_HANDLE, BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO,
-    BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO_VERSION, BCRYPT_CHAINING_MODE,
-    BCRYPT_FLAGS, BCRYPT_HANDLE, BCRYPT_KEY_HANDLE, BCRYPT_OAEP_PADDING_INFO,
-    BCRYPT_OPEN_ALGORITHM_PROVIDER_FLAGS, BCRYPT_SHA256_ALGORITHM, BCRYPT_USE_SYSTEM_PREFERRED_RNG,
     BCryptCloseAlgorithmProvider, BCryptDecrypt, BCryptDestroyKey, BCryptEncrypt, BCryptGenRandom,
-    BCryptGenerateSymmetricKey, BCryptOpenAlgorithmProvider, BCryptSetProperty, CERT_KEY_SPEC,
-    NCRYPT_HANDLE, NCRYPT_KEY_HANDLE, NCRYPT_PAD_OAEP_FLAG, NCRYPT_PROV_HANDLE, NCRYPT_SILENT_FLAG,
+    BCryptGenerateSymmetricKey, BCryptOpenAlgorithmProvider, BCryptSetProperty,
     NCryptCreatePersistedKey, NCryptDecrypt, NCryptEncrypt, NCryptFinalizeKey, NCryptOpenKey,
-    NCryptOpenStorageProvider, NCryptSetProperty,
+    NCryptOpenStorageProvider, NCryptSetProperty, BCRYPT_AES_ALGORITHM, BCRYPT_ALG_HANDLE,
+    BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO, BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO_VERSION,
+    BCRYPT_CHAINING_MODE, BCRYPT_FLAGS, BCRYPT_HANDLE, BCRYPT_KEY_HANDLE, BCRYPT_OAEP_PADDING_INFO,
+    BCRYPT_OPEN_ALGORITHM_PROVIDER_FLAGS, BCRYPT_SHA256_ALGORITHM, BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+    CERT_KEY_SPEC, NCRYPT_HANDLE, NCRYPT_KEY_HANDLE, NCRYPT_PAD_OAEP_FLAG, NCRYPT_PROV_HANDLE,
+    NCRYPT_SILENT_FLAG,
 };
 
 const PROVIDER: &str = "Microsoft Platform Crypto Provider";
@@ -37,7 +37,10 @@ fn utf16(text: &str) -> Vec<u16> {
 }
 
 fn utf16_bytes(text: &str) -> Vec<u8> {
-    utf16(text).iter().flat_map(|unit| unit.to_le_bytes()).collect()
+    utf16(text)
+        .iter()
+        .flat_map(|unit| unit.to_le_bytes())
+        .collect()
 }
 
 fn why(error: Error) -> String {
@@ -47,7 +50,9 @@ fn why(error: Error) -> String {
 fn open_provider() -> Result<NCRYPT_PROV_HANDLE, String> {
     let name = utf16(PROVIDER);
     let mut handle = NCRYPT_PROV_HANDLE::default();
-    unsafe { NCryptOpenStorageProvider(&mut handle, PCWSTR(name.as_ptr()), 0) }.map(|_| handle).map_err(why)
+    unsafe { NCryptOpenStorageProvider(&mut handle, PCWSTR(name.as_ptr()), 0) }
+        .map(|_| handle)
+        .map_err(why)
 }
 
 static PROVIDER_HANDLE: LazyLock<Result<NCRYPT_PROV_HANDLE, String>> = LazyLock::new(open_provider);
@@ -61,8 +66,16 @@ fn open_key(name: &str) -> Result<NCRYPT_KEY_HANDLE, String> {
     let prov = provider()?;
     let name = utf16(name);
     let mut key = NCRYPT_KEY_HANDLE::default();
-    unsafe { NCryptOpenKey(prov, &mut key, PCWSTR(name.as_ptr()), CERT_KEY_SPEC(0), NCRYPT_SILENT_FLAG) }
-        .map_err(why)?;
+    unsafe {
+        NCryptOpenKey(
+            prov,
+            &mut key,
+            PCWSTR(name.as_ptr()),
+            CERT_KEY_SPEC(0),
+            NCRYPT_SILENT_FLAG,
+        )
+    }
+    .map_err(why)?;
     Ok(key)
 }
 
@@ -88,13 +101,21 @@ fn persisted_key(name: &str) -> Result<NCRYPT_KEY_HANDLE, String> {
         )
     }
     .map_err(why)?;
-    unsafe { NCryptSetProperty(NCRYPT_HANDLE(key.0), w!("Length"), &RSA_BITS.to_le_bytes(), NCRYPT_SILENT_FLAG) }
-        .map_err(why)?;
+    unsafe {
+        NCryptSetProperty(
+            NCRYPT_HANDLE(key.0),
+            w!("Length"),
+            &RSA_BITS.to_le_bytes(),
+            NCRYPT_SILENT_FLAG,
+        )
+    }
+    .map_err(why)?;
     unsafe { NCryptFinalizeKey(key, NCRYPT_SILENT_FLAG) }.map_err(why)?;
     Ok(key)
 }
 
-static MASTER_KEY: LazyLock<Result<NCRYPT_KEY_HANDLE, String>> = LazyLock::new(|| persisted_key(KEY_NAME));
+static MASTER_KEY: LazyLock<Result<NCRYPT_KEY_HANDLE, String>> =
+    LazyLock::new(|| persisted_key(KEY_NAME));
 
 fn master_key() -> Result<NCRYPT_KEY_HANDLE, String> {
     MASTER_KEY.clone()
@@ -108,11 +129,17 @@ pub(crate) fn tpm_ready() -> bool {
 }
 
 fn random(bytes: &mut [u8]) -> Result<(), String> {
-    unsafe { BCryptGenRandom(None, bytes, BCRYPT_USE_SYSTEM_PREFERRED_RNG) }.ok().map_err(why)
+    unsafe { BCryptGenRandom(None, bytes, BCRYPT_USE_SYSTEM_PREFERRED_RNG) }
+        .ok()
+        .map_err(why)
 }
 
 fn oaep() -> BCRYPT_OAEP_PADDING_INFO {
-    BCRYPT_OAEP_PADDING_INFO { pszAlgId: BCRYPT_SHA256_ALGORITHM, pbLabel: std::ptr::null_mut(), cbLabel: 0 }
+    BCRYPT_OAEP_PADDING_INFO {
+        pszAlgId: BCRYPT_SHA256_ALGORITHM,
+        pbLabel: std::ptr::null_mut(),
+        cbLabel: 0,
+    }
 }
 
 fn wrap(plain: &[u8]) -> Result<Vec<u8>, String> {
@@ -127,7 +154,8 @@ fn wrap_with(key: NCRYPT_KEY_HANDLE, plain: &[u8]) -> Result<Vec<u8>, String> {
     unsafe { NCryptEncrypt(key, Some(plain), pad, None, &mut need, flags) }.map_err(why)?;
     let mut out = vec![0u8; need as usize];
     let mut got = 0u32;
-    unsafe { NCryptEncrypt(key, Some(plain), pad, Some(&mut out), &mut got, flags) }.map_err(why)?;
+    unsafe { NCryptEncrypt(key, Some(plain), pad, Some(&mut out), &mut got, flags) }
+        .map_err(why)?;
     out.truncate(got as usize);
     Ok(out)
 }
@@ -144,7 +172,8 @@ fn unwrap_with(key: NCRYPT_KEY_HANDLE, wrapped: &[u8]) -> Result<Vec<u8>, String
     unsafe { NCryptDecrypt(key, Some(wrapped), pad, None, &mut need, flags) }.map_err(why)?;
     let mut out = vec![0u8; need as usize];
     let mut got = 0u32;
-    unsafe { NCryptDecrypt(key, Some(wrapped), pad, Some(&mut out), &mut got, flags) }.map_err(why)?;
+    unsafe { NCryptDecrypt(key, Some(wrapped), pad, Some(&mut out), &mut got, flags) }
+        .map_err(why)?;
     out.truncate(got as usize);
     Ok(out)
 }
@@ -154,12 +183,22 @@ fn unwrap_with(key: NCRYPT_KEY_HANDLE, wrapped: &[u8]) -> Result<Vec<u8>, String
 fn aes_key(secret: &[u8]) -> Result<(BCRYPT_ALG_HANDLE, BCRYPT_KEY_HANDLE), String> {
     let mut alg = BCRYPT_ALG_HANDLE::default();
     unsafe {
-        BCryptOpenAlgorithmProvider(&mut alg, BCRYPT_AES_ALGORITHM, None, BCRYPT_OPEN_ALGORITHM_PROVIDER_FLAGS(0))
-            .ok()
-            .map_err(why)?;
-        BCryptSetProperty(BCRYPT_HANDLE(alg.0), BCRYPT_CHAINING_MODE, &utf16_bytes("ChainingModeGCM"), 0)
-            .ok()
-            .map_err(why)?;
+        BCryptOpenAlgorithmProvider(
+            &mut alg,
+            BCRYPT_AES_ALGORITHM,
+            None,
+            BCRYPT_OPEN_ALGORITHM_PROVIDER_FLAGS(0),
+        )
+        .ok()
+        .map_err(why)?;
+        BCryptSetProperty(
+            BCRYPT_HANDLE(alg.0),
+            BCRYPT_CHAINING_MODE,
+            &utf16_bytes("ChainingModeGCM"),
+            0,
+        )
+        .ok()
+        .map_err(why)?;
         // The software AES provider answers NTE_NOT_SUPPORTED for
         // `AuthTagLength` on the algorithm handle, and its default tag length
         // is the 16 bytes `TAG` names.
@@ -174,7 +213,11 @@ fn aes_key(secret: &[u8]) -> Result<(BCRYPT_ALG_HANDLE, BCRYPT_KEY_HANDLE), Stri
     Ok((alg, key))
 }
 
-fn auth_info<'a>(nonce: &'a mut [u8], tag: &'a mut [u8], aad: &'a [u8]) -> BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO {
+fn auth_info<'a>(
+    nonce: &'a mut [u8],
+    tag: &'a mut [u8],
+    aad: &'a [u8],
+) -> BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO {
     BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO {
         cbSize: std::mem::size_of::<BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO>() as u32,
         dwInfoVersion: BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO_VERSION,
@@ -198,7 +241,15 @@ fn skey_seal(secret: &[u8], aad: &[u8], plain: &[u8]) -> Result<Vec<u8>, String>
     let mut out = vec![0u8; plain.len()];
     let mut got = 0u32;
     let status = unsafe {
-        BCryptEncrypt(key, Some(plain), Some(&mut info as *mut _ as *const c_void), None, Some(&mut out), &mut got, BCRYPT_FLAGS(0))
+        BCryptEncrypt(
+            key,
+            Some(plain),
+            Some(&mut info as *mut _ as *const c_void),
+            None,
+            Some(&mut out),
+            &mut got,
+            BCRYPT_FLAGS(0),
+        )
     };
     close_aes(alg, key);
     status.ok().map_err(why)?;
@@ -220,7 +271,15 @@ fn skey_open(secret: &[u8], aad: &[u8], record: &[u8]) -> Result<Vec<u8>, String
     let mut out = vec![0u8; cipher.len()];
     let mut got = 0u32;
     let status = unsafe {
-        BCryptDecrypt(key, Some(cipher), Some(&mut info as *mut _ as *const c_void), None, Some(&mut out), &mut got, BCRYPT_FLAGS(0))
+        BCryptDecrypt(
+            key,
+            Some(cipher),
+            Some(&mut info as *mut _ as *const c_void),
+            None,
+            Some(&mut out),
+            &mut got,
+            BCRYPT_FLAGS(0),
+        )
     };
     close_aes(alg, key);
     status.ok().map_err(why)?;
@@ -271,7 +330,11 @@ pub fn open(sealed: &[u8]) -> Result<Vec<u8>, String> {
     let mut at = MAGIC.len() + 1;
     let take = |at: &mut usize| -> Result<&[u8], String> {
         let len = u32::from_le_bytes(
-            sealed.get(*at..*at + 4).ok_or("truncated FMENC1 header")?.try_into().map_err(|_| "truncated FMENC1 header")?,
+            sealed
+                .get(*at..*at + 4)
+                .ok_or("truncated FMENC1 header")?
+                .try_into()
+                .map_err(|_| "truncated FMENC1 header")?,
         ) as usize;
         *at += 4;
         let blob = sealed.get(*at..*at + len).ok_or("truncated FMENC1 body")?;
@@ -320,15 +383,17 @@ pub fn is_store(path: &Path) -> bool {
 /// `read_file` reaches a spill. Any other file keeps its bytes, so the agent
 /// never sees decrypted text from a file the user owns. Three files keep their
 /// bytes even inside the store: the token map, because that map is the key for
-/// every marker First Mate issued; the leak report, because it names the values
-/// and who received them; and a transcript, because a fold line holds the rows
-/// a fold dropped in plaintext. A record the agent can read is a record the
+/// every marker First Mate issued, a transcript, because a fold line holds the
+/// rows a fold dropped in plaintext, and the hidden list, because it names the
+/// transcripts the user deleted. A record the agent can read is a record the
 /// agent can send out again.
 pub fn open_store_bytes(path: &Path, bytes: Vec<u8>) -> Result<Vec<u8>, String> {
+    let named = path.file_name().and_then(|name| name.to_str());
     let never_plain = path.extension().and_then(|e| e.to_str()) == Some("chat")
-        || path
-            .file_name()
-            .is_some_and(|name| name == TOKEN_MAP || name == crate::leak::LEAKS);
+        || matches!(
+            named,
+            Some(TOKEN_MAP) | Some(crate::conversations::HIDDEN_LIST)
+        );
     if looks_sealed(&bytes) && is_store(path) && !never_plain {
         return open(&bytes);
     }
@@ -347,24 +412,31 @@ pub fn seal_file(path: &Path) -> Result<bool, String> {
     Ok(true)
 }
 
-/// The first run after the upgrade rewrites every plaintext store, and deletes
-/// the plaintext request dumps that older runs left in `%TEMP%`. The scratch
-/// directory stays out, because PowerShell must read a generated script in the
-/// clear. The counts are the rewritten files and the deleted dumps.
+/// The first run after the upgrade rewrites every plaintext store, deletes the
+/// plaintext request dumps that older runs left in `%TEMP%`, and deletes
+/// `leaks.jsonl`, because the leak report is a query over the transcripts. The
+/// scratch directory stays out, because PowerShell must read a generated script
+/// in the clear. The counts are the rewritten files and the deleted files.
 pub fn upgrade_stores(config_dir: &Path) -> (usize, usize) {
-    let mut paths: Vec<PathBuf> =
-        ["settings.json", "entity_registry.json", TOKEN_MAP, crate::leak::SCAN]
-            .iter()
-            .map(|name| config_dir.join(name))
-            .collect();
+    let mut paths: Vec<PathBuf> = ["settings.json", "entity_registry.json", TOKEN_MAP]
+        .iter()
+        .map(|name| config_dir.join(name))
+        .collect();
     for dir in [crate::log::fm_out_dir(), crate::conversations::conv_dir()] {
         let Ok(entries) = std::fs::read_dir(dir) else {
             continue;
         };
         paths.extend(entries.flatten().map(|entry| entry.path()));
     }
-    let sealed = paths.iter().filter(|path| seal_file(path).unwrap_or(false)).count();
-    (sealed, remove_plain_dumps())
+    let sealed = paths
+        .iter()
+        .filter(|path| seal_file(path).unwrap_or(false))
+        .count();
+    let mut removed = remove_plain_dumps();
+    if std::fs::remove_file(crate::log::fm_dir().join("leaks.jsonl")).is_ok() {
+        removed += 1;
+    }
+    (sealed, removed)
 }
 
 /// A failed request body holds the whole conversation, so no plaintext copy may
@@ -405,7 +477,10 @@ fn recovery_secret() -> Result<Vec<u8>, String> {
     // secret, and the secret this call returns is the one on disk, because a
     // rename that loses keeps the other thread's secret.
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let temp = path.with_extension(format!("bin.{}", SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+    let temp = path.with_extension(format!(
+        "bin.{}",
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     std::fs::write(&temp, wrap(&secret)?).map_err(|e| e.to_string())?;
     let _ = std::fs::rename(&temp, &path);
     let _ = std::fs::remove_file(&temp);
@@ -457,7 +532,10 @@ mod tests {
         let plain = b"card 4111 1111 1111 1111";
         let sealed = seal(plain).unwrap();
         assert!(looks_sealed(&sealed));
-        assert!(!sealed.windows(4).any(|window| window == b"4111"), "the card number survived");
+        assert!(
+            !sealed.windows(4).any(|window| window == b"4111"),
+            "the card number survived"
+        );
         assert_eq!(open(&sealed).unwrap(), plain);
     }
 
@@ -474,7 +552,10 @@ mod tests {
         let map = store_dir().join(TOKEN_MAP);
         assert_eq!(open_store_bytes(&map, sealed.clone()).unwrap(), sealed);
         let spill = store_dir().join("spill.txt");
-        assert_eq!(open_store_bytes(&spill, sealed.clone()).unwrap(), plain.to_vec());
+        assert_eq!(
+            open_store_bytes(&spill, sealed.clone()).unwrap(),
+            plain.to_vec()
+        );
     }
 
     #[test]
@@ -505,7 +586,10 @@ mod tests {
         unsafe { NCryptDeleteKey(key, 0) }.unwrap();
         assert!(open_key(&name).is_err(), "the deleted TPM key came back");
         assert!(unwrap(&wrapped).is_err(), "another TPM key opened the wrap");
-        assert!(!record.windows(4).any(|window| window == b"4111"), "the card number survived");
+        assert!(
+            !record.windows(4).any(|window| window == b"4111"),
+            "the card number survived"
+        );
     }
 
     /// The setup gate reads this state: a secret with no marker is pending, and
@@ -520,10 +604,16 @@ mod tests {
         let _ = std::fs::remove_file(dir.join("recovery.bin"));
         let _ = std::fs::remove_file(dir.join("recovery.ack"));
         recovery_secret().unwrap();
-        assert!(recovery_key_pending(), "a new secret reported no pending key");
+        assert!(
+            recovery_key_pending(),
+            "a new secret reported no pending key"
+        );
         assert_eq!(recovery_key().unwrap().len(), FILE_KEY * 2);
         assert!(ack_recovery_key(), "the acknowledge found no pending key");
-        assert!(!recovery_key_pending(), "the acknowledge left the key pending");
+        assert!(
+            !recovery_key_pending(),
+            "the acknowledge left the key pending"
+        );
         assert!(!ack_recovery_key(), "a second acknowledge claimed a key");
         assert_eq!(recovery_key().unwrap().len(), FILE_KEY * 2);
     }

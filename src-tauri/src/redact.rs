@@ -4,8 +4,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard, OnceLock};
 
-use serde::{Deserialize, Serialize};
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// A model that mangles a token still copies the pair.
@@ -14,8 +14,7 @@ const CLOSE: char = '⟧';
 
 const MAX_TOKEN_CHARS: usize = 48;
 
-static RE_TOKEN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"⟦[^⟧]{1,48}⟧").unwrap());
+static RE_TOKEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"⟦[^⟧]{1,48}⟧").unwrap());
 
 /// The refusal names the key, because copying the handle back into the
 /// transcript gives the model another handle to reuse.
@@ -133,22 +132,79 @@ fn is_country(cc: &str) -> bool {
 /// rather than guess.
 fn iban_len(cc: &str) -> Option<usize> {
     const TABLE: &[(&str, usize)] = &[
-        ("AD", 24), ("AE", 23), ("AL", 28), ("AT", 20), ("AZ", 28), ("BA", 20), ("BE", 16),
-        ("BG", 22), ("BH", 22), ("BR", 29), ("CH", 21), ("CR", 22), ("CY", 28), ("CZ", 24),
-        ("DE", 22), ("DK", 18), ("DO", 28), ("EE", 20), ("EG", 29), ("ES", 24), ("FI", 18),
-        ("FO", 24), ("FR", 27), ("GB", 22), ("GE", 22), ("GI", 23), ("GR", 27), ("GT", 28),
-        ("HR", 19), ("HU", 28), ("IE", 22), ("IL", 23), ("IS", 26), ("IT", 27), ("JO", 30),
-        ("KW", 30), ("KZ", 20), ("LB", 28), ("LI", 21), ("LT", 20), ("LU", 20), ("LV", 21),
-        ("MC", 27), ("MD", 24), ("ME", 22), ("MK", 19), ("MT", 31), ("MU", 30), ("NL", 18),
-        ("NO", 15), ("PK", 24), ("PL", 28), ("PS", 29), ("PT", 25), ("QA", 29), ("RO", 24),
-        ("RS", 22), ("SA", 24), ("SC", 31), ("SE", 24), ("SI", 19), ("SK", 24), ("SM", 27),
-        ("SV", 28), ("TL", 23), ("TN", 24), ("TR", 26), ("UA", 29), ("VA", 22), ("VG", 24),
+        ("AD", 24),
+        ("AE", 23),
+        ("AL", 28),
+        ("AT", 20),
+        ("AZ", 28),
+        ("BA", 20),
+        ("BE", 16),
+        ("BG", 22),
+        ("BH", 22),
+        ("BR", 29),
+        ("CH", 21),
+        ("CR", 22),
+        ("CY", 28),
+        ("CZ", 24),
+        ("DE", 22),
+        ("DK", 18),
+        ("DO", 28),
+        ("EE", 20),
+        ("EG", 29),
+        ("ES", 24),
+        ("FI", 18),
+        ("FO", 24),
+        ("FR", 27),
+        ("GB", 22),
+        ("GE", 22),
+        ("GI", 23),
+        ("GR", 27),
+        ("GT", 28),
+        ("HR", 19),
+        ("HU", 28),
+        ("IE", 22),
+        ("IL", 23),
+        ("IS", 26),
+        ("IT", 27),
+        ("JO", 30),
+        ("KW", 30),
+        ("KZ", 20),
+        ("LB", 28),
+        ("LI", 21),
+        ("LT", 20),
+        ("LU", 20),
+        ("LV", 21),
+        ("MC", 27),
+        ("MD", 24),
+        ("ME", 22),
+        ("MK", 19),
+        ("MT", 31),
+        ("MU", 30),
+        ("NL", 18),
+        ("NO", 15),
+        ("PK", 24),
+        ("PL", 28),
+        ("PS", 29),
+        ("PT", 25),
+        ("QA", 29),
+        ("RO", 24),
+        ("RS", 22),
+        ("SA", 24),
+        ("SC", 31),
+        ("SE", 24),
+        ("SI", 19),
+        ("SK", 24),
+        ("SM", 27),
+        ("SV", 28),
+        ("TL", 23),
+        ("TN", 24),
+        ("TR", 26),
+        ("UA", 29),
+        ("VA", 22),
+        ("VG", 24),
         ("XK", 20),
     ];
-    TABLE
-        .iter()
-        .find(|(c, _)| *c == cc)
-        .map(|(_, n)| *n)
+    TABLE.iter().find(|(c, _)| *c == cc).map(|(_, n)| *n)
 }
 
 static RE_CARD: LazyLock<Regex> =
@@ -157,10 +213,8 @@ static RE_IBAN: LazyLock<Regex> = LazyLock::new(|| {
     // A printed IBAN uses groups of exactly four. A group of one to four would
     // let the tail of the next word join the match. The length check would then
     // reject a real IBAN.
-    Regex::new(
-        r"(?i)\b[A-Z]{2}\d{2}(?:[A-Z0-9]{8,30}|(?: [A-Z0-9]{4}){1,6}(?: [A-Z0-9]{1,4})?)\b",
-    )
-    .unwrap()
+    Regex::new(r"(?i)\b[A-Z]{2}\d{2}(?:[A-Z0-9]{8,30}|(?: [A-Z0-9]{4}){1,6}(?: [A-Z0-9]{1,4})?)\b")
+        .unwrap()
 });
 static RE_ABA: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b\d{9}\b").unwrap());
 static RE_SWIFT: LazyLock<Regex> =
@@ -369,15 +423,19 @@ struct Hit {
     class: Class,
 }
 
-/// One value the detector found in text. `start` and `end` count `chars()`,
-/// because the console marks a row in characters, not bytes. `leak.rs` records
-/// the hits it finds in the text that goes on the wire, because a value the
-/// redaction pass left in place is a value the receiver keeps.
+/// One value the detector found in text. The redaction scan reads these hits,
+/// because a value the pass left in the clear is a value the receiver keeps.
 pub(crate) struct Found {
     pub value: String,
     pub class: &'static str,
-    pub start: usize,
-    pub end: usize,
+}
+
+/// One handle a stored row carries, and the value behind it. A handle in a
+/// stored row is the evidence that the pass replaced the value on that send.
+pub(crate) struct Applied {
+    pub token: String,
+    pub value: String,
+    pub class: &'static str,
 }
 
 /// The token table for every conversation this machine has tokenized. The table
@@ -540,8 +598,8 @@ pub(crate) struct Redactor {
     /// Text the Agent Model already holds in this conversation, so the gate
     /// judges each text once instead of once per turn.
     sent: HashSet<String>,
-    /// Values an earlier send carried in the clear. `leaks.jsonl` is the record,
-    /// so the chip can name what this run's redaction cannot undo.
+    /// Values an earlier send carried in the clear. The redaction scan of this
+    /// conversation is the source, so the chip names what this run cannot undo.
     left: Mutex<HashSet<String>>,
     leaks: Mutex<Vec<Class>>,
 }
@@ -569,10 +627,30 @@ impl Redactor {
     }
 
     /// A declared value has no shape, so only an exact match finds the value.
+    /// The declaration issues the placeholder, so a value the user marks has one
+    /// before any send applies it.
     pub(crate) fn seed(&mut self, value: &str) {
-        if value.chars().count() >= 4 && !self.registry.iter().any(|v| v == value) {
-            self.registry.push(value.to_string());
+        if value.chars().count() < 4 || self.registry.iter().any(|v| v == value) {
+            return;
         }
+        self.registry.push(value.to_string());
+        self.mint(value);
+    }
+
+    /// The placeholder for one value. `docs/roadmap/REDACTION.md` states that a
+    /// leak row always names a placeholder, so a value the pass never replaced
+    /// gains its placeholder here, on the first report that names the value.
+    pub(crate) fn mint(&mut self, value: &str) -> String {
+        let mut table = self.store.lock();
+        let before = table.len();
+        let token = table.token(Class::Entity, value);
+        self.store.commit(&table, before);
+        token
+    }
+
+    /// The placeholder the map holds for one value.
+    pub(crate) fn placeholder(&self, value: &str) -> Option<String> {
+        self.store.lock().tokens.get(value).cloned()
     }
 
     /// A false positive on the instruction set replaces the whole set with one
@@ -596,7 +674,10 @@ impl Redactor {
     /// earlier turn judged it. The agent loop re-sends the whole window on every
     /// tool turn, so one judgement per text keeps those resends cheap.
     fn unjudged(&self, found: Vec<String>) -> Vec<String> {
-        found.into_iter().filter(|m| !self.sent.contains(m)).collect()
+        found
+            .into_iter()
+            .filter(|m| !self.sent.contains(m))
+            .collect()
     }
 
     pub(crate) fn note_sent(&mut self, rows: impl Iterator<Item = String>) {
@@ -626,46 +707,56 @@ impl Redactor {
             .contains(value)
     }
 
-    /// Load the values the report already names, so a fresh run knows what an
-    /// earlier run sent in the clear.
-    pub(crate) fn seed_left(&mut self) {
+    /// Load the values an earlier send of this conversation carried in the clear,
+    /// so the chip names what this run's redaction cannot undo.
+    pub(crate) fn seed_left(&mut self, values: impl IntoIterator<Item = String>) {
         self.left
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .extend(crate::leak::left_values());
+            .extend(values);
     }
 
-    /// One send carried this value in the clear.
-    pub(crate) fn mark_left(&self, value: &str) {
-        self.left
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(value.to_string());
-    }
-
-    /// Detection with no store write, so a leak scan cannot inflate the chip
-    /// count. `tokenize` issues a token and commits the map; `scan` reads the
-    /// same detector and keeps neither.
+    /// Detection with no store write, so a redaction scan cannot inflate the
+    /// chip count. `tokenize` issues a token and commits the map; `scan` reads
+    /// the same detector and keeps neither.
     pub(crate) fn scan(&self, text: &str) -> Vec<Found> {
-        let hits = self.hits(text);
-        let mut found = Vec::with_capacity(hits.len());
-        // `hits` is ascending and never overlaps, so one walk converts byte
-        // offsets to char offsets. A count per hit would re-read the text for
-        // every value of a long row.
-        let mut byte = 0;
-        let mut chars = 0;
-        for hit in hits {
-            chars += text[byte..hit.start].chars().count();
-            byte = hit.start;
-            let value = &text[hit.start..hit.end];
-            found.push(Found {
-                value: value.to_string(),
+        self.hits(text)
+            .into_iter()
+            .map(|hit| Found {
+                value: text[hit.start..hit.end].to_string(),
                 class: hit.class.label(),
-                start: chars,
-                end: chars + value.chars().count(),
-            });
+            })
+            .collect()
+    }
+
+    /// The handles one text carries, with the value behind each one. A handle in
+    /// a stored row is the evidence that the pass replaced the value on that
+    /// send, so the row shows the value and no leak marker.
+    pub(crate) fn applied(&self, text: &str) -> Vec<Applied> {
+        if !text.contains(OPEN) {
+            return Vec::new();
         }
-        found
+        let table = self.store.lock();
+        let mut out: Vec<Applied> = Vec::new();
+        let mut rest = text;
+        while let Some(rel) = rest.find(OPEN) {
+            rest = &rest[rel..];
+            let after = &rest[OPEN.len_utf8()..];
+            let Some(close) = after.find(CLOSE) else {
+                break;
+            };
+            let end = OPEN.len_utf8() + close + CLOSE.len_utf8();
+            let token = &rest[..end];
+            if let Some(value) = table.resolve(token) {
+                out.push(Applied {
+                    token: token.to_string(),
+                    value: value.to_string(),
+                    class: class_label(token),
+                });
+            }
+            rest = &rest[end..];
+        }
+        out
     }
 
     pub(crate) fn tokenize(&mut self, text: &str) -> String {
@@ -742,7 +833,9 @@ impl Redactor {
         let mut table = self.store.lock();
         let before = table.len();
         for msg in msgs.iter_mut() {
-            walk_strings(msg, &mut |s: &mut String| *s = self.tokenize_in(&mut table, s));
+            walk_strings(msg, &mut |s: &mut String| {
+                *s = self.tokenize_in(&mut table, s)
+            });
         }
         self.store.commit(&table, before);
     }
@@ -847,6 +940,20 @@ impl Redactor {
         kept.sort_by_key(|h| h.start);
         kept
     }
+}
+
+/// The class a handle names: `⟦CARD_1⟧` says `CARD`.
+fn class_label(token: &str) -> &'static str {
+    let inner = token.trim_matches(|c| c == OPEN || c == CLOSE);
+    let label = inner
+        .rsplit_once('_')
+        .map(|(label, _)| label)
+        .unwrap_or(inner);
+    Class::ALL
+        .iter()
+        .map(|class| class.label())
+        .find(|known| *known == label)
+        .unwrap_or(Class::Entity.label())
 }
 
 /// `⟦EMAIL_1⟧`, `⟦ Email 1 ⟧`, and `⟦email1⟧` all normalize to `EMAIL1`.
@@ -955,7 +1062,18 @@ mod tests {
     #[test]
     fn every_class_round_trips() {
         for value in [
-            CARD, MC, IBAN, ABA, SWIFT, SSN, B58_ADDR, BECH32_ADDR, JWT, API_KEY, EMAIL, PHONE,
+            CARD,
+            MC,
+            IBAN,
+            ABA,
+            SWIFT,
+            SSN,
+            B58_ADDR,
+            BECH32_ADDR,
+            JWT,
+            API_KEY,
+            EMAIL,
+            PHONE,
             PATH,
         ] {
             let mut r = Redactor::new();
@@ -1089,7 +1207,10 @@ mod tests {
         let mut r = Redactor::new();
         r.tokenize_msgs(msgs.as_array_mut().unwrap());
         let sent = msgs.to_string();
-        assert!(!sent.contains(EMAIL) && !sent.contains("dusti"), "leak: {sent}");
+        assert!(
+            !sent.contains(EMAIL) && !sent.contains("dusti"),
+            "leak: {sent}"
+        );
         r.detokenize_json(&mut msgs);
         assert_eq!(msgs.to_string(), before);
     }
@@ -1103,7 +1224,10 @@ mod tests {
         let mut r = Redactor::new();
         r.tokenize_msgs(msgs.as_array_mut().unwrap());
         let sent = msgs.to_string();
-        assert!(sent.contains(CARD), "the base64 payload was rewritten: {sent}");
+        assert!(
+            sent.contains(CARD),
+            "the base64 payload was rewritten: {sent}"
+        );
         assert!(!sent.contains(EMAIL), "the text part leaked: {sent}");
     }
 
@@ -1161,7 +1285,7 @@ mod tests {
     #[test]
     fn a_value_that_already_left_names_its_class() {
         let mut r = Redactor::new();
-        r.mark_left(CARD);
+        r.seed_left(std::iter::once(CARD.to_string()));
         let sealed = r.tokenize("Charge the card 4111 1111 1111 1111 again.");
         assert!(sealed.contains("⟦CARD_1⟧"), "the repeat value is replaced");
         assert_eq!(r.leaks(), vec!["CARD"], "the chip must name the class");
@@ -1176,7 +1300,8 @@ mod tests {
 
     #[test]
     fn the_gate_scores_only_text_that_leaves_the_pc() {
-        let private = "I told my doctor I stopped taking the pills the pharmacy gave me last August.";
+        let private =
+            "I told my doctor I stopped taking the pills the pharmacy gave me last August.";
         let mut msgs = serde_json::json!([
             {"role": "system", "content": private},
             {"role": "assistant", "content": private,
@@ -1255,7 +1380,10 @@ mod tests {
         let mut red = Redactor::with_store(Store::file(path.clone()));
         red.tokenize(&format!("pay {CARD} now"));
         let bytes = std::fs::read(&path).unwrap();
-        assert!(crate::crypto::looks_sealed(&bytes), "the table must be sealed");
+        assert!(
+            crate::crypto::looks_sealed(&bytes),
+            "the table must be sealed"
+        );
         assert!(!String::from_utf8_lossy(&bytes).contains("4111"));
         let _ = std::fs::remove_file(&path);
     }
@@ -1272,11 +1400,15 @@ mod tests {
     }
 
     #[test]
-    fn a_scan_counts_characters_and_not_bytes() {
-        let r = Redactor::new();
-        let found = r.scan(&format!("Zahlungskarte ✓ {CARD}"));
-        assert_eq!(found[0].start, 16, "the offset counts chars");
-        assert_eq!(found[0].end, 35, "the offset ends one past the value");
+    fn applied_reads_a_handle_that_follows_text() {
+        let mut r = Redactor::new();
+        let wire = r.tokenize(&format!("pay {CARD} now"));
+        let applied = r.applied(&wire);
+        assert_eq!(applied.len(), 1, "the walk lost the handle");
+        assert_eq!(applied[0].value, CARD);
+        assert_eq!(
+            applied[0].token, "⟦CARD_1⟧",
+            "the row must name the handle it carried"
+        );
     }
-
 }
