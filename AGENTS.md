@@ -156,6 +156,12 @@ Consult `docs/ROADMAP.md` before feature work. When priorities move, update
 ## Commands (Windows host; repo at C:\repos\firstmate)
 
 - Dev loop: `npm run tauri dev`. Vite serves the app on port 1420.
+- Verify the running app through `winapp ui`. Do not write a driver script for a
+  UI job. The CLI is the surface.
+- Stop every `firstmate.exe` you started before you finish. An orphan whose dev
+  parent died stopped answering `Super+Alt+Space`, while its windows still
+  answered commands. A second instance cannot register that hotkey, so it exits
+  at startup.
 - Gates: run `cargo test` and clippy from `src-tauri/`. Run `npm run lint` for
   the frontend. `npm run format` fixes what prettier reports.
 - Full frontend build: `npm run build`, which runs lint, then `tsc`, then
