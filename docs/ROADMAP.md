@@ -338,6 +338,13 @@ the design.
 - [ ] A screenshot needs the text description that the capture tool returns,
       because the decision model takes text only. The console says that the image
       itself went out unchecked.
+- [ ] `criteria` in `decide.rs` states what counts as a yes and what counts as a
+      no. The vendor offers no per-customer fine-tune, so the question and the
+      criteria are the only tuning levers. Re-measure the two `Test` scores after
+      any change.
+- [ ] `clip` scores the first 6000 characters only, so the tail of a long tool
+      output is never judged. Score each chunk, or say in the console that the
+      rest went unchecked.
 - **Accept:** a checked box produces the same tokenized request on a local
   endpoint and on a public endpoint. That request carries a fake card, a JWT,
   and an email. A registry-seeded account number with no checksum also leaves
