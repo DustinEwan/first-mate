@@ -155,7 +155,11 @@ Consult `docs/ROADMAP.md` before feature work. When priorities move, update
 
 ## Commands (Windows host; repo at C:\repos\firstmate)
 
-- Dev loop: `npm run tauri dev`. Vite serves the app on port 1420.
+- Dev loop: `npm run tauri dev`. Vite serves the app on port 1420. Run that
+  command in the background. The command blocks until the app exits, so a
+  foreground run holds the shell.
+- Before the dev loop, stop every Vite that holds port 1420. An orphan Vite makes
+  `tauri dev` exit with `Port 1420 is already in use`.
 - Verify the running app through `winapp ui`. Do not write a driver script for a
   UI job. The CLI is the surface.
 - Stop every `firstmate.exe` you started before you finish. An orphan whose dev
