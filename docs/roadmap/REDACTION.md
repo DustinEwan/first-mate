@@ -208,21 +208,126 @@ envelope in `docs/ENCRYPTION.md` covers both files. A transcript restored
 without its token map therefore shows handles. The §5 privacy levels decide what
 the console renders, not what the record holds.
 
-A leak scan reads the record. A value in a stored row left the machine. The scan
-reads one row once, when the row goes in. A new value in `entity_registry.json`
-is the only event that reopens an old row, and `leak::rescan` then reads every
-stored row once and adds no row the report already holds.
+The redaction scan reads the record. A value in a stored row left the machine. The
+scan runs the rules in `redact.rs` over the stored wire copy. The scan therefore
+a value even when `token_map.json` holds no token for it.
 
-A fold writes the rows it dropped, and the report lists each fold. One click
-opens those rows read-only. That view shows the wire copy, so a handle stays a
-handle there, and the conversation view shows the real value. The pass runs on
-the summarizer transcript too, because that call is an outbound send like any
-other. With the switch on, the summarizer sees handles, and its brief carries
-those handles into the next system prompt.
+A temporary conversation keeps a transcript, and the conversation list does not show
+it. A delete is the same action: the transcript stays on disk, and the list drops the
+conversation. The leak report reads transcripts, so a hidden conversation is still
+auditable.
+
+A fold writes the rows it dropped, and the scan reads that transcript for leaks. The
+report lists the fold, and one click opens those rows read-only. That view shows the
+wire copy, so a handle stays a handle there, and the conversation view shows the real
+value. The pass runs on the summarizer transcript too, because that call is an
+outbound send like any other. With the switch on, the summarizer sees handles, and its
+brief carries those handles into the next system prompt.
 
 The console shows a "Redacted N items" chip on each turn whose pass replaced a
 value. On a chip click, the console lists the fired classes and never shows the
 values.
+
+## Redaction scan
+
+The redaction scan runs for the active conversation while you work. The scan reads
+the wire copy, the receiver, and the time for every row of that conversation, and
+the scan keeps the result in memory. `conversations::render` reads that result, so a
+later open needs no new pass over the rules. `redact::tokenize_chat` computes the
+hits for a row when that row goes out. The scan adds those applied redactions to the
+result as the send finishes.
+
+The scan is not a report. The scan covers one conversation, and the scan shows
+nothing to you. First Mate caches the active conversation only, so a move to another
+conversation drops the result. The scan holds no record on disk, so a restart drops
+the result too, and the next open of the conversation runs the scan again.
+
+## Leak report
+
+The leak report runs when you click the button. The report goes through every
+conversation, including a conversation you never opened. The report lists each
+message whose stored wire copy holds a redacted value in plain text. The report
+reuses the in-memory scan result for a conversation that has one. The report runs the
+scan itself for a conversation that does not.
+
+The report icon opens the report window with a Generate button. The button states that
+the scan covers every conversation and can take time. A progress bar shows the work
+while the report runs.
+
+No report file exists. No code appends a leak row, and no code rewrites a report
+file. `conversations.rs` holds the wire copy, the receiver, and the time for every
+row. `token_map.json` is the global source of truth for redacted values. One table
+serves every conversation. `Table::token` gives one value one token, so a token in a
+stored row proves the pass replaced that value on that send. `entity_registry.json`
+holds the values you declared. The rules in `redact.rs` are the detector.
+
+One pass answers both questions. A token in a stored row means the pass replaced the
+value on that send. The value standing in that row means the value left. The value
+standing in that row with no token in the map means the value left, and the pass
+never knew the value was sensitive.
+
+## Redaction entries in the conversation DTO
+
+`conversations::render` returns one entry per value per message. The console reads
+those entries, and the console never searches display text for a value.
+`load_conversation` detokenizes the text it renders, so a handle and a value can
+show the same digits on screen, and a string match returns the wrong row.
+
+The message carries the time of the send. `Redaction` holds no time, because a
+redaction is a fact about its message, not a second event. The message record holds the
+provider and the model for the same reason. A conversation that changes provider
+mid-way is a later question.
+
+```ts
+interface Redaction {
+  redactedValue: string; // the real value
+  placeholder: string;   // ⟦CLASS_N⟧, the token the map holds for that value
+  isLeaked: boolean;     // true when the wire copy holds redactedValue
+}
+
+interface UserMessage {
+  source: 'user';
+  text: string;
+}
+
+interface AssistantMessage {
+  source: 'assistant';
+  text: string;
+}
+
+interface ToolMessage {
+  source: 'tool';
+  text: string;
+  report: ToolReport; // the fields the record already holds
+}
+
+interface MessageWithPossibleRedactions {
+  message: UserMessage | AssistantMessage | ToolMessage;
+  redactions: Redaction[];
+}
+
+type Conversation = MessageWithPossibleRedactions[];
+```
+
+`isLeaked` is true when the stored wire copy holds `redactedValue` at a place
+where `placeholder` should stand. That is a placeholder the pass did not apply. A
+message whose wire copy holds no handle and no sensitive value carries an empty
+`redactions` array.
+
+`placeholder` is always a real placeholder. The user marks a value and clicks
+`Redact`. `redact::seed` then mints the placeholder through `Table::token`, and
+`Store::commit` writes `token_map.json`. The map holds a placeholder for every
+value the user declared, even a value no send ever sent.
+
+A rule can find a value the user never declared. The pass mints the placeholder for
+that value, as `Table::token` does today. The report scan can find such a value in
+a stored row with no placeholder in the map. The scan mints the placeholder, and the
+map keeps it. The scan writes `token_map.json` in no other case.
+
+A new value and its placeholder is the one event that changes the report. That event
+invalidates the entry cache, so the next open rescans the stored rows for the new
+value. A row that holds the value gains an entry with `isLeaked` as true. The pass
+did not apply the placeholder on that send.
 
 ## Containment (class 2)
 
@@ -468,15 +573,14 @@ value from a provider, and no provider offers a control that deletes one string
 from its log. First Mate therefore promises two things: the user sees exactly
 what left and where it went, and the record of that fact survives.
 
-- Mark the leak in place. `leak.rs` keeps one sealed row per leak: the value,
-  its character range, the class, the provider id, the model, the Base URL, and
-  the time of the send. The console colors the leaked value red, the same red as
-  `.msg.error`. The console appends `⚠` (U+26A0) in that red at the end of the
-  row. The tooltip names the class, the provider, the model, and the time. A
-  click opens the leak report row for that leak. The console matches the value
-  into the conversation's rows when it renders them, so every row that carried
-  the value shows the marker. The marker survives a resume, because the report
-  file survives it.
+- Mark the leak in place. `conversations::render` returns the leaked value, its
+  character range, its class, and the token the pass missed. The console colors
+  the leaked value red, the same red as `.msg.error`. The console appends `⚠`
+  (U+26A0) in that red at the end of the row. The tooltip names the class, the
+  provider, the model, and the time of the send. A click opens the leak report
+  row for that leak. The entry comes from the stored wire copy, so every row that
+  sent the value shows the marker. The marker survives a resume, because the scan
+  reads the stored rows again.
 - The marker is never literal text in the row. `ChatView.vue` sends the whole
   transcript to the provider on each turn. Literal marker text would tell the
   receiver that the value leaked. The Agent Model could also echo that text. The
@@ -485,8 +589,11 @@ what left and where it went, and the record of that fact survives.
 - State the leak, and state it exactly. The console names the value, the
   conversation, the message, the provider, the model, and the time of the send.
   The console gives no advice, because the user cannot undo the send.
-- Keep the record. The leak report below holds one row per leak, and each row
-  links into the console at the message that carried the value.
+- Keep the record. The transcript is the record. The report regenerates from the
+  transcript, and each report row links into the console at the message that
+  carried the value.
+- Soft delete only. A delete keeps the transcript and drops the conversation from the
+  list, so the report still lists that conversation's rows.
 - Record the re-send. A leaked value leaves again on every later turn under a
   provider whose switch is off. The report gains one row for each such send.
 
@@ -494,7 +601,7 @@ The product ships the inline marker, the exact statement, and the leak report.
 The console keeps its one red line per run too, because that line sits beside the
 row. The recall measurement in the last bullet below stays open.
 
-### Leak report
+### Leak report rows and export
 
 The leak report is the artifact the user, a lawyer, an insurer, or an auditor
 reads. First Mate's work ends at the report.
@@ -508,17 +615,17 @@ reads. First Mate's work ends at the report.
   and the time of the send.
 - Each row links into the console. The user opens the conversation, and the
   console scrolls the message into view. The user then reads the leak in context.
-  A row whose conversation was never saved has no stored message, so the console
-  leaves that row inert.
+  A temporary conversation keeps a transcript outside the conversation list, so
+  every row has a stored message and links into the console.
 - First Mate stores no retention claim. The client cannot learn how long one
   provider keeps one message, so no row states an exposure window. The provider
   terms below record what each provider publishes.
-- First Mate keeps the report for as long as the user wants it. The default is
-  forever, and no rotation or expiry exists.
-- The store file is `leaks.jsonl`, append-only, sealed with the envelope
-  `crypto.rs` writes. The file holds real values under the TPM key or the
-  recovery key. The file opens on this machine only. `crypto::open_store_bytes`
-  refuses the file to `read_file`, so the agent cannot read the record back.
+- First Mate regenerates the report on request. No expiry exists on the
+  transcripts behind the report, and no rotation exists.
+- The report has no store file. The report is a query over the sealed transcripts
+  and the sealed `token_map.json`, so the report exists while those files exist.
+  `crypto::open_store_bytes` refuses `token_map.json` to `read_file`, so the agent
+  cannot read the map back.
 - The console exports the report as a PDF, and `lopdf` writes that file. The
   export lands in the user's Downloads folder, because the file holds the real
   values in the clear. The user may protect the PDF with a password of at most

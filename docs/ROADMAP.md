@@ -319,10 +319,19 @@ the design.
 - [x] `conversations.rs` owns the conversation record. Each line is the message
       object one request carried. The console sends the transcript and writes
       nothing, and `load_conversation` detokenizes each row for display.
-- [x] The leak scan reads the stored rows, so a value in a stored row reached a
-      receiver. One row is scanned once, when it goes in, so a re-send adds no
-      row. `leak::rescan` re-reads every stored row when the registry gains a
-      value, and never repeats a row the report holds.
+- [x] The redaction scan reads the stored rows, so a value in a stored row reached a
+      receiver. The scan runs the rules in `redact.rs` over the wire copy, so the
+      scan finds a value the map holds no token for.
+- [ ] The console generates the report when you click Generate, so `leaks.jsonl`,
+      `leak::record`, and `leak::rescan` have no job. `conversations::render`
+      returns the per-message redaction entries instead. The design is the
+      "Leak report" section of `docs/roadmap/REDACTION.md`.
+- [ ] A delete keeps the transcript and drops the conversation from the list, so a
+      leak audit still covers a deleted conversation and a temporary one.
+- [ ] The redaction scan caches the active conversation only, and the report reuses
+      that cache where one exists.
+- [ ] The report window shows a Generate button that states the cost, and a progress
+      bar runs while the scan works.
 - [x] A fold stores the rows it dropped. The pass runs on that transcript,
       because the summarizer call is a send of its own. The report lists each
       fold, and one click opens those rows read-only as the wire copy.
