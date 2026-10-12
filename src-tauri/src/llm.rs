@@ -272,8 +272,8 @@ fn shown(red: &Option<redact::Redactor>, carry: &mut String, delta: &str) -> Str
     }
 }
 
-/// A run that replaced nothing emits nothing. A value the Agent Model already
-/// holds gets one report per run, because a later audit cannot take it back.
+/// A value the Agent Model already holds gets one report per run, because a
+/// later audit cannot take it back.
 fn emit_redacted(app: &tauri::AppHandle, red: &Option<redact::Redactor>) {
     let Some(r) = red else { return };
     let count = r.redacted_count();
@@ -669,7 +669,6 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
             if let Some(s) = scorer.as_ref() {
                 let mut found: Vec<&str> = Vec::new();
                 for m in wire.iter().rev() {
-                    // Only your message and a tool result carry new text out.
                     if !matches!(m.role, lmkit::Role::User | lmkit::Role::Tool) {
                         continue;
                     }

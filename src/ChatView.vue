@@ -547,7 +547,7 @@ onMounted(() => {
   listen<RedactReport>("redact", (event) => {
     pendingRedact = event.payload;
   });
-  // The notice names an earlier send, so it sits outside this run's chip.
+  // The notice names an earlier send, so the notice sits outside this run's chip.
   listen<{ classes: string[] }>("leak", (event) => {
     addMsg(
       `These values left the PC earlier in this conversation: ${event.payload.classes.join(", ")}. The Privacy Model replaces them in this send, and cannot undo the earlier one.`,
@@ -670,9 +670,7 @@ async function submit() {
     const held = /^held:(\w+)(?: (.*))?$/.exec(msg);
     const sentence = held ? HELD_TEXT[held[1]]?.(held[2] ?? "") : undefined;
     if (held) {
-      // The run sent nothing, so the newest user row never reached the Agent
-      // Model. Keep it out of the conversation, and put the text back where
-      // you can edit it.
+      // The run sent nothing, so the newest user row never went to the Agent Model.
       const unsent = [...messages.value].reverse().find((m) => m.cls === "user");
       if (unsent) {
         messages.value = messages.value.filter((m) => m.id !== unsent.id);

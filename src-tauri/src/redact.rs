@@ -526,14 +526,12 @@ pub(crate) fn init(path: PathBuf) {
 pub(crate) struct Redactor {
     store: Store,
     registry: Vec<String>,
-    /// Text the Agent Model already holds in this conversation, one entry per
-    /// row. The Privacy Model judges none of it, because those words already
-    /// left the PC.
+    /// Text the Agent Model already holds in this conversation. The gate judges
+    /// none of that text, because those words already left the PC.
     sent: HashSet<String>,
-    /// The same rows as one string, so a value can be found inside them.
+    /// The pass searches a value inside this text for the leak report.
     sent_blob: String,
-    /// Classes of values this run replaces that already left the PC.
-    leaks: Mutex<Vec<&'static str>>,
+    leaks: Mutex<Vec<Class>>,
 }
 
 impl Redactor {
@@ -565,10 +563,8 @@ impl Redactor {
         }
     }
 
-    /// The gate judges the text First Mate puts on the wire: your message, and
-    /// each tool result. A false positive on the instruction set replaces it
-    /// with one token, which breaks the run. The provider's own text needs no
-    /// check, because the provider wrote it.
+    /// A false positive on the instruction set replaces the whole set with one
+    /// token, which breaks the run.
     pub(crate) fn pending(&self, msgs: &mut [serde_json::Value]) -> Vec<String> {
         let mut found: Vec<String> = Vec::new();
         for msg in msgs.iter().rev() {
@@ -584,15 +580,13 @@ impl Redactor {
         self.unjudged(texts.map(str::to_string).collect())
     }
 
-    /// The gate judges new text only. A row the Agent Model already holds needs
-    /// no new judgement, because its words already left the PC. The agent loop
-    /// re-sends the whole window on every tool turn, and `record` keeps those
-    /// resends cheap.
+    /// A row the Agent Model already holds needs no new judgement, because
+    /// those words already left the PC. The agent loop re-sends the whole
+    /// window on every tool turn. `record` keeps those resends cheap.
     fn unjudged(&self, found: Vec<String>) -> Vec<String> {
         found.into_iter().filter(|m| !self.sent.contains(m)).collect()
     }
 
-    /// `llm.rs` calls this once per run with the rows an earlier turn sent.
     pub(crate) fn note_sent(&mut self, rows: impl Iterator<Item = String>) {
         for row in rows {
             self.sent_blob.push_str(&row);
@@ -601,20 +595,21 @@ impl Redactor {
         }
     }
 
-    /// The gate cleared this text, and the request carries it now.
+    /// A cleared message counts as sent, so no later turn asks about it again.
     pub(crate) fn record(&mut self, message: &str) {
         self.sent.insert(message.to_string());
     }
 
-    /// The classes whose values already left the PC, one entry each.
     pub(crate) fn leaks(&self) -> Vec<&'static str> {
         self.leaks
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
+            .iter()
+            .map(|class| class.label())
+            .collect()
     }
 
-    /// A value the Agent Model already holds. A later audit cannot take it back.
+    /// A later audit cannot take back a value the Agent Model already holds.
     fn leaked(&self, value: &str) -> bool {
         !self.sent_blob.is_empty() && self.sent_blob.contains(value)
     }
@@ -636,14 +631,13 @@ impl Redactor {
         for hit in self.hits(text) {
             out.push_str(&text[last..hit.start]);
             let value = &text[hit.start..hit.end];
-            let label = hit.class.label();
             if self.leaked(value) {
                 let mut leaks = self
                     .leaks
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
-                if !leaks.contains(&label) {
-                    leaks.push(label);
+                if !leaks.contains(&hit.class) {
+                    leaks.push(hit.class);
                 }
             }
             out.push_str(&table.token(hit.class, value));
@@ -837,8 +831,7 @@ fn registry_hits(text: &str, registry: &[String], out: &mut Vec<Hit>) {
     }
 }
 
-/// Only your message and a tool result carry new text out of the PC. The
-/// instruction set is First Mate's own text, and an assistant row holds text
+/// The instruction set is First Mate's own text. An assistant row holds text
 /// the provider wrote.
 fn leaves(role: Option<&str>) -> bool {
     matches!(role, Some("user") | Some("tool"))
