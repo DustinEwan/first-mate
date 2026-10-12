@@ -322,23 +322,26 @@ the design.
 - [x] The redaction scan reads the stored rows, so a value in a stored row reached a
       receiver. The scan runs the rules in `redact.rs` over the wire copy, so the
       scan finds a value the map holds no token for.
-- [ ] The console generates the report when you click Generate, so `leaks.jsonl`,
-      `leak::record`, and `leak::rescan` have no job. `conversations::render`
-      returns the per-message redaction entries instead. The design is the
-      "Leak report" section of `docs/roadmap/REDACTION.md`.
-- [ ] A delete keeps the transcript and drops the conversation from the list, so a
+- [x] The console generates the report when you click Generate. No report file
+      exists: `scan::generate` queries the transcripts and the token map, and
+      `conversations::render` returns the per-row redaction entries. The design is
+      the "Leak report" section of `docs/roadmap/REDACTION.md`.
+- [x] A delete keeps the transcript and drops the conversation from the list, so a
       leak audit still covers a deleted conversation and a temporary one.
-- [ ] The redaction scan caches the active conversation only, and the report reuses
-      that cache where one exists.
-- [ ] The report window shows a Generate button that states the cost, and a progress
-      bar runs while the scan works.
+      `conversations::tests::a_hidden_transcript_still_reads` and
+      `conversations::tests::a_temporary_transcript_stays_out_of_the_list` hold
+      those two rules.
+- [x] The redaction scan caches one conversation by row count, and the report
+      reuses that cache where one exists.
+- [x] The report window shows a Generate button that states the cost, and the
+      `report-progress` event drives the count while the scan works.
 - [x] A fold stores the rows it dropped. The pass runs on that transcript,
       because the summarizer call is a send of its own. The report lists each
       fold, and one click opens those rows read-only as the wire copy.
 - [x] `read_file` cannot open a transcript, because a fold line holds rows that
       left in plaintext. `conversations::tests::the_agent_cannot_read_a_transcript`
-      and `leak::tests::a_value_declared_after_a_send_is_found_in_the_stored_row`
-      hold those two rules.
+      and `redact::tests::a_registry_value_with_no_shape_leaves_tokenized` hold
+      those two rules.
 - [x] Three tests prove that the sealed token map survives a restart and stays
       closed to `read_file`:
       `crypto::tests::a_store_read_never_opens_the_token_map`,
@@ -369,11 +372,13 @@ the design.
 - [ ] `criteria` in `decide.rs` states what counts as a yes and what counts as a
       no. The wording of the question and the wording of the criteria are the only
       tuning. Re-measure the two `Test` scores after any change.
-- [x] `leak.rs` keeps one sealed row per leak, and the console colors the value
-      red and appends `⚠` (U+26A0) in the same red. Literal marker text would
-      re-leave on every turn, so the console draws the marker at render time.
-- [x] The leak report holds one sealed row per leak. Each row links into the
-      console at the message that carried the value.
+- [x] The console colors a leaked value red and appends `⚠` (U+26A0) in the same
+      red. Each row carries its own redaction entries, and the console draws the
+      marker at render time, because literal marker text would re-leave on every
+      turn.
+- [x] The leak report names one value per row that carried it in the clear. Each
+      row links into the console at the transcript and the position that carried
+      the value.
 - [x] The console exports the leak report as a PDF. The user may protect that PDF
       with a generated password or a password of their own.
 - **Accept:** a checked box produces the same tokenized request on a local

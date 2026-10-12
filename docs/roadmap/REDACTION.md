@@ -210,7 +210,7 @@ the console renders, not what the record holds.
 
 The redaction scan reads the record. A value in a stored row left the machine. The
 scan runs the rules in `redact.rs` over the stored wire copy. The scan therefore
-a value even when `token_map.json` holds no token for it.
+names a value even when `token_map.json` holds no token for it.
 
 A temporary conversation keeps a transcript, and the conversation list does not show
 it. A delete is the same action: the transcript stays on disk, and the list drops the
@@ -230,17 +230,17 @@ values.
 
 ## Redaction scan
 
-The redaction scan runs for the active conversation while you work. The scan reads
-the wire copy, the receiver, and the time for every row of that conversation, and
-the scan keeps the result in memory. `conversations::render` reads that result, so a
-later open needs no new pass over the rules. `redact::tokenize_chat` computes the
-hits for a row when that row goes out. The scan adds those applied redactions to the
-result as the send finishes.
+`conversations::render` runs the scan. The scan reads the wire copy, the receiver,
+and the time of every row of one conversation. `scan::render_rows` keeps the
+rendered rows of one conversation in memory, so a later open needs no new pass over
+the rules.
 
 The scan is not a report. The scan covers one conversation, and the scan shows
-nothing to you. First Mate caches the active conversation only, so a move to another
-conversation drops the result. The scan holds no record on disk, so a restart drops
-the result too, and the next open of the conversation runs the scan again.
+nothing to you. First Mate caches one conversation, so a move to another
+conversation drops the result. The cache key is the row count, so a send that
+appends rows invalidates the entry, and the next open rescans that conversation.
+The scan holds no record on disk, so a restart drops the result too, and the next
+open runs the scan again.
 
 ## Leak report
 
@@ -268,10 +268,10 @@ never knew the value was sensitive.
 
 ## Redaction entries in the conversation DTO
 
-`conversations::render` returns one entry per value per message. The console reads
-those entries, and the console never searches display text for a value.
-`load_conversation` detokenizes the text it renders, so a handle and a value can
-show the same digits on screen, and a string match returns the wrong row.
+`conversations::render` returns one entry per value per message. Each entry sits on
+the message that carried it, so the console never asks which row a value belongs
+to. The console marks the value inside that row's own rendered text, because
+markdown re-wraps the text, and a stored character offset would not survive it.
 
 The message carries the time of the send. `Redaction` holds no time, because a
 redaction is a fact about its message, not a second event. The message record holds the
@@ -281,32 +281,23 @@ mid-way is a later question.
 ```ts
 interface Redaction {
   redactedValue: string; // the real value
-  placeholder: string;   // ⟦CLASS_N⟧, the token the map holds for that value
-  isLeaked: boolean;     // true when the wire copy holds redactedValue
+  placeholder: string; // ⟦CLASS_N⟧, the token the map holds for that value
+  isLeaked: boolean; // true when the wire copy holds redactedValue
+  class: string; // CARD, EMAIL, …
 }
 
-interface UserMessage {
-  source: 'user';
-  text: string;
+interface DisplayRow {
+  role: string; // user, assistant, tool, summary
+  text: string; // the detokenized row the console shows
+  report?: ToolReport; // the fields the record already holds
+  folded?: number; // the count a fold dropped, on a summary row
+  redactions?: Redaction[];
+  at: number; // the time of the send
+  provider?: string;
+  model?: string;
+  baseUrl?: string;
+  toolName?: string; // the tool that carried a tool-result row
 }
-
-interface AssistantMessage {
-  source: 'assistant';
-  text: string;
-}
-
-interface ToolMessage {
-  source: 'tool';
-  text: string;
-  report: ToolReport; // the fields the record already holds
-}
-
-interface MessageWithPossibleRedactions {
-  message: UserMessage | AssistantMessage | ToolMessage;
-  redactions: Redaction[];
-}
-
-type Conversation = MessageWithPossibleRedactions[];
 ```
 
 `isLeaked` is true when the stored wire copy holds `redactedValue` at a place
@@ -610,13 +601,13 @@ reads. First Mate's work ends at the report.
   owns the security of the report once First Mate writes it. First Mate's duty is
   an exact record, not a redacted one.
 - Each row holds the value and its class. Each row holds the conversation, the
-  character range of the value in the text that left, and the tool that carried
-  it, when a tool did. Each row holds the provider id, the model, the Base URL,
-  and the time of the send.
-- Each row links into the console. The user opens the conversation, and the
-  console scrolls the message into view. The user then reads the leak in context.
-  A temporary conversation keeps a transcript outside the conversation list, so
-  every row has a stored message and links into the console.
+  transcript file, the position of the row inside that transcript, and the tool
+  that carried it, when a tool did. Each row holds the provider id, the model, the
+  Base URL, and the time of the send.
+- Each row links into the console. The console opens the transcript file the row
+  names, and scrolls that row into view. The user then reads the leak in context.
+  A temporary conversation and a deleted conversation keep a transcript outside
+  the conversation list, so every row has a stored message to open.
 - First Mate stores no retention claim. The client cannot learn how long one
   provider keeps one message, so no row states an exposure window. The provider
   terms below record what each provider publishes.
