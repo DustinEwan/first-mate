@@ -373,9 +373,9 @@ flagged message therefore goes to you, not straight to a marker.
   strips that suffix before it appends an endpoint, so the client never sends a
   doubled `/v1`.
 - The console names each model once. The Agent Model answers you. The Privacy Model
-  reads the words before they leave the PC. A packaging test bans the older names in
-  the UI files. `decide.rs` and the `decision_` setting keys keep the older
-  identifier. A rename there would break each saved settings file.
+  reads the words before they leave the PC. `decide.rs` and the `decision_` setting
+  keys keep the older identifier. A rename there would break each saved settings
+  file.
 - A scorer outage holds the send. First Mate sends nothing. The console names the
   host, the cause, and the two ways forward: start the server, or turn off the Privacy
   Model in Settings. The app writes one `GATE:` log line with the failing address.
