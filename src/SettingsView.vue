@@ -146,6 +146,12 @@ async function refreshModels() {
   }
 }
 
+// `check_ack` in `src-tauri/src/settings.rs` refuses this save, so the button
+// must not offer it.
+const ackBlocked = computed(
+  () => decisionEnabled.value && hideSensitiveChecked.value && !decisionRemoteOk.value,
+);
+
 async function save() {
   const settings = {
     llm: {
@@ -361,9 +367,12 @@ function closeWindow() {
         </div>
 
         <n-space align="center" class="footer">
-          <n-button type="primary" @click="save">Save</n-button>
+          <n-button type="primary" :disabled="ackBlocked" @click="save">Save</n-button>
           <n-button @click="cancel">Cancel</n-button>
-          <span v-if="status" class="status">{{ status }}</span>
+          <span v-if="ackBlocked" class="status"
+            >Accept the Privacy Model acknowledgement or disable Advanced detection.</span
+          >
+          <span v-else-if="status" class="status">{{ status }}</span>
         </n-space>
       </main>
     </div>

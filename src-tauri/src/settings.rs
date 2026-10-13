@@ -136,7 +136,7 @@ pub(crate) fn get_settings(app: tauri::AppHandle) -> tauri::Result<Settings> {
 fn check_ack(settings: &Settings) -> Result<(), String> {
     if settings.decision_server_enabled && !settings.decision_server_remote_ok {
         return Err(
-            "Select the acknowledgement, or turn off Advanced detection, before you save.".into(),
+            "Accept the Privacy Model acknowledgement or disable Advanced detection.".into(),
         );
     }
     Ok(())
