@@ -130,12 +130,31 @@ pub(crate) fn get_settings(app: tauri::AppHandle) -> tauri::Result<Settings> {
     load(&app)
 }
 
+/// The acknowledgement must arrive with the settings. A host off this machine
+/// holds every message the gate inspected, so a stored configuration cannot say
+/// "on" for a host the user never accepted.
+fn check_remote_ack(settings: &Settings) -> Result<(), String> {
+    if !settings.decision_server_enabled {
+        return Ok(());
+    }
+    let base = settings.decision_server_url.trim();
+    if base.is_empty() || is_loopback(base) || settings.decision_server_remote_ok {
+        return Ok(());
+    }
+    Err(format!(
+        "{} is not on this PC. Select the acknowledgement, or turn off Advanced \
+         detection, before you save.",
+        host_of(base)
+    ))
+}
+
 #[tauri::command]
-pub(crate) fn save_settings(app: tauri::AppHandle, settings: Settings) -> tauri::Result<()> {
-    let path = settings_file(&app)?;
-    let contents = serde_json::to_string_pretty(&settings)?;
-    std::fs::write(&path, crypto::seal(contents.as_bytes()).map_err(std::io::Error::other)?)?;
-    Ok(())
+pub(crate) fn save_settings(app: tauri::AppHandle, settings: Settings) -> Result<(), String> {
+    check_remote_ack(&settings)?;
+    let path = settings_file(&app).map_err(|e| e.to_string())?;
+    let contents = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+    let sealed = crypto::seal(contents.as_bytes()).map_err(|e| e.to_string())?;
+    std::fs::write(&path, sealed).map_err(|e| e.to_string())
 }
 
 /// Layer 2 of `docs/roadmap/REDACTION.md`: the values no shape identifies, such
@@ -304,5 +323,28 @@ mod tests {
                 "{url} names this machine"
             );
         }
+    }
+
+    #[test]
+    fn a_save_for_a_remote_host_needs_the_acknowledgement() {
+        let mut settings = Settings {
+            decision_server_enabled: true,
+            decision_server_url: "http://192.168.1.20:8741".into(),
+            ..Default::default()
+        };
+        let err = check_remote_ack(&settings).unwrap_err();
+        assert!(err.contains("192.168.1.20"), "{err}");
+        settings.decision_server_remote_ok = true;
+        assert!(check_remote_ack(&settings).is_ok());
+    }
+
+    #[test]
+    fn a_save_for_a_loopback_host_needs_no_acknowledgement() {
+        let settings = Settings {
+            decision_server_enabled: true,
+            decision_server_url: "http://127.0.0.1:8741".into(),
+            ..Default::default()
+        };
+        assert!(check_remote_ack(&settings).is_ok());
     }
 }
