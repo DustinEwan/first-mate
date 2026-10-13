@@ -37,7 +37,6 @@ const decisionUrl = ref("");
 const decisionEnabled = ref(false);
 const decisionThreshold = ref<number | null>(0.5);
 const decisionRemoteOk = ref(false);
-const decisionHost = ref("");
 const decisionRemote = ref(false);
 const models = ref<string[]>([]);
 const status = ref("");
@@ -218,12 +217,10 @@ async function probeServer() {
 // Rust owns the loopback rule, so the warning and the gate cannot disagree.
 async function checkHost(url: string) {
   if (url.trim() === "") {
-    decisionHost.value = "";
     decisionRemote.value = false;
     return;
   }
-  const h = await invoke<{ host: string; loopback: boolean }>("decision_host", { url });
-  decisionHost.value = h.host;
+  const h = await invoke<{ loopback: boolean }>("decision_host", { url });
   decisionRemote.value = !h.loopback;
 }
 
@@ -329,9 +326,8 @@ function closeWindow() {
                   Hide sensitive information
                 </n-checkbox>
                 <template #feedback>
-                  The Agent Model runs on a computer you do not control. Patterns of sensitive
-                  information are removed from what is sent to the Agent Model. Nothing else needs
-                  installing.
+                  The Agent Model runs on a computer you do not control. Common patterns of
+                  sensitive information are removed from what is sent to the Agent Model.
                 </template>
               </n-form-item>
               <n-form-item v-if="hideSensitiveChecked" :show-label="false">
@@ -356,12 +352,12 @@ function closeWindow() {
                 :show-label="false"
               >
                 <n-checkbox v-model:checked="decisionRemoteOk">
-                  I understand that {{ decisionHost }} reads messages before sensitive values are
-                  removed, and keeps what it reads.
+                  I understand that the Privacy Model reads messages without any redaction.
                 </n-checkbox>
                 <template #feedback>
-                  {{ decisionHost }} is not on this PC. Without this acknowledgement, no message is
-                  checked before it leaves.
+                  Sensitive information may be cached or logged by the Privacy Model service. Run
+                  the Privacy Model on this PC, or on a machine your organization controls. Do not
+                  expose the service to the public internet.
                 </template>
               </n-form-item>
               <n-form-item
