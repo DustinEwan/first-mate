@@ -360,8 +360,8 @@ fn brief_rules() -> Option<String> {
     crate::skills::prompt_content("COMPACT.md")
 }
 
-/// The first field is the window this run must fit. The second field names who
-/// set it.
+/// The first field is the window this run must fit, or 0 when neither the user
+/// nor the endpoint gives one. The second field names who set it.
 async fn resolve_window(
     provider: &str,
     base: &str,
@@ -374,7 +374,7 @@ async fn resolve_window(
     }
     match crate::modelapi::model_context(provider, base, api_key, model).await {
         Some(w) => (w, "endpoint"),
-        None => (context::DEFAULT_WINDOW_TOKENS, "fallback"),
+        None => (0, "unknown"),
     }
 }
 
@@ -631,8 +631,14 @@ async fn chat_via_lmkit(app: tauri::AppHandle, p: ChatParams) -> Result<String, 
     // boundary (docs/COMPACTION.md).
     let threshold = context::threshold_tokens(window, compact_at_percent);
     let overhead = context::tools_tokens();
-    let keep_budget = context::target_tokens(threshold)
-        .saturating_sub(context::estimate_str(&system_prompt) + overhead);
+    let keep_budget = context::keep_budget(
+        window,
+        compact_at_percent,
+        context::estimate_str(&system_prompt) + overhead,
+    );
+    if window == 0 && !prior_history.is_empty() {
+        log("COMPACT: no window known; sending the full history");
+    }
     let (mut summary, start, mut cut) = plan_history(&prior_history, keep_budget);
     let mut kept_from = start;
     let rules = if cut > 0 { brief_rules() } else { None };
@@ -1012,8 +1018,14 @@ async fn chat_via_openai(app: tauri::AppHandle, p: ChatParams) -> Result<String,
 
     let threshold = context::threshold_tokens(window, compact_at_percent);
     let overhead = context::tools_tokens();
-    let keep_budget = context::target_tokens(threshold)
-        .saturating_sub(context::estimate_str(&system_prompt) + overhead);
+    let keep_budget = context::keep_budget(
+        window,
+        compact_at_percent,
+        context::estimate_str(&system_prompt) + overhead,
+    );
+    if window == 0 && !prior_history.is_empty() {
+        log("COMPACT: no window known; sending the full history");
+    }
     let (mut summary, start, mut cut) = plan_history(&prior_history, keep_budget);
     let mut kept_from = start;
     let rules = if cut > 0 { brief_rules() } else { None };

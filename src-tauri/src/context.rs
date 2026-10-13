@@ -9,11 +9,6 @@
 
 use serde_json::Value;
 
-/// Used when neither the user nor the endpoint gives a window. The value
-/// stays inside small local models and avoids summarizing a hosted
-/// model's history every other turn.
-pub(crate) const DEFAULT_WINDOW_TOKENS: u32 = 32_768;
-
 /// Never prune inside this many newest tokens: the evidence for what the
 /// agent is doing right now.
 pub(crate) const KEEP_RECENT_TOKENS: usize = 20_000;
@@ -83,6 +78,16 @@ pub(crate) fn threshold_tokens(window: u32, percent: u8) -> usize {
 /// long run from folding on every turn.
 pub(crate) fn target_tokens(threshold: usize) -> usize {
     threshold / 4 * 3
+}
+
+/// The tokens a run may keep word for word. An unknown window has no budget,
+/// so the run sends the full history and the provider judges its size. A
+/// guessed window folds a hosted model's history on a number nobody set.
+pub(crate) fn keep_budget(window: u32, percent: u8, fixed_tokens: usize) -> usize {
+    if window == 0 {
+        return usize::MAX;
+    }
+    target_tokens(threshold_tokens(window, percent)).saturating_sub(fixed_tokens)
 }
 
 /// The line a compaction marks in the system prompt. `summary_into` replaces
@@ -489,5 +494,12 @@ mod tests {
         assert_eq!(threshold_tokens(200_000, 85), 170_000);
         assert_eq!(threshold_tokens(1_000, 0), 100);
         assert_eq!(threshold_tokens(1_000, 255), 1_000);
+    }
+
+    #[test]
+    fn an_unknown_window_folds_nothing() {
+        let msgs = vec![user("one"), assistant("two"), user("three")];
+        assert_eq!(turn_anchored_cut(&msgs, keep_budget(0, 85, 0)), 0);
+        assert!(turn_anchored_cut(&msgs, keep_budget(4, 85, 0)) > 0);
     }
 }

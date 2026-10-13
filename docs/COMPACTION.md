@@ -65,19 +65,22 @@ apply it the same way before they build the request. Only `chat_via_openai`
 applies it again between turns. `chat_via_lmkit` serves Anthropic and Gemini and
 folds once, before the request.
 
-1. **Unit is tokens, never rows.** The trigger is the `Compact at % of context`
-   setting, which is global and defaults to 85 (`compact_at_percent`). The
-   Settings UI allows 10 to 100. `threshold_tokens` clamps the percent to that
-   range. A bad setting therefore can neither disable compaction nor fire it on
-   an empty window. `resolve_window` takes the window in this order: the
-   `context_window` override when it is above 0, then `model_context`, then
-   `context::DEFAULT_WINDOW_TOKENS`, which is 32_768. `model_context` asks the
-   endpoint once per endpoint plus model and stores the answer in `WINDOW_CACHE`.
-   `window_of_entry` reads `max_model_len`, `n_ctx`, `context_length`, or
-   `context_window` from the model's own row. Ollama answers `/api/show`, and
-   `fetch_context` takes the `model_info` key that ends with `context_length`.
-   Anthropic and Google report no window, so those providers need the override
-   or the fallback. The estimator counts locally. `estimate_text` charges four
+1. **Unit is tokens, never rows.** The trigger is the
+   `Compaction threshold (percent of context)` setting, which is global and
+   defaults to 85 (`compact_at_percent`). The Settings UI allows 10 to 100.
+   `threshold_tokens` clamps the percent to that range. A bad setting therefore
+   can neither disable compaction nor fire it on an empty window.
+   `resolve_window` takes the window in this order: the `context_window`
+   override when it is above 0, then `model_context`, then 0. An unknown window
+   gives no budget, so no fold runs. The provider judges the size of the
+   request, and `llm.rs` logs `COMPACT: no window known; sending the full
+   history`. `model_context` asks the endpoint once per endpoint plus model and
+   stores the answer in `WINDOW_CACHE`. `window_of_entry` reads
+   `max_model_len`, `n_ctx`, `context_length`, or `context_window` from the
+   model's own row. Ollama answers `/api/show`, and `fetch_context` takes the
+   `model_info` key that ends with `context_length`. Anthropic and Google
+   report no window, so those providers need the override. The estimator counts
+   locally. `estimate_text` charges four
    characters per token. `estimate_tokens` charges each image part the flat
    `IMAGE_TOKENS` allowance of 1_200, not its base64 length. A row with no
    string content estimates from its serialized JSON. A tool-call row therefore

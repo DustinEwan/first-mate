@@ -21,7 +21,8 @@ struct LlmSettings {
     base_url: String,
     /// Context window in tokens. A value of 0 means: ask the endpoint,
     /// which reports `max_model_len` (llama.cpp) or nothing. An endpoint
-    /// that reports nothing falls back to `context::DEFAULT_WINDOW_TOKENS`.
+    /// that reports nothing leaves the window unknown, so the run sends the
+    /// full history and the provider judges its size.
     context_window: u32,
     compact_at_percent: u8,
 }
