@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { computed, ref, watch } from "vue";
+import { computed, ref } from "vue";
 import {
   NConfigProvider,
   NForm,
@@ -37,7 +37,6 @@ const decisionUrl = ref("");
 const decisionEnabled = ref(false);
 const decisionThreshold = ref<number | null>(0.5);
 const decisionRemoteOk = ref(false);
-const decisionRemote = ref(false);
 const models = ref<string[]>([]);
 const status = ref("");
 const activeTab = ref("model");
@@ -126,7 +125,6 @@ async function load() {
   decisionEnabled.value = !!s.decision_server_enabled;
   decisionThreshold.value = s.decision_threshold ?? 0.5;
   decisionRemoteOk.value = !!s.decision_server_remote_ok;
-  void checkHost(s.decision_server_url ?? "");
   const spec = ps.find((p) => p.id === s.llm.provider);
   proxy.value = !!spec && !spec.isLocal && s.llm.base_url !== "" && s.llm.base_url !== spec.base;
 }
@@ -213,22 +211,6 @@ async function probeServer() {
     status.value = `The Privacy Model did not answer: ${e}`;
   }
 }
-
-// Rust owns the loopback rule, so the warning and the gate cannot disagree.
-async function checkHost(url: string) {
-  if (url.trim() === "") {
-    decisionRemote.value = false;
-    return;
-  }
-  const h = await invoke<{ loopback: boolean }>("decision_host", { url });
-  decisionRemote.value = !h.loopback;
-}
-
-let hostTimer: ReturnType<typeof setTimeout> | null = null;
-watch(decisionUrl, (url) => {
-  if (hostTimer) clearTimeout(hostTimer);
-  hostTimer = setTimeout(() => void checkHost(url), 200);
-});
 
 const win = getCurrentWindow();
 function closeWindow() {
@@ -347,10 +329,7 @@ function closeWindow() {
                   <n-button size="small" secondary @click="probeServer">Test</n-button>
                 </n-space>
               </n-form-item>
-              <n-form-item
-                v-if="decisionEnabled && hideSensitiveChecked && decisionRemote"
-                :show-label="false"
-              >
+              <n-form-item v-if="decisionEnabled && hideSensitiveChecked" :show-label="false">
                 <n-checkbox v-model:checked="decisionRemoteOk">
                   I understand that the Privacy Model reads messages without any redaction.
                 </n-checkbox>

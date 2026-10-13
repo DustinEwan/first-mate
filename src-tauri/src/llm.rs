@@ -215,10 +215,7 @@ async fn gate(
             Ok(v) => v,
             Err(e) => {
                 log(&format!("GATE: {e}; holding the send"));
-                let host = settings::decision_host(scorer.base.clone())["host"]
-                    .as_str()
-                    .unwrap_or(scorer.base.as_str())
-                    .to_string();
+                let host = settings::decision_host(&scorer.base);
                 return Err(hold("outage", &host));
             }
         };

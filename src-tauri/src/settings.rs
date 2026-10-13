@@ -130,27 +130,21 @@ pub(crate) fn get_settings(app: tauri::AppHandle) -> tauri::Result<Settings> {
     load(&app)
 }
 
-/// The acknowledgement must arrive with the settings. A host off this machine
-/// holds every message the gate inspected, so a stored configuration cannot say
-/// "on" for a host the user never accepted.
-fn check_remote_ack(settings: &Settings) -> Result<(), String> {
-    if !settings.decision_server_enabled {
-        return Ok(());
+/// The acknowledgement must arrive with the settings. The Privacy Model reads
+/// each message before the pattern rules replace anything, so a stored "on" for
+/// that model cannot stand without the reader's acceptance.
+fn check_ack(settings: &Settings) -> Result<(), String> {
+    if settings.decision_server_enabled && !settings.decision_server_remote_ok {
+        return Err(
+            "Select the acknowledgement, or turn off Advanced detection, before you save.".into(),
+        );
     }
-    let base = settings.decision_server_url.trim();
-    if base.is_empty() || is_loopback(base) || settings.decision_server_remote_ok {
-        return Ok(());
-    }
-    Err(format!(
-        "{} is not on this PC. Select the acknowledgement, or turn off Advanced \
-         detection, before you save.",
-        host_of(base)
-    ))
+    Ok(())
 }
 
 #[tauri::command]
 pub(crate) fn save_settings(app: tauri::AppHandle, settings: Settings) -> Result<(), String> {
-    check_remote_ack(&settings)?;
+    check_ack(&settings)?;
     let path = settings_file(&app).map_err(|e| e.to_string())?;
     let contents = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
     let sealed = crypto::seal(contents.as_bytes()).map_err(|e| e.to_string())?;
@@ -192,11 +186,10 @@ pub(crate) fn decision_server(app: &tauri::AppHandle) -> Option<(String, f64)> {
     load(app).ok()?.decision_server()
 }
 
-/// The host behind an address, so Settings can name it before you consent to
-/// send messages there.
-#[tauri::command]
-pub(crate) fn decision_host(url: String) -> serde_json::Value {
-    serde_json::json!({ "host": host_of(&url), "loopback": is_loopback(&url) })
+/// The host behind an address, so the hold message can name the server that did
+/// not answer.
+pub(crate) fn decision_host(url: &str) -> String {
+    host_of(url)
 }
 
 /// Whether an address names this machine. An address this parser cannot read
@@ -326,25 +319,20 @@ mod tests {
     }
 
     #[test]
-    fn a_save_for_a_remote_host_needs_the_acknowledgement() {
+    fn an_enabled_gate_needs_the_acknowledgement() {
         let mut settings = Settings {
-            decision_server_enabled: true,
-            decision_server_url: "http://192.168.1.20:8741".into(),
-            ..Default::default()
-        };
-        let err = check_remote_ack(&settings).unwrap_err();
-        assert!(err.contains("192.168.1.20"), "{err}");
-        settings.decision_server_remote_ok = true;
-        assert!(check_remote_ack(&settings).is_ok());
-    }
-
-    #[test]
-    fn a_save_for_a_loopback_host_needs_no_acknowledgement() {
-        let settings = Settings {
             decision_server_enabled: true,
             decision_server_url: "http://127.0.0.1:8741".into(),
             ..Default::default()
         };
-        assert!(check_remote_ack(&settings).is_ok());
+        let err = check_ack(&settings).unwrap_err();
+        assert!(err.contains("acknowledgement"), "{err}");
+        settings.decision_server_remote_ok = true;
+        assert!(check_ack(&settings).is_ok());
+    }
+
+    #[test]
+    fn a_disabled_gate_needs_no_acknowledgement() {
+        assert!(check_ack(&Settings::default()).is_ok());
     }
 }
