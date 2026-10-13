@@ -368,7 +368,7 @@ function closeWindow() {
                   paths.
                 </template>
               </n-form-item>
-              <n-form-item v-if="decisionEnabled" label="Privacy Model must be this sure">
+              <n-form-item v-if="decisionEnabled" label="Confidence threshold">
                 <n-input-number
                   v-model:value="decisionThreshold"
                   :min="0"
@@ -377,8 +377,9 @@ function closeWindow() {
                   :show-button="false"
                 />
                 <template #feedback>
-                  The Privacy Model must reach this level before First Mate hides anything. A higher
-                  level hides less. Test shows two scores. Pick a level between them. Default 0.5.
+                  Set the confidence score at which a message is flagged for review before it is
+                  sent. A higher threshold means fewer messages are flagged for review. The default
+                  is 0.5.
                 </template>
               </n-form-item>
             </n-form>
