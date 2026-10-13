@@ -275,7 +275,7 @@ function closeWindow() {
               </n-form-item>
               <n-form-item v-if="currentSpec && !currentSpec.isLocal" :show-label="false">
                 <n-checkbox v-model:checked="proxy" @update:checked="onProxyChange">
-                  Proxy
+                  Use a proxy
                 </n-checkbox>
               </n-form-item>
               <n-form-item v-if="showBaseUrl" label="Base URL">
@@ -304,12 +304,8 @@ function closeWindow() {
               </n-form-item>
               <n-form-item label="Context window (tokens)">
                 <n-input-number v-model:value="contextWindow" :min="0" :show-button="false" />
-                <template #feedback>
-                  Detected from the Agent Model endpoint (max_model_len); set it when the endpoint
-                  reports nothing. 0 = auto-detect.
-                </template>
               </n-form-item>
-              <n-form-item label="Compact at % of context">
+              <n-form-item label="Compaction threshold (percent of context)">
                 <n-input-number
                   v-model:value="compactAtPercent"
                   :min="10"
@@ -317,13 +313,13 @@ function closeWindow() {
                   :show-button="false"
                 />
                 <template #feedback>
-                  Compact the earlier turns once the conversation reaches this share of the context
-                  window (10–100, default 85).
+                  When the request reaches this threshold, the oldest turns are replaced by a
+                  summary. A higher threshold keeps more of the conversation word for word. The
+                  default is 85.
                 </template>
               </n-form-item>
               <n-form-item :show-label="false">
                 <n-button @click="test">Test</n-button>
-                <template #feedback> Sends one short request to the Agent Model.</template>
               </n-form-item>
             </n-form>
 
@@ -333,42 +329,45 @@ function closeWindow() {
                   Hide sensitive information
                 </n-checkbox>
                 <template #feedback>
-                  Applies to {{ currentSpec ? currentSpec.label : provider }} only. First Mate hides
-                  these before it sends your text: card and bank account numbers, SSNs, crypto
-                  addresses, API keys, email addresses, phone numbers, and your user folder paths.
-                  Nothing else needs installing. A saved conversation still shows the real values.
+                  The Agent Model runs on a computer you do not control. Patterns of sensitive
+                  information are removed from what is sent to the Agent Model. Nothing else needs
+                  installing.
                 </template>
               </n-form-item>
-              <n-form-item :show-label="false">
+              <n-form-item v-if="hideSensitiveChecked" :show-label="false">
                 <n-checkbox v-model:checked="decisionEnabled"> Advanced detection </n-checkbox>
                 <template #feedback>
                   Use a Privacy Model to catch sensitive information that can't be detected with
-                  simple patterns. This includes, but is not limited to, things like passwords, PII,
-                  or non-standard account numbers.
+                  simple patterns. Examples include passwords typed in a sentence, personal details,
+                  and non-standard account numbers.
                 </template>
               </n-form-item>
-              <n-form-item v-if="decisionEnabled" label="Privacy Model address">
+              <n-form-item
+                v-if="decisionEnabled && hideSensitiveChecked"
+                label="Privacy Model address"
+              >
                 <n-space align="center" :wrap="false">
                   <n-input v-model:value="decisionUrl" placeholder="e.g. http://127.0.0.1:8741" />
                   <n-button size="small" secondary @click="probeServer">Test</n-button>
                 </n-space>
-                <template #feedback>
-                  First Mate sends the Privacy Model only the words it needs checked, never your
-                  whole conversation. Test sends one ordinary sentence and one sentence with a
-                  password. The two scores should be far apart.
-                </template>
               </n-form-item>
-              <n-form-item v-if="decisionEnabled && decisionRemote" :show-label="false">
+              <n-form-item
+                v-if="decisionEnabled && hideSensitiveChecked && decisionRemote"
+                :show-label="false"
+              >
                 <n-checkbox v-model:checked="decisionRemoteOk">
-                  Let {{ decisionHost }} read the words First Mate checks
+                  I understand that {{ decisionHost }} reads messages before sensitive values are
+                  removed, and keeps what it reads.
                 </n-checkbox>
                 <template #feedback>
-                  {{ decisionHost }} is not on this PC. That computer keeps what it reads. Without
-                  this box, First Mate hides only card numbers, account numbers, passwords, and file
-                  paths.
+                  {{ decisionHost }} is not on this PC. Without this acknowledgement, no message is
+                  checked before it leaves.
                 </template>
               </n-form-item>
-              <n-form-item v-if="decisionEnabled" label="Confidence threshold">
+              <n-form-item
+                v-if="decisionEnabled && hideSensitiveChecked"
+                label="Confidence threshold"
+              >
                 <n-input-number
                   v-model:value="decisionThreshold"
                   :min="0"
