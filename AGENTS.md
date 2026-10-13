@@ -144,6 +144,32 @@ reviewer reads the prose.
 - Part 2 Controlled dictionary. Part 1 states the rules. Part 2 states the
   approved words. Rule 1.8 accepts technical nouns from the subject field.
 
+## Settings field copy
+
+These rules cover one field: its `label` and its `#feedback` block. The prose
+rules above cover the rest of what the app shows.
+
+- Write the label as the thing the reader sets. Use sentence case, as
+  `Confidence threshold`. Do not make a component the subject of a label.
+  `Privacy Model must be this sure` fails, because the reader sets a
+  threshold, not a model.
+- Write two to four sentences in the feedback block. Write each sentence in
+  full. `Default 0.5.` fails. `The default is 0.5.` passes.
+- Put the reader, the reader's data, or the mechanism in the subject. Do not
+  put `First Mate`, a button, or a checkbox in the subject. The block
+  `Test shows two scores` fails, because it describes a control the reader can
+  already see.
+- Open with the setting, and name the term of art in the first sentence. Give
+  one noun to each thing. `confidence score` names the measurement.
+  `confidence threshold` names the cut point. `level` names neither.
+- State the direction of the setting in one sentence:
+  `A higher threshold means fewer messages are flagged for review.`
+- Before you write an effect, read the comparison in the Rust source. A
+  threshold in `src-tauri/src/llm.rs` asks the user before a send. Do not
+  write that a threshold hides text.
+- Do not describe a sibling control, a button, or what enabling the field
+  reveals. The revealed fields show those facts.
+
 ## Layout
 
 The README section "Layout" shows where code belongs. In short:
