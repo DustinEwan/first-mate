@@ -355,7 +355,7 @@ the design.
       credential.
       That action calls a server unusable when both answers land at or above 0.8.
 - [x] An unreachable scorer holds the send. The console names the host and the two
-      ways forward: start the server, or turn off the Privacy Model. A debug build
+      ways forward: start the server, or turn off Advanced detection. A debug build
       records the one `GATE:` line that names the failing address.
 - [x] The Privacy Model judges the text First Mate puts on the wire: your new
       message, and each tool result. It never judges the instruction set, text

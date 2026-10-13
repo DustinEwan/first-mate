@@ -377,8 +377,8 @@ flagged message therefore goes to you, not straight to a marker.
   keys keep the older identifier. A rename there would break each saved settings
   file.
 - A scorer outage holds the send. First Mate sends nothing. The console names the
-  host, the cause, and the two ways forward: start the server, or turn off the Privacy
-  Model in Settings. The app writes one `GATE:` log line with the failing address.
+  host, the cause, and the two ways forward: start the server, or turn off Advanced
+  detection in Settings. The app writes one `GATE:` log line with the failing address.
   A send without a verdict would make containment depend on a network.
 - The gate denies by default, so the gate needs no knowledge of the identity of
   a sensitive value. The deny-by-default answer is the definition of containment

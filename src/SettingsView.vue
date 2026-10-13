@@ -340,13 +340,13 @@ function closeWindow() {
                 </template>
               </n-form-item>
               <n-form-item :show-label="false">
-                <n-checkbox v-model:checked="decisionEnabled"> Use the Privacy Model </n-checkbox>
+                <n-checkbox v-model:checked="decisionEnabled"> Advanced detection </n-checkbox>
                 <template #feedback>
                   Some sensitive information has no obvious pattern: a password you type in a
-                  sentence, a project name, or a place. The Privacy Model reads those words, and
-                  First Mate hides what it flags. You install and run the Privacy Model yourself. A
-                  saved conversation still shows the real values. The Privacy Model can flag
-                  ordinary text, and Test shows how sharply it tells the two apart.
+                  sentence, a project name, or a place. The Privacy Model does the reading. You
+                  install and run the Privacy Model yourself. First Mate hides what the Privacy
+                  Model flags. Your saved conversation keeps the real values. The Privacy Model can
+                  flag ordinary text. Test shows how sharply the Privacy Model tells the two apart.
                 </template>
               </n-form-item>
               <n-form-item v-if="decisionEnabled" label="Privacy Model address">

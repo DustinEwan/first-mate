@@ -252,7 +252,7 @@ const HELD_TEXT: Record<string, (detail: string) => string> = {
   stopped: () => "You stopped the run before you answered, so First Mate did not send the message.",
   outage: (host) =>
     `First Mate sent nothing, because the Privacy Model at ${host} did not answer. ` +
-    "Start that server, or turn off the Privacy Model in Settings.",
+    "Start that server, or turn off Advanced detection in Settings.",
 };
 
 // Ranges count code points, so Array.from splits the message the way the
