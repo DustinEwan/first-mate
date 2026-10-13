@@ -357,7 +357,7 @@ function closeWindow() {
                 <template #feedback>
                   Sensitive information may be cached or logged by the Privacy Model service. Run
                   the Privacy Model on this PC, or on a machine your organization controls. Do not
-                  expose the service to the public internet.
+                  run the Privacy Model on a machine that the public internet can reach.
                 </template>
               </n-form-item>
               <n-form-item
