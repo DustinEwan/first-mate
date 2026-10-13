@@ -149,10 +149,15 @@ reviewer reads the prose.
 These rules cover one field: its `label` and its `#feedback` block. The prose
 rules above cover the rest of what the app shows.
 
-- Write the label as the thing the reader sets. Use sentence case, as
-  `Confidence threshold`. Do not make a component the subject of a label.
-  `Privacy Model must be this sure` fails, because the reader sets a
-  threshold, not a model.
+- Write the block so the reader can decide something. Name the effect on the
+  reader's data, not the machinery that produces it. When no decision depends on
+  the block, delete the block. `Privacy Model address` needs no feedback,
+  because the placeholder and the revealed fields already say what to do.
+- Write the label as the thing the reader sets. A checkbox label names the state
+  the reader turns on, as `Hide sensitive information`. `Proxy` fails, because it
+  names an object. Use sentence case, as `Confidence threshold`. Do not make a
+  component the subject of a label. `Privacy Model must be this sure` fails,
+  because the reader sets a threshold, not a model.
 - Write two to four sentences in the feedback block. Write each sentence in
   full. `Default 0.5.` fails. `The default is 0.5.` passes.
 - Put the reader, the reader's data, or the mechanism in the subject. Do not
